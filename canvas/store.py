@@ -236,6 +236,49 @@ def _what_is_there(mode):
     return "not a regular file"
 
 
+def _nothing_at(ledger_id, path, node_id=None):
+    """Nothing is at `path`. The exit-1 refusal, wherever `ENOENT` is the answer.
+
+    `README.md` section *Exit codes* maps exit `1` to, among other things,
+    "there is genuinely no canvas for that ledger id (the filesystem answered
+    `ENOENT`, not that it would not say)". That is one fact, and it arrives by
+    two routes: the existence check below asks and is told, and an `open` or a
+    `parse` further down raises `FileNotFoundError` when the canvas is removed
+    between the check and the look. A race is the only difference between them,
+    and the refusal a caller gets should not depend on which side of it they
+    landed — so both routes end here rather than in two sentences that disagree
+    about whether the canvas is there.
+
+    `ledger_id` where the caller derived the path from one, `node_id` where it
+    was mid-write and knows which node; the two are separate because the write
+    path has the node and not the id.
+    """
+    if ledger_id is not None:
+        return Refusal(
+            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path),
+            "create it with `bin/canvas create %s --problem \"<the problem>\" "
+            "--expected-value \"<the expected value>\"`, or re-run with the ledger "
+            "id whose canvas you meant" % ledger_id,
+            nodes=[node_id] if node_id is not None else [],
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        )
+    return Refusal(
+        "there is no canvas at %s%s: nothing is there"
+        % (
+            path,
+            ""
+            if node_id is None
+            else ", so there is nothing for %s to be one edit of" % node_id,
+        ),
+        "create the canvas first, with `bin/canvas create <ledger-id> "
+        "--problem \"<the problem>\" --expected-value \"<the expected value>\"`, "
+        "and then edit it one node at a time; nothing was written and nothing "
+        "was committed",
+        nodes=[node_id] if node_id is not None else [],
+        about=["canvas %s" % path],
+    )
+
+
 def _no_canvas(ledger_id, path):
     """No canvas for that ledger id. A fact about the store, so exit 1.
 
@@ -264,13 +307,7 @@ def _no_canvas(ledger_id, path):
         found = os.stat(path)
     except FileNotFoundError:
         # The one errno that means what this refusal is about to say.
-        return Refusal(
-            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path),
-            "create it with `bin/canvas create %s --problem \"<the problem>\" "
-            "--expected-value \"<the expected value>\"`, or re-run with the ledger "
-            "id whose canvas you meant" % ledger_id,
-            about=["ledger id %s" % ledger_id, "canvas %s" % path],
-        )
+        return _nothing_at(ledger_id, path)
     except OSError as error:
         return ToolProblem(
             "cannot tell whether there is a canvas for ledger id %s: looking "
@@ -357,46 +394,96 @@ def _no_git(error):
     )
 
 
-def _cannot_read(path, error, ledger_id=None, node_id=None):
-    """The one refusal for a canvas that is there and cannot be read.
+#: What is still true about the store however the read failed. It claims
+#: nothing about whether the canvas is there, because that is exactly what the
+#: errno decides and this sentence is printed for every errno that reaches it.
+_READ_AFTERMATH = (
+    "nothing was read, nothing was written and nothing was committed"
+)
 
-    `os.path.isfile` answers True for a file whose mode is `000`, so the "no
-    canvas for this ledger id" guard passes and the read below is where an
-    ordinary permission problem lands. Exit `2` and not `1`: the store is
-    intact and this process cannot see it, so "the request is wrong against the
-    store as it stands; re-read and re-decide" is not merely unhelpful but
-    wrong — it invites a caller to retry a request that was fine, against a
-    canvas it still cannot read.
+#: The same, for a write. A write goes to a temporary name and is renamed onto
+#: the canvas, so a failure at any point before the rename leaves the canvas as
+#: it was — true for every errno, and therefore safe to state unconditionally.
+_WRITE_AFTERMATH = "nothing was written and nothing was committed"
+
+
+def _cannot_read(path, error, ledger_id=None, node_id=None):
+    """The one refusal for a canvas this process asked for and did not get.
+
+    **Which refusal that is, is decided by the errno and not written beside
+    it.** This function used to format one sentence for every `OSError`, and
+    that sentence said "the canvas is there and unchanged" and told the caller
+    to `chmod u+r` it. Both are claims about the store, and both are true of
+    `EACCES` and false of `ENOENT` — the canvas removed between the
+    `os.path.isfile` above and the `open` here. The tool exited `2` asserting
+    the canvas was present one line under an errno saying it was gone, and the
+    `chmod` it named exited `1`. So:
+
+    - `ENOENT` is the filesystem answering that the canvas is not there, which
+      is `_nothing_at` and exit `1`, exactly as `README.md` section *Exit
+      codes* maps it and exactly as `validate.py` already reads it. Reaching it
+      here rather than at the check above means only that the store changed in
+      between.
+    - Every other errno means this process could not read a canvas it has no
+      reason to believe is absent. Exit `2` and not `1`: the store is intact as
+      far as anything knows, and "the request is wrong against the store as it
+      stands; re-read and re-decide" would invite a caller to retry a request
+      that was fine, against a canvas it still cannot read.
+
+    The repair comes from `refusal.os_next_action`, which chooses it by errno
+    and has a default for the errnos nobody has met — so an unanticipated one
+    gets a conforming refusal that names the path, the condition and what is
+    known, rather than silently inheriting a `chmod` that does not apply to it.
     """
+    if getattr(error, "errno", None) == errno.ENOENT:
+        return _nothing_at(ledger_id, path, node_id=node_id)
+    about = (["ledger id %s" % ledger_id] if ledger_id is not None else []) + [
+        "canvas %s" % path
+    ]
     return ToolProblem(
-        "cannot read %s: %s" % (path, error),
-        "make that file readable — `ls -l %s` shows who owns it and what its "
-        "mode is, and `chmod u+r %s` is usually the repair — and re-run; the "
-        "canvas is there and unchanged, nothing was written and nothing was "
-        "committed" % (path, path),
+        "cannot read %s: %s" % (path, refusal.os_condition(error)),
+        refusal.os_next_action(error, aftermath=_READ_AFTERMATH),
         nodes=[node_id] if node_id is not None else [],
-        about=(["ledger id %s" % ledger_id] if ledger_id is not None else [])
-        + ["canvas %s" % path],
+        about=about + refusal.os_about(error, unless=about),
     )
 
 
 def _cannot_write(path, error, node_id=None):
-    """The one refusal for a canvas directory that cannot be written.
+    """The one refusal for a canvas that could not be written.
 
     Every write this store makes goes to a temporary name beside the canvas and
     is renamed onto it, so the directory's own mode is what a write needs and
-    what it is refused for. Exit `2`, and for the same reason `_cannot_read`
-    is: nothing about the request is wrong.
+    what it is refused for — and the path the `OSError` carries is that
+    temporary name, which does not exist and which a caller can do nothing
+    about. That is why the repair is pointed at the directory: a next action
+    naming a file that was never created is one that provably does not succeed.
+
+    Classified by errno for the same reason `_cannot_read` is, and by the same
+    table: `chmod u+w` was written here unconditionally, and it is the repair
+    for `EACCES` and not for `EROFS`, `ENOSPC`, `ENOENT` or an errno nobody has
+    met. `need="write"` is what tells that table which `chmod` this caller
+    needed, since the errno alone cannot say.
+
+    Exit `2` for every errno, `ENOENT` included, and that is where this differs
+    from `_cannot_read`. `ENOENT` on a *read* is the documented "there is
+    genuinely no canvas for that ledger id", which a caller acts on by creating
+    it. `ENOENT` on a write is `state/canvas` itself going missing under the
+    tool mid-write — a store that moved, not a request that was wrong — which
+    `README.md` lists under `2` as "a `state/canvas` that cannot be written or
+    looked in".
     """
     directory = os.path.dirname(path) or "."
+    about = ["canvas %s" % path, "directory %s" % directory]
     return ToolProblem(
-        "cannot write %s: %s" % (path, error),
-        "make %s writable — `ls -ld %s` shows who owns it and what its mode "
-        "is, and `chmod u+w %s` is usually the repair — and re-run; nothing "
-        "was written and nothing was committed"
-        % (directory, directory, directory),
+        "cannot write %s: %s" % (path, refusal.os_condition(error)),
+        refusal.os_next_action(
+            error,
+            aftermath=_WRITE_AFTERMATH,
+            paths=[directory],
+            need="write",
+        ),
         nodes=[node_id] if node_id is not None else [],
-        about=["canvas %s" % path, "directory %s" % directory],
+        about=about + refusal.os_about(error, unless=about),
     )
 
 

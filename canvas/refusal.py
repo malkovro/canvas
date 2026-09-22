@@ -134,8 +134,8 @@ def lines(prefix, refused, code, meaning):
 #: surface exists to close.
 _OS_NEXT_ACTION = {
     errno.EACCES: (
-        "make %(target)s reachable by this process — `ls -ld %(target)s` shows "
-        "who owns it and what its mode is, and `chmod u+rx %(target)s` is "
+        "make %(target)s %(need)s — `ls -ld %(target)s` shows "
+        "who owns it and what its mode is, and `chmod %(mode)s %(target)s` is "
         "usually the repair%(blocked)s — and re-run"
     ),
     errno.EPERM: (
@@ -202,6 +202,17 @@ _OS_NEXT_ACTION = {
         "a file, or pipe into something that reads all of its input (`| cat | "
         "head -1` rather than `| head -1`)"
     ),
+}
+
+#: What a permission repair has to say depends on what the tool needed the path
+#: for, and the errno does not carry that. `chmod u+rx` is the repair for a path
+#: this process could not reach; a path it reached and could not *write* needs
+#: `chmod u+w`, and telling a caller to run the other one is a next action that
+#: provably does not succeed — the defect this whole surface exists to close.
+#: The call site names which it needed; nothing here guesses.
+_OS_PERMISSION_REPAIR = {
+    "reach": ("reachable by this process", "u+rx"),
+    "write": ("writable by this process", "u+w"),
 }
 
 #: When the errno is one this table has never met. Still concrete: it names the
@@ -303,14 +314,22 @@ def blocking_ancestor(path):
     return None
 
 
-def os_next_action(error, aftermath=None):
+def os_next_action(error, aftermath=None, paths=None, need="reach"):
     """The imperative repair for this errno, naming the paths the error carries.
 
     One table for the whole tool, so a site that knows more than the outermost
     guard — it has the ledger id, it knows nothing was written — still gets the
     repair that matches the condition rather than writing its own guess at one.
+
+    `paths` overrides the paths the repair points at, for the one case where
+    the path the error names is not the path a caller can do anything about: a
+    write goes to a temporary name beside the canvas, so an `OSError` from it
+    names a file that does not exist and the thing that refused it is the
+    directory. `need` says whether the caller needed to reach that path or to
+    write to it, which is what decides the `chmod` — see
+    `_OS_PERMISSION_REPAIR`.
     """
-    paths = _os_error_paths(error)
+    paths = _once(list(paths)) if paths is not None else _os_error_paths(error)
     number = getattr(error, "errno", None)
     # The errno decides the repair; the paths only decide whether the repair
     # that errno calls for can still be stated. A broken pipe and a spent file
@@ -324,10 +343,16 @@ def os_next_action(error, aftermath=None):
     # always the path the error names: see `blocking_ancestor`.
     target = paths[0] if paths else ""
     blocked = ""
+    needed, mode = _OS_PERMISSION_REPAIR[need]
     if paths and number in (errno.EACCES, errno.EPERM):
         ancestor = blocking_ancestor(paths[0])
         if ancestor is not None:
             target = ancestor
+            # An ancestor that cannot be reached has to be made reachable
+            # whatever the caller wanted the path below it for: `chmod u+w` on
+            # a directory this process cannot traverse into does not help it
+            # traverse into it.
+            needed, mode = _OS_PERMISSION_REPAIR["reach"]
             blocked = (
                 ". That directory is what refuses it, not %s itself: a "
                 "directory that is not readable and traversable refuses "
@@ -339,13 +364,15 @@ def os_next_action(error, aftermath=None):
         "paths": " and ".join(paths),
         "target": target,
         "blocked": blocked,
+        "need": needed,
+        "mode": mode,
     }
     if aftermath:
         next_action = "%s; %s" % (next_action, aftermath)
     return next_action
 
 
-def from_os_error(kind, error, nodes=(), about=(), aftermath=None):
+def from_os_error(kind, error, nodes=(), about=(), aftermath=None, need="reach"):
     """One `OSError`, as a refusal of `kind` — the tool's own shape.
 
     `kind` is the caller's own refusal class, so `bin/canvas` gets a
@@ -370,7 +397,7 @@ def from_os_error(kind, error, nodes=(), about=(), aftermath=None):
     return kind(
         "the operating system refused this command%s: %s"
         % (where, os_condition(error)),
-        os_next_action(error, aftermath=aftermath),
+        os_next_action(error, aftermath=aftermath, need=need),
         nodes=nodes,
         about=about + os_about(error, unless=about),
     )

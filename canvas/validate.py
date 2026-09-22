@@ -63,7 +63,7 @@ EXIT_MEANING = {
 
 
 def _unreadable(path, error):
-    """The one refusal for a canvas file that is there and cannot be read.
+    """The one refusal for a canvas file the validator asked for and did not get.
 
     `os.path.isfile` answers True for a file whose mode is `000`, so the "no
     such file" guard above passes and the `open` below is where an ordinary
@@ -71,15 +71,30 @@ def _unreadable(path, error):
     is wrong and not the document — nothing was ever parsed, so there is no
     node to name and no verdict to report — which is the `2` `README.md`
     section *Validating a file by hand* and `validate_file`'s own docstring
-    both already promise for a file that is "missing or unreadable".
+    both already promise for a file that is "missing or unreadable". `ENOENT`
+    reaching here — the file removed between the check and the open — is that
+    same `2`, because here the caller supplied the path and a file that is not
+    there means the invocation named one that is not; it is `bin/canvas` that
+    derives the path from a ledger id and therefore maps `ENOENT` to `1`.
+
+    The repair is chosen by errno rather than written beside it. `chmod u+r`
+    stood here for every `OSError`, and it is the repair for `EACCES` and not
+    for `ENOENT`, `ELOOP` or an errno nobody has met — a next action that
+    provably does not succeed is the defect this surface exists to close. What
+    the refusal claims is only what is true however the open failed: the file
+    was never examined.
     """
     return EnvironmentProblem(
-        "cannot read %s: %s" % (path, error),
-        "make that file readable — `ls -l %s` shows who owns it and what its "
-        "mode is, and `chmod u+r %s` is usually the repair — and re-run; the "
-        "file was never examined, so nothing is known about whether it is a "
-        "valid canvas" % (path, path),
-        about=["file %s" % path],
+        "cannot read %s: %s" % (path, refusal.os_condition(error)),
+        refusal.os_next_action(
+            error,
+            aftermath=(
+                "the file was never examined, so nothing is known about "
+                "whether it is a valid canvas"
+            ),
+        ),
+        about=["file %s" % path]
+        + refusal.os_about(error, unless=["file %s" % path]),
     )
 
 
