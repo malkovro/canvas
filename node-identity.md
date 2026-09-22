@@ -268,6 +268,53 @@ to destroy things. What it buys is that a restructure performed this way costs
 zero history — every node keeps its id, so every node keeps every reason it ever
 carried.
 
+## 6. Naming a position, including inside an empty container
+
+Settled while building the store, because step 1 could not be built without it.
+An earlier draft listed it under *Still open*: "`insert --after <node-id>` cannot
+name the first position of an empty container. There is no node to be after."
+
+**A position is named by exactly one of two things.**
+
+- **`--after <node-id>`** — immediately after that node, in that node's parent.
+  Unchanged; this is the flag the engineering spec already has.
+- **`--into <container-id>`** — as the **last child** of that container. For an
+  empty container that is its first and only position, which is the gap.
+
+`<canvas>` carries no `id`, so it is named by the reserved word **`root`**:
+`--into root` appends to the document itself. `root` can never collide with a
+minted id, and not by convention — by construction. The id grammar is
+`[a-z][a-hj-km-np-z2-9]{3}` and `o` is excluded from positions two, three and
+four, so `r-o-o-t` fails the pattern and no draw can ever produce it. (`head`
+does *not* fail the pattern. Nothing in this tool may ever use `head` as a
+reserved word.)
+
+**Last child rather than first.** For an empty container the two are identical,
+so either closes the gap; last is chosen because it makes one rule cover both
+cases — `--into C` always means "append to C" — whereas first would mean a
+document built with repeated `--into` comes out in reverse reading order, and
+anything wanting reading order would fall straight back to `--after`. The
+canvas's own birth is exactly that case: the problem, then the expected value.
+
+**Rejected: let `--after <id>` accept a container id and mean "as its first
+child".** It makes `--after b7` unreadable without knowing `b7`'s element type —
+if `b7` is a `<section>`, does the node land after the section or inside it?
+Both are plausible readings of one command and they produce different documents,
+so an agent can issue a correct-looking command and get the wrong edit with no
+error. That is the class of failure this document exists to avoid: addressing
+that depends on anything beyond the explicit id.
+
+**Rejected: a synthetic sentinel position per container, `--after <container>:0`.**
+It invents an identity that is not a node, in a system whose one invariant is
+that a node's life is the set of commits naming it. The sentinel would appear in
+no commit, be born and retired with its container, and have to be excluded by
+hand from the uniqueness check.
+
+**Rejected: `--position <n>`, an index into the container.** An index is a
+position, and position is exactly what `move` changes. Every index in a script
+goes stale the moment anything is inserted above it — en-quire's line-range
+failure arriving through a new door.
+
 ## Still open
 
 This rule is scoped to step 1 and it does not settle everything the *Open*
@@ -295,10 +342,6 @@ task can pick it up:
   coherent but half-reorganised state. Whether that wants a grouping mechanism —
   and whether any such mechanism can exist without becoming the batch-write verb
   this document just spent a section refusing — is not addressed.
-- **`insert --after <node-id>` cannot name the first position of an empty
-  container.** There is no node to be after. Noticed while checking these rules
-  against the four verbs; it is an addressing gap rather than an identity one,
-  so it is not decided here, but step 1 cannot be built without answering it.
 - **Nothing here ages.** A canvas is frozen at `done` and never deleted, so the
   set of retired ids grows without bound and the uniqueness check greps a log
   that only gets longer. At canvas scale this is not a problem for a long time.

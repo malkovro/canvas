@@ -85,7 +85,9 @@ From a clean checkout, with no install step, no virtualenv and no network:
     python3 -m unittest discover -s tests -t .
 
 Standard library only. It needs `xmllint`, which ships with macOS and with
-GitHub's `ubuntu-latest` image.
+GitHub's `ubuntu-latest` image, and `git`, because the store tests exercise the
+real repository the tool builds. Every test points `$OPENCLAW_WORKSPACE` at its
+own temporary directory; none of them touches a live workspace.
 
 ### What the schema deliberately does not check
 
@@ -100,3 +102,137 @@ GitHub's `ubuntu-latest` image.
   with an open element set, which is the HTML problem the closed vocabulary
   exists to prevent, so schema v1 admits a textual source only. Settling it the
   other way is a v2 change with its own reasoning.
+
+## The store
+
+A canvas lives in one file per ledger row:
+
+    $OPENCLAW_WORKSPACE/state/canvas/<ledger_id>.xml
+
+beside `state/ledger/<ledger_id>.json`. One fact, one place, joined on read.
+`$OPENCLAW_WORKSPACE` has no default: a tool that falls back to a guess writes
+real state whenever a caller forgets the variable, and the failure is silent and
+lands on production data.
+
+`state/canvas` is **one git repository** holding every ledger row's file,
+initialised on first use and never re-initialised over one that already exists.
+It is one repository and not one per canvas because ids are unique across the
+whole of it, and the documented history command
+`git log --grep='Canvas-Node: b7'` is written with no path filter.
+
+    bin/canvas create <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
+    bin/canvas read <ledger_id>
+
+`replace`, `insert`, `remove` and `move` are not here yet, and neither is
+`--why`. The read hands out the current sha; it does not enforce `--base` and
+does not accept one.
+
+### Creating a canvas
+
+`create` makes the canvas for a ledger row with its first nodes — the problem
+and the expected value the ledger's `open` already requires — and prints the sha
+and the path:
+
+    $ bin/canvas create my-task --problem "The store does not exist." \
+                                --expected-value "A writer can learn what to write against."
+    Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
+    Canvas-File: /…/state/canvas/my-task.xml
+
+It is **three commits, not one**:
+
+    create my-task: born at open, root only
+    insert y8dk: the problem the ledger row states
+    insert itpe: the expected value the ledger row states
+
+`node-identity.md` §4 requires it. The creation commit creates the root only,
+and the two first nodes arrive as two ordinary `insert` commits, each naming its
+own node in a `Canvas-Node:` trailer, each born at `v="1"`. A single commit
+holding the root and both nodes would be one commit touching two nodes, which is
+the rule the tool exists to make inexpressible; the birth of a canvas gets no
+exemption from it.
+
+The root commit carries no `Canvas-Node:` — `<canvas>` is not a node — and no
+`Canvas-Base:`, because there was no prior state it could have been decided
+against. Each `insert` bases on the commit before it.
+
+The two first nodes are `<text>` nodes, problem first. They carry no marker
+saying which is which: the vocabulary has no semantic node and inventing one is
+the `<decision>` / `<risk>` tripwire. The distinction lives in the commit
+subject and in the order.
+
+`create` refuses rather than overwrites. A canvas that already exists is exit
+`1`, with the path and its current sha, and nothing is written.
+
+`--author` becomes the `Canvas-Author:` trailer and is used verbatim, which is
+how a run passes `leo | step:implement | run:ship-the-flag-3`. Driven by hand it
+defaults to `<user> | by-hand` — not a synthesised `step:`/`run:`, because a run
+id no run store can resolve makes `git log --grep='run:'` return rows for runs
+that never existed.
+
+### Reading a canvas
+
+Reading is how a writer learns what to write against, so the sha is part of the
+output rather than a separate lookup:
+
+    $ bin/canvas read my-task
+    Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
+    <?xml version="1.0" encoding="UTF-8"?>
+    <canvas ledger="my-task" schema="1">
+      <text id="y8dk" v="1">The store does not exist.</text>
+      <text id="itpe" v="1">A writer can learn what to write against.</text>
+    </canvas>
+
+The sha comes first, on one line, under the same name the next write declares it
+under: one name for one thing. It is the full forty characters — handing out an
+abbreviation as an identity key is a hazard as the log grows — and it is
+`git rev-parse HEAD` of the canvas repository, not the file's last-touching
+commit, because that is what a later `--base` is compared against.
+
+The cost, stated because it is real: **stdout is not itself a valid XML
+document.** The document alone, byte for byte what is on disk, is
+
+    bin/canvas read my-task | tail -n +2
+
+A read is a read. It writes nothing, commits nothing, and does not initialise a
+repository.
+
+### Naming a position
+
+`node-identity.md` §6 settles how a position is named, including the first
+position of an empty container: `--after <node-id>` for the sibling case, and
+`--into <container-id>` — appending as the last child — for the container case,
+with the root named by the reserved word `root`. The flags ship with the four
+verbs; the rule and the placement code are in `canvas/document.py` already, so
+that the verbs inherit an answer instead of improvising one.
+
+### Exit codes
+
+| exit | meaning |
+|---|---|
+| `0` | it worked |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, or the document is invalid. Re-read and re-decide |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument, a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
+
+This is `bin/canvas-validate`'s `1` / `2` split with its purpose preserved, and
+it differs from it in one deliberate place. `canvas-validate` maps a missing
+file to `2`, because there the caller supplied the path and a missing file means
+the invocation named the wrong one. Here the path is *derived* from a ledger id,
+so "no canvas for this ledger" is a true statement about the store rather than a
+broken invocation, and the right response is to create one or re-check the id —
+not to stop touching the canvas. It maps to `1`. A *malformed* ledger id stays
+`2`, because that is the invocation being wrong.
+
+A ledger id has to be a filename: one or more of `[A-Za-z0-9._-]`, not starting
+with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
+`state/canvas/`.
+
+### What the store deliberately does not do
+
+- **It does not enforce `--base`.** The read hands out the sha and stops there.
+- **It does not batch.** Nothing in it can touch two nodes in one commit.
+- **It does not wire the ledger's `open` transition.** `create` is driven by hand.
+- **It does not shell out to `xmllint` and does not restate the vocabulary.**
+  Every write goes through `canvas.validate.validate_file` at a temporary path
+  and is renamed into place only once it validates, so an invalid canvas is
+  never reachable as a canvas. `EnvironmentProblem` is "the validator cannot
+  run" — exit `2` — and never "the document is invalid".
