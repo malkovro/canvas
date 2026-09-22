@@ -19,6 +19,7 @@ impossible rather than merely unlikely.
 
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -3957,11 +3958,35 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
     #: table a caller reads has no row for it.
     DOCUMENTED_EXITS = (1, 2)
 
-    #: A repair, as a refusal writes one. `chmod` is the only command in the
-    #: surface that a caller runs *to make the refused command work* — `ls` and
-    #: `df` are there to show what state produced it — so it is the one whose
-    #: success is the refusal's own claim rather than a diagnostic.
-    CHMOD = re.compile(r"`chmod (\S+) ([^`]+)`")
+    #: A repair, as a `Canvas-Next:` writes one: a command introduced by the
+    #: word `run`. `README.md` section *What a refusal prints* settles the rule
+    #: this encodes — a next action **may** name a command that exits non-zero,
+    #: because a refusal about a path that is gone has to be able to tell a
+    #: caller to look at it and every way of looking at a path that is gone
+    #: exits non-zero; what it may not do is *claim* one. The claim is the
+    #: repair, the repair is the command the line says to `run`, and that one
+    #: has to exit `0` when run exactly as printed.
+    #:
+    #: The lookbehind is what keeps `re-run` — which ends every template — from
+    #: being read as a repair marker.
+    REPAIR = re.compile(r"(?<![-\w])run `([^`]+)`")
+
+    #: Every command a next action names, marked or not. Used only to check the
+    #: rule in the other direction: see `CHMOD`.
+    COMMAND = re.compile(r"`([^`]+)`")
+
+    #: `chmod` is the one command in the surface that exists only to make the
+    #: refused command work — `ls`, `df` and `ulimit` are there to show what
+    #: state produced it — so a `chmod` that is *not* marked as a repair is the
+    #: rule being escaped rather than an exception to it. This is what stops
+    #: `assertRepairsRun` being satisfied by deleting the word `run`.
+    CHMOD = re.compile(r"`(chmod \S+ [^`]+)`")
+
+    #: A command with a placeholder in it is a *form* — `bin/canvas create
+    #: <ledger-id> …` — and a form is never run as printed by anybody, so it is
+    #: never marked as a repair. Asserted, not assumed: a marked repair that
+    #: carried one would send a caller to run a command line that cannot work.
+    PLACEHOLDER = re.compile(r"<[^`>]+>")
 
     #: Sentences that assert the canvas is still where the tool left it, and
     #: the `Canvas-About:` kinds that name the path they are asserting it of.
@@ -4015,44 +4040,85 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
                 )
 
     def assertRepairsRun(self, trailers, msg):
-        """Every `chmod` the next action names has to exit 0 when run.
+        """Every command the next action says to `run` has to exit 0 when run.
 
-        This is what `chmod u+r <a canvas that was removed>` fails: it exits
-        `1`, so the caller told to run it is told to run something that cannot
-        work, and the re-run it is supposed to enable never happens.
+        The rule `README.md` section *What a refusal prints* settles, enforced
+        here rather than described: a `Canvas-Next:` **may** name a command
+        that exits non-zero, and the word `run` is what marks the one it may
+        not. This used to be a `chmod`-only exemption — the assertion ran the
+        `chmod` a next action named and silently skipped every other command,
+        because `ls -ld <a path that is gone>` exits `1` and there was no way
+        to say that this was fine while `chmod u+r <a canvas that was removed>`
+        exiting `1` was the defect. There is now: the first is a diagnostic and
+        the line does not tell you to run it, the second is a repair and the
+        line does.
 
-        The mode is put back afterwards, so a test that sets one up to be
-        refused is not quietly repaired by the assertion that checks it.
+        Three things are checked, and together they are the rule:
+
+        - **every marked repair runs, whatever the command is.** Not a list of
+          command names this assertion is allowed to execute — the marker is
+          syntactic, so a template that adds a repair nobody here anticipated
+          is covered the moment it is written.
+        - **a marked repair carries no placeholder.** `bin/canvas create
+          <ledger-id> …` is a form, it exits `2` run as printed, and marking it
+          would be the same defect one level along.
+        - **every `chmod` a next action names is marked.** Otherwise the rule
+          is satisfied by deleting the word `run`, and the exemption comes back
+          wearing a justification.
+
+        Modes are put back afterwards, so a test that sets one up to be refused
+        is not quietly repaired by the assertion that checks it.
         """
-        for mode, path in self.CHMOD.findall(trailers["Canvas-Next"][0]):
-            self.assertTrue(
-                os.path.exists(path),
-                "%s: named `chmod %s %s`, and %s is not there"
-                % (msg, mode, path, path),
+        next_action = trailers["Canvas-Next"][0]
+        repairs = self.REPAIR.findall(next_action)
+        for command in repairs:
+            self.assertFalse(
+                self.PLACEHOLDER.search(command),
+                "%s: `%s` is marked as a repair and has a placeholder in it, "
+                "so it cannot be run as printed" % (msg, command),
             )
-            # Safety, asserted rather than assumed: nothing outside a
-            # temporary directory this test made ever has its mode changed.
+            argv = shlex.split(command)
             self.assertTrue(
-                path.startswith(tempfile.gettempdir())
-                or path.startswith(self.workspace),
-                "%s: refusing to chmod %s, which is not under a tempdir"
-                % (msg, path),
+                argv, "%s: `%s` is marked as a repair and is not a command"
+                % (msg, command),
             )
-            original = stat.S_IMODE(os.stat(path).st_mode)
+            paths = [word for word in argv[1:] if word.startswith("/")]
+            for path in paths:
+                self.assertTrue(
+                    os.path.exists(path),
+                    "%s: named `%s` as the repair, and %s is not there"
+                    % (msg, command, path),
+                )
+                # Safety, asserted rather than assumed: nothing outside a
+                # temporary directory this test made is ever touched.
+                self.assertTrue(
+                    path.startswith(tempfile.gettempdir())
+                    or path.startswith(self.workspace),
+                    "%s: refusing to run `%s` against %s, which is not under "
+                    "a tempdir" % (msg, command, path),
+                )
+            modes = [(path, stat.S_IMODE(os.stat(path).st_mode)) for path in paths]
             result = subprocess.run(
-                ["chmod", mode, path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
             try:
                 self.assertEqual(
                     0, result.returncode,
-                    "%s: `chmod %s %s` exited %d: %s"
-                    % (msg, mode, path, result.returncode,
+                    "%s: `%s` is named as the repair and exited %d: %s"
+                    % (msg, command, result.returncode,
                        result.stderr.decode("utf-8", "replace")),
                 )
             finally:
-                os.chmod(path, original)
+                for path, mode in modes:
+                    os.chmod(path, mode)
+        for command in self.CHMOD.findall(next_action):
+            self.assertIn(
+                command, repairs,
+                "%s: named `%s` without telling the caller to run it. A chmod "
+                "is a repair, and a repair is marked `run `%s``, so that the "
+                "caller can tell it from the diagnostics beside it and this "
+                "assertion can run it\n%s" % (msg, command, command, next_action),
+            )
 
     def assertActionable(self, code, stderr, msg, nodes=()):
         """The done condition, for one refusal."""

@@ -33,6 +33,15 @@ Nothing here decides an exit code. The entry point that catches the refusal
 decides that, and passes in what its own code means, because `bin/canvas` and
 `bin/canvas-validate` document two different meanings for the same two numbers.
 
+**A `Canvas-Next:` may name a command that exits non-zero.** What it may not
+do is claim one. The claim is the *repair* — the command that makes the refused
+command work — and a repair is marked by the word `run` in front of it, printed
+ready to run, and exits `0`. Everything else a next action names is a
+diagnostic offered to look with, whose non-zero exit is the answer rather than a
+failure, or a form with a placeholder in it that nobody runs as printed. The
+rule is stated for callers in `README.md` section *What a refusal prints*, held
+to by `_OS_NEXT_ACTION` below, and enforced by `assertRepairsRun`.
+
 **`from_os_error` is the floor under all of it.** Every guard in the tool that
 asks the filesystem a question before acting on the answer is an enumeration,
 and an enumeration can always be extended by one: one directory further up, a
@@ -132,11 +141,34 @@ def lines(prefix, refused, code, meaning):
 #: path that is already there, is a next action that provably does not succeed,
 #: and a refusal whose next action does not succeed is the defect this whole
 #: surface exists to close.
+#:
+#: **A next action may name a command that exits non-zero, and the word `run`
+#: is what marks the one it may not.** See `README.md` section *What a refusal
+#: prints*, which settles the rule and is the caller-facing statement of it.
+#: In short: three different kinds of thing get named in these templates and
+#: only one of them is a claim.
+#:
+#: - a **repair** — `run `chmod u+rx /a/real/path`` — is printed ready to run
+#:   against real paths, running it is what makes the refused command work, and
+#:   it exits `0`. It is the only one the word `run` may be put in front of,
+#:   and `tests/test_store.py`'s `assertRepairsRun` runs every one of them.
+#: - a **diagnostic** — `ls -ld`, `ls -l`, `df -h`, `ulimit -n`, and elsewhere
+#:   in the tool `bin/canvas read <ledger-id>` — is offered to show the state
+#:   that produced the refusal. Its exit status is the answer, not a failure.
+#:   It may be `0`, and on the errno these templates exist for it is *usually*
+#:   not: every way of looking at a path that is gone reports that it is gone
+#:   by exiting non-zero. Forbidding those would leave a refusal about an
+#:   absent path unable to tell a caller to look at it, which is the one thing
+#:   a caller facing `ENOENT` most needs.
+#: - a **form** — `bin/canvas create <ledger-id> …` — has a placeholder in it
+#:   and is never run as printed by anybody. Run verbatim it exits `2` on the
+#:   ledger id `<ledger-id>`, so marking it `run` would be the same defect one
+#:   step along.
 _OS_NEXT_ACTION = {
     errno.EACCES: (
         "make %(target)s %(need)s — `ls -ld %(target)s` shows "
-        "who owns it and what its mode is, and `chmod %(mode)s %(target)s` is "
-        "usually the repair%(blocked)s — and re-run"
+        "who owns it and what its mode is, and the repair is usually to run "
+        "`chmod %(mode)s %(target)s`%(blocked)s — then re-run"
     ),
     errno.EPERM: (
         "this process may not do that to %(target)s — `ls -ld %(target)s` "

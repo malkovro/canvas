@@ -655,6 +655,44 @@ everywhere else in the tool, so a refusal naming one uses the same word.
 - **The argument parser's refusals are in it too.** `canvas/cli.py` subclasses
   `ArgumentParser` so that `error()` raises rather than exiting, which is what
   lets an absent `--why` name the node the edit was for. It still exits `2`.
+- **A `Canvas-Next:` may name a command that exits non-zero, and one word says
+  which.** A command written after the word **`run`** is the *repair*: it is
+  printed ready to run against real paths, running it is what makes the refused
+  command work, and it exits `0`. Everything else a next action names is either
+  a **diagnostic** — `ls -ld`, `ls -l`, `df -h`, `ulimit -n`, and `bin/canvas
+  read <ledger-id>` where a staleness refusal sends you to look at the canvas
+  again — there to show the state that produced the refusal; or a **form** — a
+  command with a `<placeholder>` in it that the caller fills in, such as
+  `bin/canvas create <ledger-id> --problem "<the problem>" --expected-value
+  "<the expected value>"`.
+
+  The rule is not about a command's exit code, it is about what the line
+  *claims*: the line claims the repair, and claims nothing about the rest. A
+  diagnostic's exit status is the answer rather than a failure. It may be `0` —
+  `bin/canvas read` is — and on the conditions these refusals are about it is
+  usually not: `ls -ld` on a path that is genuinely gone exits `1`, and so does
+  every other way of looking at a path that is gone. That is why the rule
+  cannot be "every command a next action names succeeds". That rule would leave
+  a refusal about a missing path unable to tell a caller to look at it, which
+  is the one thing a caller facing `ENOENT` most needs, and it is not even
+  statable: four of the things these templates name are not runnable commands
+  at all — `ulimit -n` is a shell builtin, `| cat | head -1` is a pipe
+  fragment, `chown` is named bare with no operands, and a form exits `2` run
+  verbatim on its own placeholder. The rule is **"every command a next action
+  tells you to *run* succeeds"**.
+
+  So `ls -ld <a canvas that was removed>` exiting `1` is the refusal working,
+  and `chmod u+r <a canvas that was removed>` exiting `1` is the defect this
+  surface exists to close — and a caller tells the two apart from one word,
+  without having to know which commands this tool happens to use. A form is
+  never marked `run`, because it cannot be run as printed.
+
+  `tests/test_store.py` is where this stops being a convention.
+  `assertRepairsRun` runs every command a next action marks `run`, whatever the
+  command is, and requires that it exits `0` and carries no placeholder — and,
+  in the other direction, that every `chmod` a next action names is marked, so
+  that the rule cannot be escaped by dropping the word.
+
 - **`canvas/refusal.py` is where the shape lives**, and it is a structure and
   not a convention: the next action is a constructor argument with no default,
   and a refusal that names neither a node nor anything else cannot be built.
