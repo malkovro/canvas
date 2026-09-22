@@ -59,30 +59,41 @@ the feature.
 """
 
 import collections
+import errno
 import os
 import re
 import secrets
+import stat
 import subprocess
 
 from canvas import document
+from canvas import refusal
 from canvas.validate import EnvironmentProblem, validate_file
 
 
-class Refusal(Exception):
+class Refusal(refusal.Refused):
     """The request is wrong against the store as it stands. Exit 1.
 
     The canvas already exists; there is no canvas for that ledger id; the
     document is invalid. Re-read and re-decide. Carries the diagnostics that
     say which, where there are any.
+
+    A `refusal.Refused`, so it also carries every node it involves, what it is
+    about where it has no node, and the next action that would succeed —
+    `canvas/refusal.py` has the argument for why those are the structure and
+    not a convention. The message says what is wrong and why; the next action
+    says what to do, and it is stated once, there.
     """
 
-    def __init__(self, message, details=()):
-        Exception.__init__(self, message)
-        self.details = list(details)
 
+class ToolProblem(refusal.Refused):
+    """The tool or its environment is wrong. Exit 2. Do not touch the canvas.
 
-class ToolProblem(Exception):
-    """The tool or its environment is wrong. Exit 2. Do not touch the canvas."""
+    Carries the same four things a `Refusal` does. It had none of them before —
+    not even details — which is why `--why is required and must not be empty`
+    could not name the node the edit was for even though the node was on the
+    command line.
+    """
 
 
 # A ledger id becomes a filename, so it has to be one. This is what stops
@@ -121,11 +132,59 @@ def canvas_directory():
     if not workspace:
         raise ToolProblem(
             "OPENCLAW_WORKSPACE is not set; it must name the workspace whose "
-            "state/canvas holds the canvases"
+            "state/canvas holds the canvases",
+            "export OPENCLAW_WORKSPACE=<the workspace directory> and re-run; "
+            "there is deliberately no default, because a tool that guesses one "
+            "writes real state wherever it was invoked",
+            about=["environment variable OPENCLAW_WORKSPACE"],
         )
-    if not os.path.isdir(workspace):
+    # Asked of the filesystem, not inferred from `os.path.isdir`. That helper
+    # answers False for a workspace that is not there, for one under a
+    # directory this process may not traverse, and for a regular file — three
+    # states flattened into one bit, of which "is not a directory" is true of
+    # one. An unreadable directory three levels above the workspace made the
+    # tool say the workspace was not a directory when `ls -ld` showed it was,
+    # and the repair it named — point the variable somewhere that exists —
+    # could not work, because the variable was already right.
+    try:
+        found = os.stat(workspace)
+    except FileNotFoundError:
         raise ToolProblem(
-            "OPENCLAW_WORKSPACE is not a directory: %s" % workspace
+            "OPENCLAW_WORKSPACE names nothing that exists: %s" % workspace,
+            "point OPENCLAW_WORKSPACE at a directory that exists and re-run; "
+            "nothing was created, for the same reason there is no default",
+            about=[
+                "environment variable OPENCLAW_WORKSPACE",
+                "value %s" % workspace,
+            ],
+        )
+    except OSError as error:
+        raise ToolProblem(
+            "cannot tell whether OPENCLAW_WORKSPACE is a directory: looking "
+            "at %s was refused: %s" % (workspace, refusal.os_condition(error)),
+            refusal.os_next_action(
+                error,
+                aftermath=(
+                    "nothing was read, written or created, and whether that "
+                    "workspace is there at all is still unknown"
+                ),
+            ),
+            about=[
+                "environment variable OPENCLAW_WORKSPACE",
+                "value %s" % workspace,
+            ]
+            + refusal.os_about(error, unless=["value %s" % workspace]),
+        )
+    if not stat.S_ISDIR(found.st_mode):
+        raise ToolProblem(
+            "OPENCLAW_WORKSPACE is not a directory: %s" % workspace,
+            "point OPENCLAW_WORKSPACE at a directory — `ls -ld %s` shows what "
+            "is there now — and re-run; nothing was created, for the same "
+            "reason there is no default" % workspace,
+            about=[
+                "environment variable OPENCLAW_WORKSPACE",
+                "value %s" % workspace,
+            ],
         )
     return os.path.join(workspace, "state", "canvas")
 
@@ -135,14 +194,297 @@ def canvas_path(canvas_dir, ledger_id):
     if not _LEDGER_ID.match(ledger_id) or ledger_id.startswith("."):
         raise ToolProblem(
             "not a usable ledger id: %r; a ledger id is one or more of "
-            "[A-Za-z0-9._-] and does not start with a dot" % ledger_id
+            "[A-Za-z0-9._-] and does not start with a dot" % ledger_id,
+            "re-run naming a ledger id of [A-Za-z0-9._-] that does not start "
+            "with a dot; it becomes the name of a file in state/canvas, which "
+            "is what stops one escaping that directory",
+            about=["ledger id %r" % ledger_id],
         )
     return os.path.join(canvas_dir, ledger_id + ".xml")
 
 
 # --------------------------------------------------------------------------
+# The three refusals every entry point can reach
+# --------------------------------------------------------------------------
+#
+# `read`, `history` and the four verbs each begin by asking the same three
+# questions of the store — is there a canvas for this ledger id, is there a
+# repository, does it have a commit — and each used to answer them with its own
+# copy of the same sentence. Three copies of one string is three places for the
+# next action to be added to two of.
+
+
+#: What `os.stat` found where a canvas belongs, for a refusal to name. Not an
+#: exhaustive taxonomy of st_mode: what a caller needs is enough to recognise
+#: the thing and move it out of the way. No symlink entry, because `os.stat`
+#: follows them — a link to a directory reads as a directory, and a link to
+#: nothing raises ENOENT, which is the right answer for it: a write renames
+#: over the link and succeeds.
+_NOT_A_FILE = (
+    (stat.S_ISDIR, "a directory"),
+    (stat.S_ISFIFO, "a named pipe"),
+    (stat.S_ISSOCK, "a socket"),
+    (stat.S_ISBLK, "a block device"),
+    (stat.S_ISCHR, "a character device"),
+)
+
+
+def _what_is_there(mode):
+    for predicate, name in _NOT_A_FILE:
+        if predicate(mode):
+            return name
+    return "not a regular file"
+
+
+def _nothing_at(ledger_id, path, node_id=None):
+    """Nothing is at `path`. The exit-1 refusal, wherever `ENOENT` is the answer.
+
+    `README.md` section *Exit codes* maps exit `1` to, among other things,
+    "there is genuinely no canvas for that ledger id (the filesystem answered
+    `ENOENT`, not that it would not say)". That is one fact, and it arrives by
+    two routes: the existence check below asks and is told, and an `open` or a
+    `parse` further down raises `FileNotFoundError` when the canvas is removed
+    between the check and the look. A race is the only difference between them,
+    and the refusal a caller gets should not depend on which side of it they
+    landed — so both routes end here rather than in two sentences that disagree
+    about whether the canvas is there.
+
+    `ledger_id` where the caller derived the path from one, `node_id` where it
+    was mid-write and knows which node; the two are separate because the write
+    path has the node and not the id.
+    """
+    if ledger_id is not None:
+        return Refusal(
+            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path),
+            "create it with `bin/canvas create %s --problem \"<the problem>\" "
+            "--expected-value \"<the expected value>\"`, or re-run with the ledger "
+            "id whose canvas you meant" % ledger_id,
+            nodes=[node_id] if node_id is not None else [],
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        )
+    return Refusal(
+        "there is no canvas at %s%s: nothing is there"
+        % (
+            path,
+            ""
+            if node_id is None
+            else ", so there is nothing for %s to be one edit of" % node_id,
+        ),
+        "create the canvas first, with `bin/canvas create <ledger-id> "
+        "--problem \"<the problem>\" --expected-value \"<the expected value>\"`, "
+        "and then edit it one node at a time; nothing was written and nothing "
+        "was committed",
+        nodes=[node_id] if node_id is not None else [],
+        about=["canvas %s" % path],
+    )
+
+
+def _no_canvas(ledger_id, path):
+    """No canvas for that ledger id. A fact about the store, so exit 1.
+
+    Unless it is not a fact. `os.path.isfile` answers False for a canvas that
+    is not there, for one this process is not allowed to look for, and for a
+    directory or a symlink loop sitting where the canvas belongs — four
+    different states flattened into one bit, and "no canvas for that ledger id"
+    is true of exactly one of them. The others make it a false statement whose
+    next action, `create` it, provably does not succeed: `create` refuses in
+    turn, at a different exit code, saying something different again.
+
+    So the question is put to the filesystem rather than inferred from it.
+    `os.stat` answers with the thing itself or with an errno, and `ENOENT` is
+    the only errno that means absent — every other one means this process could
+    not find out, which is a different refusal at a different exit code.
+
+    This used to test `os.path.dirname(path)`: one level, with
+    `os.path.isdir(directory) and not os.access(directory, R_OK | X_OK)`. That
+    is right for the canvas's own directory and wrong for everything above it,
+    because an unreadable *grandparent* makes `os.path.isdir` itself answer
+    False, the guard never fires, and the tool reports a canvas absent that it
+    has no way of knowing anything about. A test at a fixed depth can always be
+    defeated by one more directory; asking the filesystem cannot.
+    """
+    try:
+        found = os.stat(path)
+    except FileNotFoundError:
+        # The one errno that means what this refusal is about to say.
+        return _nothing_at(ledger_id, path)
+    except OSError as error:
+        return ToolProblem(
+            "cannot tell whether there is a canvas for ledger id %s: looking "
+            "at %s was refused: %s"
+            % (ledger_id, path, refusal.os_condition(error)),
+            refusal.os_next_action(
+                error,
+                aftermath=(
+                    "nothing was read, written or committed, and whether that "
+                    "canvas exists is still unknown"
+                ),
+            ),
+            about=["ledger id %s" % ledger_id, "canvas %s" % path]
+            + refusal.os_about(error, unless=["canvas %s" % path]),
+        )
+    if stat.S_ISREG(found.st_mode):
+        # `os.path.isfile` said no and `os.stat` says yes, so the store changed
+        # in between. Not a request to re-decide: the same request may well
+        # work now.
+        return ToolProblem(
+            "the canvas for ledger id %s appeared at %s between the check for "
+            "it and the look at it" % (ledger_id, path),
+            "re-run the same command; the canvas is there now, and this "
+            "refusal is the tool declining to act on a store that changed "
+            "under it rather than guess which state it meant",
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        )
+    # Something is there. "Nothing at <path>" would be false, and `create`,
+    # which is what a caller told there is nothing would reach for, refuses
+    # this with a different message again.
+    return ToolProblem(
+        "there is no canvas for ledger id %s at %s, but there is something "
+        "there: %s" % (ledger_id, path, _what_is_there(found.st_mode)),
+        "move %s out of the way — `ls -ld %s` shows what it is — and then "
+        "`bin/canvas create %s --problem \"<the problem>\" --expected-value "
+        "\"<the expected value>\"`; a canvas is a regular file and this store "
+        "will not write over whatever that is" % (path, path, ledger_id),
+        about=["ledger id %s" % ledger_id, "canvas %s" % path],
+    )
+
+
+def _not_a_repository(canvas_dir, wanted):
+    """`state/canvas` is not a git repository. The tool's world is wrong: exit 2."""
+    return ToolProblem(
+        "%s is not a git repository, so it has no %s" % (canvas_dir, wanted),
+        "make the first canvas with `bin/canvas create <ledger-id> --problem "
+        "\"<the problem>\" --expected-value \"<the expected value>\"`; that is "
+        "the only thing here that initialises the repository, and a read never "
+        "writes one",
+        about=["canvas repository %s" % canvas_dir],
+    )
+
+
+def _no_commits(canvas_dir, wanted):
+    """The repository is there and empty. Also exit 2, and the same answer."""
+    return ToolProblem(
+        "%s has no commits, so it has no %s" % (canvas_dir, wanted),
+        "make the first canvas with `bin/canvas create <ledger-id> --problem "
+        "\"<the problem>\" --expected-value \"<the expected value>\"`; until one "
+        "commit exists there is no sha for anything to be written against",
+        about=["canvas repository %s" % canvas_dir],
+    )
+
+
+# --------------------------------------------------------------------------
 # git
 # --------------------------------------------------------------------------
+
+
+def _no_git(error):
+    """The one refusal for `git` not being runnable, wherever it is found.
+
+    Every git invocation in this module raises this one, `ensure_repository`'s
+    `git init` included. It used to run outside `_git` and its `OSError` left
+    as a traceback — exit 1, where `README.md` says a missing `git` is exit 2 —
+    so a caller following the documented contract would re-read and re-decide
+    forever over a tool that is simply not installed.
+    """
+    return ToolProblem(
+        "cannot run git: %s" % error,
+        "put git on PATH and re-run; the canvas store is a git repository, so "
+        "nothing can be read, written or created until git is there",
+        about=["command git"],
+    )
+
+
+#: What is still true about the store however the read failed. It claims
+#: nothing about whether the canvas is there, because that is exactly what the
+#: errno decides and this sentence is printed for every errno that reaches it.
+_READ_AFTERMATH = (
+    "nothing was read, nothing was written and nothing was committed"
+)
+
+#: The same, for a write. A write goes to a temporary name and is renamed onto
+#: the canvas, so a failure at any point before the rename leaves the canvas as
+#: it was — true for every errno, and therefore safe to state unconditionally.
+_WRITE_AFTERMATH = "nothing was written and nothing was committed"
+
+
+def _cannot_read(path, error, ledger_id=None, node_id=None):
+    """The one refusal for a canvas this process asked for and did not get.
+
+    **Which refusal that is, is decided by the errno and not written beside
+    it.** This function used to format one sentence for every `OSError`, and
+    that sentence said "the canvas is there and unchanged" and told the caller
+    to `chmod u+r` it. Both are claims about the store, and both are true of
+    `EACCES` and false of `ENOENT` — the canvas removed between the
+    `os.path.isfile` above and the `open` here. The tool exited `2` asserting
+    the canvas was present one line under an errno saying it was gone, and the
+    `chmod` it named exited `1`. So:
+
+    - `ENOENT` is the filesystem answering that the canvas is not there, which
+      is `_nothing_at` and exit `1`, exactly as `README.md` section *Exit
+      codes* maps it and exactly as `validate.py` already reads it. Reaching it
+      here rather than at the check above means only that the store changed in
+      between.
+    - Every other errno means this process could not read a canvas it has no
+      reason to believe is absent. Exit `2` and not `1`: the store is intact as
+      far as anything knows, and "the request is wrong against the store as it
+      stands; re-read and re-decide" would invite a caller to retry a request
+      that was fine, against a canvas it still cannot read.
+
+    The repair comes from `refusal.os_next_action`, which chooses it by errno
+    and has a default for the errnos nobody has met — so an unanticipated one
+    gets a conforming refusal that names the path, the condition and what is
+    known, rather than silently inheriting a `chmod` that does not apply to it.
+    """
+    if getattr(error, "errno", None) == errno.ENOENT:
+        return _nothing_at(ledger_id, path, node_id=node_id)
+    about = (["ledger id %s" % ledger_id] if ledger_id is not None else []) + [
+        "canvas %s" % path
+    ]
+    return ToolProblem(
+        "cannot read %s: %s" % (path, refusal.os_condition(error)),
+        refusal.os_next_action(error, aftermath=_READ_AFTERMATH),
+        nodes=[node_id] if node_id is not None else [],
+        about=about + refusal.os_about(error, unless=about),
+    )
+
+
+def _cannot_write(path, error, node_id=None):
+    """The one refusal for a canvas that could not be written.
+
+    Every write this store makes goes to a temporary name beside the canvas and
+    is renamed onto it, so the directory's own mode is what a write needs and
+    what it is refused for — and the path the `OSError` carries is that
+    temporary name, which does not exist and which a caller can do nothing
+    about. That is why the repair is pointed at the directory: a next action
+    naming a file that was never created is one that provably does not succeed.
+
+    Classified by errno for the same reason `_cannot_read` is, and by the same
+    table: `chmod u+w` was written here unconditionally, and it is the repair
+    for `EACCES` and not for `EROFS`, `ENOSPC`, `ENOENT` or an errno nobody has
+    met. `need="write"` is what tells that table which `chmod` this caller
+    needed, since the errno alone cannot say.
+
+    Exit `2` for every errno, `ENOENT` included, and that is where this differs
+    from `_cannot_read`. `ENOENT` on a *read* is the documented "there is
+    genuinely no canvas for that ledger id", which a caller acts on by creating
+    it. `ENOENT` on a write is `state/canvas` itself going missing under the
+    tool mid-write — a store that moved, not a request that was wrong — which
+    `README.md` lists under `2` as "a `state/canvas` that cannot be written or
+    looked in".
+    """
+    directory = os.path.dirname(path) or "."
+    about = ["canvas %s" % path, "directory %s" % directory]
+    return ToolProblem(
+        "cannot write %s: %s" % (path, refusal.os_condition(error)),
+        refusal.os_next_action(
+            error,
+            aftermath=_WRITE_AFTERMATH,
+            paths=[directory],
+            need="write",
+        ),
+        nodes=[node_id] if node_id is not None else [],
+        about=about + refusal.os_about(error, unless=about),
+    )
 
 
 def _git(canvas_dir, *arguments):
@@ -157,7 +499,7 @@ def _git(canvas_dir, *arguments):
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
     except OSError as error:
-        raise ToolProblem("cannot run git: %s" % error)
+        raise _no_git(error)
 
 
 def _git_checked(canvas_dir, *arguments):
@@ -169,14 +511,129 @@ def _git_checked(canvas_dir, *arguments):
                 " ".join(arguments),
                 result.returncode,
                 result.stderr.decode("utf-8", "replace").strip(),
-            )
+            ),
+            "run `git %s` against %s yourself to see what it objects to, and "
+            "repair the repository; nothing was written"
+            % (" ".join(arguments), canvas_dir),
+            about=["canvas repository %s" % canvas_dir, "command git"],
         )
     return result.stdout.decode("utf-8", "replace")
 
 
+def _illegible(canvas_dir):
+    """Why this process cannot read the canvas repository, or None when it can.
+
+    The positive evidence every claim of emptiness below has to produce first.
+    `git` reports "this repository has no commits" and "I could not read this
+    repository" through the same failing exit status, so a caller that reads a
+    non-zero exit as emptiness states something false whenever the second one
+    is what happened — and the repair it then names, `create` the first canvas,
+    fails in turn against a repository that is already there.
+
+    **The whole of `.git`, not its top level.** Checking the mode of `.git`
+    itself is a check at a fixed depth, and this surface exists because a check
+    at a fixed depth can always be defeated by going one deeper: with `.git`
+    readable and `.git/refs/heads` at mode `000`, git finds no ref, says so the
+    same way an unborn branch does, and the tool announced that a repository
+    holding three commits had none. There is no depth at which that stops being
+    possible, so the traversal is not given one — it walks until it has seen
+    everything or until something refuses it, and only "I saw all of it" counts
+    as permission to call the repository empty.
+
+    The walk is affordable because of *when* it runs: only after git has
+    already declined to answer, which is the rare path. A repository this
+    process can read costs one full traversal of `.git` on that path and
+    nothing at all on every other.
+    """
+    git_dir = os.path.join(canvas_dir, ".git")
+    try:
+        os.stat(git_dir)
+    except OSError as error:
+        return error
+    # `os.stat` succeeds on a directory whose own mode is 000 — the mode that
+    # refuses it is read on the way *in*, not on the way to it — so each
+    # directory's own readability has to be asked about separately.
+    refused = []
+    for path in (git_dir,):
+        if not os.access(path, os.R_OK | os.X_OK):
+            return PermissionError(errno.EACCES, os.strerror(errno.EACCES), path)
+    for directory, subdirectories, files in os.walk(
+        git_dir, onerror=refused.append
+    ):
+        if refused:
+            return refused[0]
+        for name in subdirectories:
+            path = os.path.join(directory, name)
+            if not os.access(path, os.R_OK | os.X_OK):
+                return PermissionError(
+                    errno.EACCES, os.strerror(errno.EACCES), path
+                )
+        for name in files:
+            path = os.path.join(directory, name)
+            if not os.access(path, os.R_OK):
+                return PermissionError(
+                    errno.EACCES, os.strerror(errno.EACCES), path
+                )
+    if refused:
+        return refused[0]
+    return None
+
+
+def _cannot_read_repository(canvas_dir, wanted, error=None, complaint=None):
+    """The repository is there and this process cannot read it. Exit 2.
+
+    Distinct from `_not_a_repository` and `_no_commits`, which both say
+    something definite about a repository that was successfully looked at.
+    This one says only that the look failed, which is the honest answer when it
+    did, and its next action repairs the thing that blocked the look.
+    """
+    if error is not None:
+        return ToolProblem(
+            "cannot tell %s %s: looking at it was refused: %s"
+            % (wanted, canvas_dir, refusal.os_condition(error)),
+            refusal.os_next_action(
+                error,
+                aftermath=(
+                    "nothing was read, written or committed, and what that "
+                    "repository holds is still unknown"
+                ),
+            ),
+            about=["canvas repository %s" % canvas_dir]
+            + refusal.os_about(error, unless=["canvas repository %s" % canvas_dir]),
+        )
+    return ToolProblem(
+        "cannot tell %s %s: git refused the question: %s"
+        % (wanted, canvas_dir, complaint or "it gave no reason"),
+        "run `git --git-dir=%s rev-parse HEAD` yourself to see what it objects "
+        "to, and repair the repository; nothing was read, written or "
+        "committed, and what that repository holds is still unknown"
+        % os.path.join(canvas_dir, ".git"),
+        about=["canvas repository %s" % canvas_dir, "command git"],
+    )
+
+
 def is_repository(canvas_dir):
-    """A single local check. No ancestor discovery of any kind."""
-    return os.path.isdir(os.path.join(canvas_dir, ".git"))
+    """Whether `state/canvas` holds a repository. A single local check.
+
+    No ancestor discovery of any kind. Raises rather than answering False when
+    this process cannot see `.git` well enough to tell: `os.path.isdir`
+    answers False both for a repository that is not there and for one under a
+    directory this process may not traverse, and "is not a git repository" is
+    true of only the first.
+    """
+    git_dir = os.path.join(canvas_dir, ".git")
+    try:
+        return stat.S_ISDIR(os.stat(git_dir).st_mode)
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        # A component of the path is a regular file, so nothing can be under
+        # it. Definite, and the guards above this one say what is there.
+        return False
+    except OSError as error:
+        raise _cannot_read_repository(
+            canvas_dir, "whether there is a git repository at", error
+        )
 
 
 def ensure_repository(canvas_dir):
@@ -190,34 +647,82 @@ def ensure_repository(canvas_dir):
     try:
         os.makedirs(canvas_dir, exist_ok=True)
     except OSError as error:
-        raise ToolProblem("cannot create %s: %s" % (canvas_dir, error))
+        raise ToolProblem(
+            "cannot create %s: %s" % (canvas_dir, error),
+            "make that directory creatable — the workspace above it has to "
+            "exist and be writable — and re-run; nothing was written",
+            about=["directory %s" % canvas_dir],
+        )
     # `git init <path>` names the path outright, so this does not depend on the
     # working directory either. -b main matches the code repository's default
     # branch and silences git's init.defaultBranch advice.
-    result = subprocess.run(
-        ["git", "init", "-b", "main", "-q", "--", canvas_dir],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "init", "-b", "main", "-q", "--", canvas_dir],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        # The same refusal `_git` gives, and exit 2 like it. This call cannot go
+        # through `_git`, which pins --git-dir at a repository that does not
+        # exist yet, so it catches the same OSError here rather than letting it
+        # out as a traceback and Python's exit 1.
+        raise _no_git(error)
     if result.returncode != 0:
         raise ToolProblem(
             "cannot initialise a git repository at %s: %s"
-            % (canvas_dir, result.stderr.decode("utf-8", "replace").strip())
+            % (canvas_dir, result.stderr.decode("utf-8", "replace").strip()),
+            "run `git init -b main -- %s` yourself to see what it objects to, "
+            "and re-run; no canvas was created" % canvas_dir,
+            about=["directory %s" % canvas_dir, "command git init"],
         )
     return True
 
 
 def head_sha(canvas_dir):
-    """The repository head, or None when it has no commits yet.
+    """The repository head, or None when it genuinely has no commits yet.
 
     The *repository* head, not the file's last-touching commit. That is what
     `--base` is compared against, and it is what makes the sha a read hands out
     usable as the base of the next write with no second lookup.
+
+    **None means one thing: this process looked, and there is no commit.** It
+    used to mean that or "the look failed", because `git rev-parse HEAD` exits
+    `128` both on an unborn branch and on a `.git` it may not read, and the
+    return code alone does not say which. Every caller then turned that one
+    `None` into a definite claim — `_no_commits` said a repository with three
+    commits in it had none, and `_log` returned no commits at all, so `history`
+    said a node three commits name "was never a node of this canvas". Both
+    statements are false, and both next actions fail when run.
+
+    So the question is asked in the form that distinguishes the two answers,
+    and the answer is then confirmed before it is believed:
+
+    - `rev-parse --verify --quiet HEAD` exits `0` with the sha, or `1` in
+      silence when git resolved the question and the ref is simply not there.
+      A fatal condition — no repository, no permission — is `128` with a
+      reason on stderr, which is a different exit status and not an answer.
+    - Even at `1`, `_illegible` confirms the repository can actually be read
+      before "no commits" is returned. Two independent signals have to agree;
+      where they do not, the tool says it cannot tell rather than picking one.
     """
-    result = _git(canvas_dir, "rev-parse", "HEAD")
-    if result.returncode != 0:
+    result = _git(canvas_dir, "rev-parse", "--verify", "--quiet", "HEAD")
+    complaint = result.stderr.decode("utf-8", "replace").strip()
+    if result.returncode == 0:
+        return result.stdout.decode("utf-8", "replace").strip()
+    if result.returncode == 1 and not complaint:
+        problem = _illegible(canvas_dir)
+        if problem is not None:
+            raise _cannot_read_repository(
+                canvas_dir, "whether there are any commits in", problem
+            )
         return None
-    return result.stdout.decode("utf-8", "replace").strip()
+    raise _cannot_read_repository(
+        canvas_dir,
+        "whether there are any commits in",
+        _illegible(canvas_dir),
+        complaint=complaint,
+    )
 
 
 def _configured(canvas_dir, key, fallback):
@@ -307,12 +812,19 @@ def _log(canvas_dir, arguments, complaint):
         canvas_dir, *(["log", "--reverse", "--format=%s" % _LOG_FORMAT] + arguments)
     )
     if result.returncode != 0:
+        # `head_sha` raises rather than answering None when it cannot tell, so
+        # reaching None here is positive evidence of an empty repository and
+        # not merely a second failure read as one. That is what stops a log
+        # this process was refused from being reported as a node's whole life.
         if head_sha(canvas_dir) is None:
             # No commits at all. git log exits non-zero on an unborn branch
             # rather than printing nothing.
             return []
         raise ToolProblem(
-            "%s: %s" % (complaint, result.stderr.decode("utf-8", "replace").strip())
+            "%s: %s" % (complaint, result.stderr.decode("utf-8", "replace").strip()),
+            "run `git log` against %s yourself to see what it objects to, and "
+            "repair the repository; nothing was written" % canvas_dir,
+            about=["canvas repository %s" % canvas_dir, "command git log"],
         )
 
     records = []
@@ -401,7 +913,11 @@ def mint(canvas_dir):
         if is_free(canvas_dir, candidate):
             return candidate
     raise ToolProblem(
-        "could not mint a free node id in %d draws" % _MINT_ATTEMPTS
+        "could not mint a free node id in %d draws" % _MINT_ATTEMPTS,
+        "check the history in %s: %d draws from 774,206 ids all colliding "
+        "means the freeness check is answering wrongly, not that the space is "
+        "full. Nothing was written" % (canvas_dir, _MINT_ATTEMPTS),
+        about=["canvas repository %s" % canvas_dir],
     )
 
 
@@ -410,8 +926,13 @@ def mint(canvas_dir):
 # --------------------------------------------------------------------------
 
 
-def require_reason(why):
+def require_reason(why, nodes=(), about=()):
     """Return the edit's reason, or refuse. Required, no default, no fallback.
+
+    `nodes` and `about` are what the caller already knows about the edit that
+    is being refused — the node it names, the canvas it is in. They are on the
+    command line whenever this fires, and a refusal that has them and does not
+    print them is a refusal an agent cannot act on.
 
     Absent, empty and whitespace-only are the same answer: no. There is no
     generated default and nothing to fall back to, because a reason a tool
@@ -427,7 +948,11 @@ def require_reason(why):
     if why is None or not why.strip():
         raise ToolProblem(
             "--why is required and must not be empty: every edit to a canvas "
-            "records the reason it was made, and there is no default"
+            "records the reason it was made, and there is no default",
+            "re-run the same command with --why \"<why this edit is being "
+            "made>\"; nothing was written, committed or minted",
+            nodes=nodes,
+            about=["option --why"] + list(about),
         )
     return why.strip()
 
@@ -476,8 +1001,15 @@ def _validate(path, reported_as):
     try:
         problems = validate_file(path)
     except EnvironmentProblem as error:
-        # Not an invalid document. The validator cannot run.
-        raise ToolProblem("the validator cannot run: %s" % error)
+        # Not an invalid document. The validator cannot run. It is already a
+        # refusal with the thing it is about and the next action on it, so
+        # both travel across the boundary rather than being restated here.
+        raise ToolProblem(
+            "the validator cannot run: %s" % error,
+            error.next_action,
+            nodes=error.nodes,
+            about=error.about,
+        )
     return [problem.replace(path, reported_as) for problem in problems]
 
 
@@ -505,14 +1037,28 @@ def preflight(path, ledger_id, contents):
         document.place_into(root, document.ROOT, document.new_text(_PREFLIGHT_ID, content))
     temporary = "%s.preflight-%d" % (path, os.getpid())
     try:
-        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(document.serialise(root))
+        try:
+            with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(document.serialise(root))
+        except OSError as error:
+            raise _cannot_write(path, error)
         problems = _validate(temporary, path)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        try:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        except OSError as error:
+            raise _cannot_write(path, error)
     if problems:
-        raise Refusal("refusing to create an invalid canvas at %s" % path, problems)
+        raise Refusal(
+            "refusing to create an invalid canvas at %s" % path,
+            "the diagnostics above name where the document breaks; re-run "
+            "`bin/canvas create %s` with a --problem and an --expected-value "
+            "that XML can hold. Nothing was written and no canvas exists yet"
+            % ledger_id,
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+            details=problems,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -553,16 +1099,35 @@ def _shape(root):
         element, parent_id = stack.pop()
         node_id = document.ROOT if element is root else element.get("id")
         if node_id is None:
+            # Named by its container, which is the identifying thing a node
+            # with no id still has — the same problem `validate._describe`
+            # solves with an element path when it has to name one in a
+            # diagnostic.
             raise Refusal(
-                "refusing to write a <%s> with no id: every node in a canvas "
-                "carries one, and a node the store cannot name is a node no "
-                "history can record" % element.tag
+                "refusing to write a <%s> with no id, under %s: every node in "
+                "a canvas carries one, and a node the store cannot name is a "
+                "node no history can record" % (element.tag, parent_id),
+                "give it an id — `document.new_node(<id>, ...)` takes one and "
+                "`insert` mints one — and write it again; nothing was written",
+                nodes=[parent_id] if parent_id != document.ROOT else [],
+                about=[
+                    "element <%s>" % element.tag,
+                    "container %s" % parent_id,
+                ],
             )
         if node_id in records:
             raise Refusal(
-                "refusing to write a canvas that uses the id %s twice: an id "
-                "names one node, and two nodes sharing one would share one "
-                "history" % node_id
+                "refusing to write a canvas that uses the id %s twice, once "
+                "under %s and once under %s: an id names one node, and two "
+                "nodes sharing one would share one history"
+                % (node_id, records[node_id][3], parent_id),
+                "give one of the two its own id — `mint` draws one no commit "
+                "has ever named — and write it again; nothing was written",
+                nodes=[node_id],
+                about=[
+                    "container %s" % records[node_id][3],
+                    "container %s" % parent_id,
+                ],
             )
         records[node_id] = (
             element.tag,
@@ -597,15 +1162,67 @@ def _one_node_only(path, root, node_id):
     its container sits. A payload that rewrites that subtree does not.
     """
     if not os.path.isfile(path):
-        raise Refusal(
-            "refusing to write %s in a commit naming %s: there is no canvas "
-            "there for that node to be one edit of. A canvas is created by "
-            "`create`, and only its birth commit names no node" % (path, node_id)
+        # The same distinction `_no_canvas` draws, for the same reason: "there
+        # is no canvas there" has to be a fact and not an inference from one
+        # bit that four different states collapse into. Asked of the
+        # filesystem, so that a mode set on any directory above this path
+        # between the read and the write comes out as "the tool cannot tell"
+        # at exit 2 rather than as "create it first" at exit 1.
+        try:
+            os.stat(path)
+        except FileNotFoundError:
+            raise Refusal(
+                "refusing to write %s in a commit naming %s: there is no canvas "
+                "there for that node to be one edit of. A canvas is created by "
+                "`create`, and only its birth commit names no node" % (path, node_id),
+                "create the canvas first, with `bin/canvas create <ledger-id> "
+                "--problem \"<the problem>\" --expected-value \"<the expected "
+                "value>\"`, and then edit it one node at a time",
+                nodes=[node_id],
+                about=["canvas %s" % path],
+            )
+        except OSError as error:
+            raise ToolProblem(
+                "refusing to write %s in a commit naming %s: looking at it was "
+                "refused, so whether there is a canvas there to be one edit of "
+                "is unknown: %s" % (path, node_id, refusal.os_condition(error)),
+                refusal.os_next_action(
+                    error,
+                    aftermath=(
+                        "nothing was written and nothing was committed, and "
+                        "whether that canvas exists is still unknown"
+                    ),
+                ),
+                nodes=[node_id],
+                about=["canvas %s" % path]
+                + refusal.os_about(error, unless=["canvas %s" % path]),
+            )
+        raise ToolProblem(
+            "refusing to write %s in a commit naming %s: there is something at "
+            "that path and it is not a regular file, so it is not a canvas: %s"
+            % (path, node_id, _what_is_there(os.stat(path).st_mode)),
+            "move %s out of the way — `ls -ld %s` shows what it is — and then "
+            "create the canvas with `bin/canvas create <ledger-id> --problem "
+            "\"<the problem>\" --expected-value \"<the expected value>\"`; "
+            "nothing was written and nothing was committed" % (path, path),
+            nodes=[node_id],
+            about=["canvas %s" % path],
         )
     try:
         stored = document.parse(path)
     except document.NotWellFormed as error:
-        raise Refusal("%s" % error)
+        raise Refusal(
+            "%s" % error,
+            "repair the XML at the line named above — `bin/canvas-validate %s` "
+            "reports it — and write again; nothing was written" % path,
+            nodes=[node_id],
+            about=["canvas %s" % path],
+        )
+    except OSError as error:
+        # The document on disk is what this write is held against, so a canvas
+        # that cannot be read cannot be written either — there is nothing to
+        # compare the one-node claim to.
+        raise _cannot_read(path, error, node_id=node_id)
 
     before, before_order = _shape(stored)
     after, after_order = _shape(root)
@@ -640,10 +1257,15 @@ def _one_node_only(path, root, node_id):
             )
         )
     raise Refusal(
-        "refusing to write a commit naming %s that also %s: one edit is one "
-        "node. Make each of those its own edit with its own reason, using "
-        "insert, replace, remove or move, one node at a time"
-        % (node_id, " and ".join(also))
+        "refusing to write a commit naming %s that also %s: one edit is one node"
+        % (node_id, " and ".join(also)),
+        "make each of those its own edit with its own reason, using insert, "
+        "replace, remove or move, one node at a time",
+        nodes=[node_id] + changed + [key for key in reordered if key != document.ROOT],
+        about=(
+            ["canvas %s" % path]
+            + (["container the root"] if document.ROOT in reordered else [])
+        ),
     )
 
 
@@ -660,16 +1282,21 @@ def _a_canvas_is_being_born(path, root):
         raise Refusal(
             "refusing to write %s in a commit that names no node: a canvas "
             "already exists there, and a write that names no node is the birth "
-            "of one. Use insert, replace, remove or move, one node at a time"
-            % path
+            "of one" % path,
+            "change the canvas that is there with insert, replace, remove or "
+            "move, one node at a time, each with its own reason",
+            about=["canvas %s" % path],
         )
     nodes = list(root.iter())[1:]
     if nodes:
         raise Refusal(
             "refusing to create %s with %d node(s) already in it (%s): a canvas "
-            "is born as its root alone, and each of its first nodes arrives as "
-            "its own insert with its own reason"
-            % (path, len(nodes), _child_ids(nodes))
+            "is born as its root alone"
+            % (path, len(nodes), _child_ids(nodes)),
+            "write the root alone, then bring each of those nodes in with its "
+            "own insert and its own reason, one node at a time",
+            nodes=[node.get("id") for node in nodes if node.get("id")],
+            about=["canvas %s" % path],
         )
 
 
@@ -685,7 +1312,11 @@ def _inside_the_store(canvas_dir, path):
     if where != home or not os.path.basename(path).endswith(".xml"):
         raise ToolProblem(
             "refusing to write %s: a canvas is written as <ledger-id>.xml "
-            "inside %s and nowhere else" % (path, canvas_dir)
+            "inside %s and nowhere else" % (path, canvas_dir),
+            "write it as %s/<ledger-id>.xml; `bin/canvas` derives that path "
+            "from the ledger id, which is why no command line can express "
+            "this one" % canvas_dir,
+            about=["path %s" % path, "canvas repository %s" % canvas_dir],
         )
 
 
@@ -725,7 +1356,11 @@ def _write_and_commit(
     All three checks run before the temporary file is opened, so a refused
     write leaves nothing behind — not even a rejected temporary.
     """
-    why = require_reason(why)
+    why = require_reason(
+        why,
+        nodes=[node_id] if node_id is not None else [],
+        about=["canvas %s" % path],
+    )
     _inside_the_store(canvas_dir, path)
     if node_id is None:
         _a_canvas_is_being_born(path, root)
@@ -735,17 +1370,35 @@ def _write_and_commit(
     text = document.serialise(root)
     temporary = "%s.tmp-%d" % (path, os.getpid())
     try:
-        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
+        try:
+            with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+        except OSError as error:
+            raise _cannot_write(path, error, node_id=node_id)
         problems = _validate(temporary, path)
         if problems:
             raise Refusal(
-                "refusing to write an invalid canvas to %s" % path, problems
+                "refusing to write an invalid canvas to %s%s"
+                % (path, "" if node_id is None else ", naming %s" % node_id),
+                "the diagnostics above name the node and what is wrong with "
+                "it; what a canvas node may be is written in "
+                "schema/canvas.rng and nowhere else, so read that for what "
+                "this position accepts, correct the payload and re-run. "
+                "Nothing was written and nothing was committed",
+                nodes=[node_id] if node_id is not None else [],
+                about=["canvas %s" % path],
+                details=problems,
             )
-        os.replace(temporary, path)
+        try:
+            os.replace(temporary, path)
+        except OSError as error:
+            raise _cannot_write(path, error, node_id=node_id)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        try:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        except OSError as error:
+            raise _cannot_write(path, error, node_id=node_id)
 
     # -f so that a stray ignore rule somewhere above cannot make `add` a silent
     # no-op and the commit a confusing failure.
@@ -779,7 +1432,14 @@ def _write_and_commit(
     )
     sha = head_sha(canvas_dir)
     if sha is None:
-        raise ToolProblem("committed to %s but the repository has no head" % canvas_dir)
+        raise ToolProblem(
+            "committed to %s but the repository has no head" % canvas_dir,
+            "inspect %s with `git log` — the commit was made and the "
+            "repository reports no head — and repair it before writing again"
+            % canvas_dir,
+            nodes=[node_id] if node_id is not None else [],
+            about=["canvas repository %s" % canvas_dir],
+        )
     return sha
 
 
@@ -828,7 +1488,15 @@ def create(ledger_id, problem, expected_value, author=None):
         raise Refusal(
             "a canvas for %s already exists at %s (Canvas-Base: %s); "
             "this command creates, it does not overwrite"
-            % (ledger_id, path, head_sha(canvas_dir))
+            % (ledger_id, path, head_sha(canvas_dir)),
+            "read it with `bin/canvas read %s`, then change it one node at a "
+            "time with insert, replace, remove or move, each with its own "
+            "--why" % ledger_id,
+            about=[
+                "ledger id %s" % ledger_id,
+                "canvas %s" % path,
+                "sha %s" % head_sha(canvas_dir),
+            ],
         )
 
     if author is None:
@@ -884,22 +1552,19 @@ def read(ledger_id):
     path = canvas_path(canvas_dir, ledger_id)
 
     if not os.path.isfile(path):
-        raise Refusal(
-            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path)
-        )
+        raise _no_canvas(ledger_id, path)
     if not is_repository(canvas_dir):
-        raise ToolProblem(
-            "%s is not a git repository, so it has no sha to write against" % canvas_dir
-        )
+        raise _not_a_repository(canvas_dir, "sha to write against")
 
     sha = head_sha(canvas_dir)
     if sha is None:
-        raise ToolProblem(
-            "%s has no commits, so it has no sha to write against" % canvas_dir
-        )
+        raise _no_commits(canvas_dir, "sha to write against")
 
-    with open(path, "rb") as handle:
-        body = handle.read()
+    try:
+        with open(path, "rb") as handle:
+            body = handle.read()
+    except OSError as error:
+        raise _cannot_read(path, error, ledger_id=ledger_id)
     return sha, body, _validate(path, path)
 
 
@@ -933,21 +1598,20 @@ def history(ledger_id, node_id):
     path = canvas_path(canvas_dir, ledger_id)
 
     if not os.path.isfile(path):
-        raise Refusal(
-            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path)
-        )
+        raise _no_canvas(ledger_id, path)
     if not is_repository(canvas_dir):
-        raise ToolProblem(
-            "%s is not a git repository, so it has no history to report"
-            % canvas_dir
-        )
+        raise _not_a_repository(canvas_dir, "history to report")
 
     edits = _node_commits(canvas_dir, node_id, path)
     if not edits:
         raise Refusal(
             "no node with id %s in the history of the canvas for %s: no commit "
             "names it, so it was never a node of this canvas. The canvas is "
-            "there; the node is not" % (node_id, ledger_id)
+            "there; the node is not" % (node_id, ledger_id),
+            "`bin/canvas read %s` prints the canvas and every id in it; ask "
+            "one of those for its history" % ledger_id,
+            nodes=[node_id],
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
         )
     return edits
 
@@ -1003,7 +1667,7 @@ def history(ledger_id, node_id):
 _A_SHA = re.compile(r"\A[0-9a-fA-F]{4,40}\Z")
 
 
-def _resolve_base(canvas_dir, declared, head):
+def _resolve_base(canvas_dir, declared, head, ledger_id, node_id):
     """The full sha `--base` names, or the refusal that says why it is not one.
 
     Three answers, and they are three different things:
@@ -1023,27 +1687,66 @@ def _resolve_base(canvas_dir, declared, head):
     if not _A_SHA.match(declared):
         raise ToolProblem(
             "not a usable --base: %r; a base is the commit sha a read handed "
-            "out, four to forty hexadecimal characters" % declared
+            "out, four to forty hexadecimal characters" % declared,
+            "re-run with the sha `bin/canvas read %s` printed on its "
+            "Canvas-Base: line, or drop --base to ask for no staleness check "
+            "at all. Nothing was written" % ledger_id,
+            nodes=[node_id] if node_id is not None else [],
+            about=["ledger id %s" % ledger_id, "option --base %r" % declared],
         )
     resolved = _git(
         canvas_dir, "rev-parse", "--verify", "--quiet", "%s^{commit}" % declared
     )
+    if resolved.returncode not in (0, 1):
+        # Exit 1 is git answering the question: no such revision. Anything else
+        # is git declining to answer it — an unreadable `.git`, a corrupt pack
+        # — and "this sha was never handed out here" is a statement about a
+        # repository that was successfully read. Saying it of one that was not
+        # is the same lie `head_sha` stopped telling, and at exit 1 it would
+        # send a caller to re-read a store the process still cannot see.
+        raise _cannot_read_repository(
+            canvas_dir,
+            "whether --base %s is a commit in" % declared,
+            _illegible(canvas_dir),
+            complaint=resolved.stderr.decode("utf-8", "replace").strip(),
+        )
     if resolved.returncode != 0:
         raise Refusal(
             "no commit %s in this canvas repository: --base names the sha a "
-            "read handed out, and this one was never handed out here. Read the "
-            "canvas and write against the sha it prints" % declared
+            "read handed out, and this one was never handed out here" % declared,
+            "read the canvas again with `bin/canvas read %s` and write against "
+            "the sha it prints. Nothing was written" % ledger_id,
+            nodes=[node_id] if node_id is not None else [],
+            about=["ledger id %s" % ledger_id, "option --base %s" % declared],
         )
     base = resolved.stdout.decode("utf-8", "replace").strip()
     if base != head:
         ancestry = _git(canvas_dir, "merge-base", "--is-ancestor", base, "HEAD")
+        if ancestry.returncode not in (0, 1):
+            # `--is-ancestor` documents exit 1 for "no" and reserves anything
+            # else for an error, so only 1 is an answer. The same distinction,
+            # for the same reason: "nothing that led here was decided against
+            # it" is a finding about a history this process read.
+            raise _cannot_read_repository(
+                canvas_dir,
+                "whether --base %s is an ancestor of the head of" % base,
+                _illegible(canvas_dir),
+                complaint=ancestry.stderr.decode("utf-8", "replace").strip(),
+            )
         if ancestry.returncode != 0:
             raise Refusal(
                 "--base %s is not an ancestor of %s, this canvas repository's "
                 "head: nothing that led here was decided against it, so what "
-                "changed in between is not a question this store can answer. "
-                "Read the canvas and write against the sha it prints"
-                % (base, head)
+                "changed in between is not a question this store can answer"
+                % (base, head),
+                "read the canvas again with `bin/canvas read %s` and write "
+                "against the sha it prints. Nothing was written" % ledger_id,
+                nodes=[node_id] if node_id is not None else [],
+                about=[
+                    "ledger id %s" % ledger_id,
+                    "option --base %s" % base,
+                    "sha %s, the head" % head,
+                ],
             )
     return base
 
@@ -1068,7 +1771,7 @@ def _diff(canvas_dir, base, head, path):
     return _git_checked(canvas_dir, "diff", base, head, "--", path).splitlines()
 
 
-def _check_base(canvas_dir, path, node_id, head, declared):
+def _check_base(canvas_dir, path, ledger_id, node_id, head, declared):
     """Split on what moved since `--base`. Return the news, or None.
 
     `None` means there is nothing to say: no base was declared, or this canvas
@@ -1094,7 +1797,7 @@ def _check_base(canvas_dir, path, node_id, head, declared):
     """
     if declared is None:
         return None
-    base = _resolve_base(canvas_dir, declared, head)
+    base = _resolve_base(canvas_dir, declared, head, ledger_id, node_id)
     if base == head:
         return None
 
@@ -1123,12 +1826,22 @@ def _check_base(canvas_dir, path, node_id, head, declared):
             details.append(record.subject)
             details.extend(_patch(canvas_dir, record.sha, path))
         raise Refusal(
-            "refusing to write %s: it moved in %d commit(s) between --base %s "
-            "and %s, so this edit was decided against text that is no longer "
-            "there. Nothing was applied and nothing was merged. Its diff since "
-            "%s follows; read the canvas again and re-decide against the sha "
-            "the read prints" % (node_id, len(theirs), declared, head, declared),
-            details,
+            "refusing to write %s in the canvas for %s: it moved in %d "
+            "commit(s) between --base %s and %s, so this edit was decided "
+            "against text that is no longer there. Nothing was applied and "
+            "nothing was merged. Its diff since %s follows"
+            % (node_id, ledger_id, len(theirs), declared, head, declared),
+            "read the canvas again with `bin/canvas read %s`, re-decide "
+            "against the sha it prints, and re-run this edit with that --base"
+            % ledger_id,
+            nodes=[node_id],
+            about=[
+                "ledger id %s" % ledger_id,
+                "canvas %s" % path,
+                "option --base %s" % declared,
+                "sha %s, the head" % head,
+            ],
+            details=details,
         )
 
     news = [
@@ -1194,23 +1907,26 @@ def _open_canvas(ledger_id):
     path = canvas_path(canvas_dir, ledger_id)
 
     if not os.path.isfile(path):
-        raise Refusal(
-            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path)
-        )
+        raise _no_canvas(ledger_id, path)
     if not is_repository(canvas_dir):
-        raise ToolProblem(
-            "%s is not a git repository, so it has no sha to write against"
-            % canvas_dir
-        )
+        raise _not_a_repository(canvas_dir, "sha to write against")
     head = head_sha(canvas_dir)
     if head is None:
-        raise ToolProblem(
-            "%s has no commits, so it has no sha to write against" % canvas_dir
-        )
+        raise _no_commits(canvas_dir, "sha to write against")
     try:
         root = document.parse(path)
     except document.NotWellFormed as error:
-        raise Refusal("%s" % error)
+        raise Refusal(
+            "%s" % error,
+            "repair the XML at the line named above — `bin/canvas-validate %s` "
+            "reports it — and re-run; nothing was written" % path,
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        )
+    except OSError as error:
+        # A canvas that is there and unreadable is not a wrong request, so it
+        # is the one thing in this function that is a `ToolProblem` and not a
+        # `Refusal`: exit 2, do not touch the canvas.
+        raise _cannot_read(path, error, ledger_id=ledger_id)
     return canvas_dir, path, root, head
 
 
@@ -1224,35 +1940,102 @@ def _addressed(root, node_id, ledger_id):
     if node_id == document.ROOT:
         raise Refusal(
             "the root is not a node: <canvas> carries no id and no v, so it "
-            "cannot be replaced, removed or moved. Edit its children instead"
+            "cannot be replaced, removed or moved. Nothing was changed",
+            "name one of the canvas's own nodes instead — `bin/canvas read %s` "
+            "prints every id in it — or use --into root to place a node inside "
+            "the root, which is the one thing root does name" % ledger_id,
+            about=["ledger id %s" % ledger_id, "position root, the <canvas> element"],
         )
     node = document.find(root, node_id)
     if node is None:
         raise Refusal(
             "no node with id %s in the canvas for %s: nothing was changed"
-            % (node_id, ledger_id)
+            % (node_id, ledger_id),
+            "`bin/canvas read %s` prints the canvas and every id in it; re-run "
+            "naming one of those" % ledger_id,
+            nodes=[node_id],
+            about=["ledger id %s" % ledger_id],
         )
     return node
 
 
-def _one_position(after, into):
-    """A position is named by exactly one of `--after` and `--into`."""
+def _one_position(after, into, ledger_id=None, moving=None):
+    """A position is named by exactly one of `--after` and `--into`.
+
+    `moving` is the node being placed, on the same terms as `_place`'s: the id
+    `move` already holds, and nothing for `insert`, which has not minted one
+    yet. `bin/canvas` puts the two flags in a required mutually-exclusive group
+    and intercepts both-given and neither-given before this runs, naming the
+    node off the raw argv as it goes — so this is the library API's copy of the
+    same refusal, and it names the same nodes the command line's copy does.
+    """
     if (after is None) == (into is None):
+        given = [
+            "option --after %s" % after if after is not None else None,
+            "option --into %s" % into if into is not None else None,
+        ]
         raise ToolProblem(
             "a position is named by exactly one of --after <node-id> or "
-            "--into <container-id>"
+            "--into <container-id>, and this one names %s"
+            % ("both" if after is not None else "neither"),
+            "re-run with exactly one: --after <node-id> puts the node "
+            "immediately after that node, and --into <container-id> puts it "
+            "last among that container's children, where 'root' names the "
+            "canvas itself. Nothing was written",
+            nodes=[
+                each
+                for each in (moving, after, into)
+                if each is not None and each != document.ROOT
+            ],
+            about=(
+                [each for each in given if each]
+                + (["ledger id %s" % ledger_id] if ledger_id else [])
+            )
+            or ["option --after", "option --into"],
         )
 
 
-def _place(root, node, after, into):
-    """Put the node at the named position, or refuse naming the id that missed."""
+def _place(root, node, after, into, ledger_id, moving=None):
+    """Put the node at the named position, or refuse naming every node in hand.
+
+    `canvas/document.py` composes the problem and has never heard of a ledger
+    id, so it says "this canvas" and cannot say which. The ledger id is added
+    here, where it is known, rather than taught to the document module.
+
+    `moving` is the id of the node being placed **when that node is already a
+    node of this canvas**. `move` has one and passes it, because the refusal is
+    holding the element it was asked to move and a refusal that names only the
+    position it missed leaves out half of what the caller has to act on. The
+    same verb one flag apart already names both.
+
+    **`insert` passes none, deliberately.** Its node was minted moments earlier
+    and has never been in the canvas: no commit names it, `bin/canvas read`
+    cannot show it, `bin/canvas history` has nothing for it, and the next
+    attempt mints a different one. `Canvas-Node:` means "a node of this canvas"
+    everywhere else in the tool, and printing a discarded draw under it would
+    hand an agent an id it can neither look up nor reuse. That refusal names
+    the ledger id and the position instead, which are the two things about it
+    that are true.
+    """
     try:
         if after is not None:
             document.place_after(root, after, node)
         else:
             document.place_into(root, into, node)
     except document.PositionProblem as problem:
-        raise Refusal("%s: nothing was changed" % problem)
+        named = after if after is not None else into
+        raise Refusal(
+            "%s: nothing was changed" % problem,
+            "`bin/canvas read %s` prints the canvas and every id in it; re-run "
+            "naming --after <node-id> or --into <container-id> from those, "
+            "where 'root' names the canvas itself" % ledger_id,
+            nodes=[
+                each
+                for each in (moving, named)
+                if each is not None and each != document.ROOT
+            ],
+            about=["ledger id %s" % ledger_id, "position %s" % named],
+        )
 
 
 def _child_ids(children):
@@ -1287,10 +2070,14 @@ def insert(
     id no commit has ever named cannot have moved. The check still runs, for
     the news and for the three ways a base can be unusable.
     """
-    why = require_reason(why)
-    _one_position(after, into)
+    why = require_reason(
+        why,
+        nodes=[each for each in (after, into) if each is not None],
+        about=["ledger id %s" % ledger_id],
+    )
+    _one_position(after, into, ledger_id)
     canvas_dir, path, root, head = _open_canvas(ledger_id)
-    news = _check_base(canvas_dir, path, None, head, base)
+    news = _check_base(canvas_dir, path, ledger_id, None, head, base)
     if author is None:
         author = default_author(canvas_dir)
 
@@ -1301,7 +2088,7 @@ def insert(
         text=text,
         attributes={"title": title, "href": href},
     )
-    _place(root, node, after, into)
+    _place(root, node, after, into, ledger_id)
 
     sha = _write_and_commit(
         canvas_dir,
@@ -1359,12 +2146,14 @@ def replace(
     in a payload at all, which is what makes "a `replace` payload that rewrites
     N children" inexpressible rather than merely refused.
     """
-    why = require_reason(why)
+    why = require_reason(
+        why, nodes=[node_id], about=["ledger id %s" % ledger_id]
+    )
     canvas_dir, path, root, head = _open_canvas(ledger_id)
     # Before `_addressed`, so that a node *removed* since `--base` is the hard
     # branch with its own diff, rather than the bare "no node with id X" a
     # writer working from a stale read cannot learn anything from.
-    news = _check_base(canvas_dir, path, node_id, head, base)
+    news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
     children = list(node)
     becomes = node_type or node.tag
@@ -1372,17 +2161,24 @@ def replace(
     if children and becomes != node.tag:
         raise Refusal(
             "refusing to change <%s> %s into <%s> while it has %d child node(s) "
-            "(%s): a <%s> has nowhere to put them. Move each child out with "
-            "its own --why first, then replace the empty node"
-            % (node.tag, node_id, becomes, len(children), _child_ids(children), becomes)
+            "(%s): a <%s> has nowhere to put them"
+            % (node.tag, node_id, becomes, len(children), _child_ids(children), becomes),
+            "move each child out with its own --why first, then replace the "
+            "empty node; every child keeps its id and its whole history across "
+            "the move",
+            nodes=[node_id] + [child.get("id") for child in children if child.get("id")],
+            about=["ledger id %s" % ledger_id],
         )
     if children and text is not None:
         raise Refusal(
             "refusing to give <%s> %s character data while it has %d child "
             "node(s) (%s): a node holds children or text, never both, so the "
-            "text would be dropped. Replace each child with its own --why "
-            "instead, one node at a time"
-            % (node.tag, node_id, len(children), _child_ids(children))
+            "text would be dropped"
+            % (node.tag, node_id, len(children), _child_ids(children)),
+            "replace each child with its own --why instead, one node at a "
+            "time; a container's own text is not a thing this vocabulary has",
+            nodes=[node_id] + [child.get("id") for child in children if child.get("id")],
+            about=["ledger id %s" % ledger_id],
         )
 
     if author is None:
@@ -1429,18 +2225,24 @@ def remove(ledger_id, node_id, why, author=None, base=None):
     would be shown a node that, by its own record, is still alive. Empty it
     first, each removal with its own reason.
     """
-    why = require_reason(why)
+    why = require_reason(
+        why, nodes=[node_id], about=["ledger id %s" % ledger_id]
+    )
     canvas_dir, path, root, head = _open_canvas(ledger_id)
-    news = _check_base(canvas_dir, path, node_id, head, base)
+    news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
     children = list(node)
 
     if children:
         raise Refusal(
             "refusing to remove <%s> %s while it has %d child node(s) (%s): "
-            "one edit is one node. Remove each child with its own --why first, "
-            "then remove the empty node"
-            % (node.tag, node_id, len(children), _child_ids(children))
+            "one edit is one node"
+            % (node.tag, node_id, len(children), _child_ids(children)),
+            "remove each child with its own --why first, then remove the empty "
+            "node; a cascading delete would let those children vanish in a "
+            "commit no query on them ever returns",
+            nodes=[node_id] + [child.get("id") for child in children if child.get("id")],
+            about=["ledger id %s" % ledger_id],
         )
 
     if author is None:
@@ -1476,18 +2278,28 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
     a position: the subtree would leave the document altogether and the commit
     would name one node while N disappeared.
     """
-    why = require_reason(why)
-    _one_position(after, into)
+    why = require_reason(
+        why,
+        nodes=[each for each in (node_id, after, into) if each is not None],
+        about=["ledger id %s" % ledger_id],
+    )
+    _one_position(after, into, ledger_id, moving=node_id)
     canvas_dir, path, root, head = _open_canvas(ledger_id)
-    news = _check_base(canvas_dir, path, node_id, head, base)
+    news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
 
     target_id = after if after is not None else into
     target = document.find(root, target_id)
     if target is None:
         raise Refusal(
-            "no node with id %s in the canvas for %s: nothing was moved"
-            % (target_id, ledger_id)
+            "refusing to move %s: no node with id %s in the canvas for %s, so "
+            "there is no such position. Nothing was moved"
+            % (node_id, target_id, ledger_id),
+            "`bin/canvas read %s` prints the canvas and every id in it; re-run "
+            "naming --after <node-id> or --into <container-id> from those, "
+            "where 'root' names the canvas itself" % ledger_id,
+            nodes=[node_id, target_id],
+            about=["ledger id %s" % ledger_id],
         )
     if document.contains(node, target):
         raise Refusal(
@@ -1498,7 +2310,12 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
                 node_id,
                 "after" if after is not None else "into",
                 target_id,
-            )
+            ),
+            "name a position outside %s's own subtree — `bin/canvas read %s` "
+            "prints the tree — or move %s out from under it first, with its "
+            "own --why" % (node_id, ledger_id, target_id),
+            nodes=[node_id, target_id],
+            about=["ledger id %s" % ledger_id],
         )
 
     if author is None:
@@ -1506,7 +2323,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
 
     node.set("v", next_version(canvas_dir, node_id))
     document.detach(root, node_id)
-    _place(root, node, after, into)
+    _place(root, node, after, into, ledger_id, moving=node_id)
 
     sha = _write_and_commit(
         canvas_dir,

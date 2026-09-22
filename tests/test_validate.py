@@ -6,9 +6,12 @@ the full message text would couple the tests to libxml2's phrasing and break on
 a libxml2 upgrade for no gain.
 """
 
+import contextlib
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from xml.etree import ElementTree
 
@@ -28,6 +31,19 @@ def fixture(name):
 
 def strip_namespace(tag):
     return tag.rsplit("}", 1)[-1]
+
+
+@contextlib.contextmanager
+def mock_schema(path):
+    """Point the validator at another schema for the length of one block."""
+    from canvas import validate
+
+    was = validate.SCHEMA_PATH
+    validate.SCHEMA_PATH = path
+    try:
+        yield
+    finally:
+        validate.SCHEMA_PATH = was
 
 
 def run_shim(*args):
@@ -249,6 +265,135 @@ class TheEntryPointsContract(unittest.TestCase):
         self.assertEqual(
             1, run_shim(fixture("valid.xml"), fixture("unknown-node.xml"))[0]
         )
+
+
+class EveryRefusalNamesWhatItIsAboutAndTheNextAction(unittest.TestCase):
+    """The todo's done condition, for the standalone validator.
+
+    `bin/canvas-validate` decides its own exit codes, so it prints its own
+    meaning for them. None of its refusals has a node to name — the ones that
+    do are the diagnostics themselves, which already name the element, the
+    `id` and the `v` — so each of the others names what it does have: the file,
+    the schema, the binary, the argument it was not given.
+    """
+
+    def surface(self, stderr):
+        found = {"Canvas-Node": [], "Canvas-About": [], "Canvas-Next": [],
+                 "Canvas-Exit": []}
+        for line in stderr.splitlines():
+            for name in found:
+                if line.startswith("%s: " % name):
+                    found[name].append(line.split(": ", 1)[1])
+        return found
+
+    def assertSurface(self, expected_code, code, stderr, msg=None, about=(),
+                      next_action=()):
+        self.assertEqual(expected_code, code, "%s\n%s" % (msg, stderr))
+        trailers = self.surface(stderr)
+        self.assertEqual(1, len(trailers["Canvas-Next"]), stderr)
+        self.assertTrue(trailers["Canvas-Next"][0].strip(), stderr)
+        self.assertEqual(1, len(trailers["Canvas-Exit"]), stderr)
+        self.assertTrue(
+            trailers["Canvas-Exit"][0].startswith("%d " % code), stderr
+        )
+        self.assertTrue(
+            trailers["Canvas-Node"] or trailers["Canvas-About"], stderr
+        )
+        for thing in about:
+            self.assertTrue(
+                any(thing in each for each in trailers["Canvas-About"]), stderr
+            )
+        for phrase in next_action:
+            self.assertIn(phrase, trailers["Canvas-Next"][0], stderr)
+        return trailers
+
+    def test_an_invalid_document_keeps_its_diagnostics_and_gains_an_action(self):
+        code, stderr = run_shim(fixture("unknown-node.xml"))
+        self.assertSurface(
+            1, code, stderr, about=["unknown-node.xml"],
+            next_action=["canvas.rng", "bin/canvas-validate"],
+        )
+        # The diagnostic that names the node is unchanged: element, id and v.
+        self.assertIn("<decision>", stderr)
+        self.assertIn('id="jc5v"', stderr)
+
+    def test_a_node_with_no_id_is_still_named_by_its_path(self):
+        code, stderr = run_shim(fixture("missing-id.xml"))
+        self.assertSurface(1, code, stderr, next_action=["canvas.rng"])
+        self.assertIn("at /canvas[1]", stderr)
+
+    def test_a_file_that_is_not_well_formed_says_where_and_what_to_do(self):
+        code, stderr = run_shim(fixture("malformed.xml"))
+        self.assertSurface(
+            1, code, stderr, about=["malformed.xml"],
+            next_action=["bin/canvas-validate"],
+        )
+        self.assertIn("not well-formed", stderr)
+
+    def test_several_invalid_files_are_one_refusal_naming_all_of_them(self):
+        code, stderr = run_shim(
+            fixture("unknown-node.xml"), fixture("malformed.xml")
+        )
+        self.assertSurface(
+            1, code, stderr,
+            about=["unknown-node.xml", "malformed.xml"],
+        )
+
+    def test_no_arguments_names_the_argument_and_how_to_give_it(self):
+        code, stderr = run_shim()
+        self.assertSurface(
+            2, code, stderr, about=["argument FILE"],
+            next_action=["bin/canvas-validate"],
+        )
+        # The usage line it always printed is still there.
+        self.assertIn("usage: canvas-validate", stderr)
+
+    def test_a_missing_file_names_the_path_and_how_to_find_a_canvas(self):
+        code, stderr = run_shim(fixture("no-such-file.xml"))
+        self.assertSurface(
+            2, code, stderr, about=["no-such-file.xml"],
+            next_action=["OPENCLAW_WORKSPACE"],
+        )
+
+    def test_a_missing_xmllint_names_it_and_says_how_to_get_it(self):
+        empty = tempfile.mkdtemp(prefix="canvas-validate-test-no-xmllint-")
+        self.addCleanup(shutil.rmtree, empty, True)
+        result = subprocess.run(
+            [sys.executable, SHIM, fixture("valid.xml")],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dict(os.environ, PATH=empty),
+        )
+        stderr = result.stderr.decode("utf-8", "replace")
+        self.assertNotIn("Traceback", stderr)
+        self.assertSurface(
+            2, result.returncode, stderr, about=["command xmllint"],
+            next_action=["xmllint"],
+        )
+
+    def test_a_schema_that_will_not_compile_names_it_and_the_file(self):
+        # The one refusal that already printed an exit code — xmllint's, not
+        # its own. Now it prints both.
+        broken = os.path.join(
+            tempfile.mkdtemp(prefix="canvas-validate-test-schema-"), "canvas.rng"
+        )
+        self.addCleanup(shutil.rmtree, os.path.dirname(broken), True)
+        with open(broken, "w", encoding="utf-8") as handle:
+            handle.write("<grammar><nonsense/></grammar>\n")
+        with mock_schema(broken):
+            with self.assertRaises(EnvironmentProblem) as caught:
+                validate_file(fixture("valid.xml"))
+        self.assertTrue(caught.exception.next_action.strip())
+        self.assertTrue(caught.exception.about)
+        self.assertIn("xmllint exit", "\n".join(caught.exception.about))
+
+    def test_a_refusal_here_cannot_be_built_without_naming_something(self):
+        with self.assertRaises(TypeError):
+            EnvironmentProblem("something is wrong")
+        with self.assertRaises(ValueError):
+            EnvironmentProblem("something is wrong", "do this instead")
+        with self.assertRaises(ValueError):
+            EnvironmentProblem("something is wrong", "", about=["file x"])
 
 
 if __name__ == "__main__":

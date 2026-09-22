@@ -12,9 +12,12 @@ addressed. The verdict is always xmllint's, never this module's.
 
 import os
 import re
+import stat
 import subprocess
 import sys
 from xml.parsers import expat
+
+from canvas import refusal
 
 SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -33,8 +36,66 @@ _DIAGNOSTIC = re.compile(
 )
 
 
-class EnvironmentProblem(Exception):
-    """The tool or its invocation is wrong, as opposed to the document."""
+class EnvironmentProblem(refusal.Refused):
+    """The tool or its invocation is wrong, as opposed to the document.
+
+    A `refusal.Refused`, so it carries the thing it is about and the next
+    action like every other refusal in the tool. None of these has a node to
+    name — a validator that cannot run never read a document — so each names
+    what it does have instead: the file, the schema, the binary.
+    """
+
+
+#: What this command's exit codes mean, as `README.md` section *Validating a
+#: file by hand* states them and as `bin/canvas-validate` restates them. Printed
+#: on the refusal itself, because a caller reading stderr cannot see a table in
+#: a Markdown file.
+EXIT_MEANING = {
+    1: (
+        "the document is wrong, not the validator; repair the node each "
+        "diagnostic names"
+    ),
+    2: (
+        "the tool or its invocation is wrong; the document was not examined, "
+        "so do not touch the canvas"
+    ),
+}
+
+
+def _unreadable(path, error):
+    """The one refusal for a canvas file the validator asked for and did not get.
+
+    `os.path.isfile` answers True for a file whose mode is `000`, so the "no
+    such file" guard above passes and the `open` below is where an ordinary
+    permission problem actually lands. It is the validator's environment that
+    is wrong and not the document — nothing was ever parsed, so there is no
+    node to name and no verdict to report — which is the `2` `README.md`
+    section *Validating a file by hand* and `validate_file`'s own docstring
+    both already promise for a file that is "missing or unreadable". `ENOENT`
+    reaching here — the file removed between the check and the open — is that
+    same `2`, because here the caller supplied the path and a file that is not
+    there means the invocation named one that is not; it is `bin/canvas` that
+    derives the path from a ledger id and therefore maps `ENOENT` to `1`.
+
+    The repair is chosen by errno rather than written beside it. `chmod u+r`
+    stood here for every `OSError`, and it is the repair for `EACCES` and not
+    for `ENOENT`, `ELOOP` or an errno nobody has met — a next action that
+    provably does not succeed is the defect this surface exists to close. What
+    the refusal claims is only what is true however the open failed: the file
+    was never examined.
+    """
+    return EnvironmentProblem(
+        "cannot read %s: %s" % (path, refusal.os_condition(error)),
+        refusal.os_next_action(
+            error,
+            aftermath=(
+                "the file was never examined, so nothing is known about "
+                "whether it is a valid canvas"
+            ),
+        ),
+        about=["file %s" % path]
+        + refusal.os_about(error, unless=["file %s" % path]),
+    )
 
 
 def _scan(path):
@@ -70,6 +131,8 @@ def _scan(path):
             parser.ParseFile(handle)
     except expat.ExpatError:
         pass
+    except OSError as error:
+        raise _unreadable(path, error)
     return lines
 
 
@@ -96,7 +159,13 @@ def _describe(tag, attrs, where):
 
 
 def _wellformedness_problem(path):
-    """Return a diagnostic if the file is not well-formed XML, else None."""
+    """Return a diagnostic if the file is not well-formed XML, else None.
+
+    Raises EnvironmentProblem when the file is there and cannot be read. That
+    is not a document that is not well-formed — nothing was read, so nothing is
+    known about its shape — and reporting it as one would tell a caller to
+    repair a file that may be perfectly valid.
+    """
     parser = expat.ParserCreate()
     try:
         with open(path, "rb") as handle:
@@ -107,6 +176,8 @@ def _wellformedness_problem(path):
             error.lineno,
             expat.ErrorString(error.code),
         )
+    except OSError as error:
+        raise _unreadable(path, error)
     return None
 
 
@@ -124,9 +195,62 @@ def validate_file(path):
     canvas".
     """
     if not os.path.isfile(path):
-        raise EnvironmentProblem("no such file: %s" % path)
+        # `os.path.isfile` answers False for a file that is not there, for one
+        # in a directory this process may not look in, and for a directory or
+        # a symlink loop at that path — and only the first of those is "name a
+        # file that is there". So the question goes to the filesystem instead
+        # of being inferred from a second `os.path` call: `os.stat` answers
+        # with the thing itself or with an errno, and `ENOENT` is the only
+        # errno that means absent.
+        #
+        # This used to test `os.path.dirname(path)` — one level, guarded by
+        # `os.path.isdir(directory)`, which is itself False when a directory
+        # further up is untraversable, so the guard never fired and the tool
+        # reported "no such file" about a file it had no way to know anything
+        # about. A test at a fixed depth can always be defeated by one more
+        # directory.
+        try:
+            found = os.stat(path)
+        except FileNotFoundError:
+            raise EnvironmentProblem(
+                "no such file: %s" % path,
+                "name a file that is there and re-run `bin/canvas-validate "
+                "<file>`; a canvas the store holds is at "
+                "$OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml",
+                about=["file %s" % path],
+            )
+        except OSError as error:
+            raise EnvironmentProblem(
+                "cannot tell whether %s is there: looking at it was refused: "
+                "%s" % (path, refusal.os_condition(error)),
+                refusal.os_next_action(
+                    error,
+                    aftermath=(
+                        "nothing was examined, and whether %s is there at all "
+                        "is still unknown" % path
+                    ),
+                ),
+                about=["file %s" % path]
+                + refusal.os_about(error, unless=["file %s" % path]),
+            )
+        raise EnvironmentProblem(
+            "not a file: %s is %s"
+            % (path, "a directory" if stat.S_ISDIR(found.st_mode)
+               else "there and is not a regular file"),
+            "name a regular file and re-run `bin/canvas-validate <file>`; "
+            "`ls -ld %s` shows what is there now, and a canvas the store holds "
+            "is a file at $OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml"
+            % path,
+            about=["file %s" % path],
+        )
     if not os.path.isfile(SCHEMA_PATH):
-        raise EnvironmentProblem("schema not found: %s" % SCHEMA_PATH)
+        raise EnvironmentProblem(
+            "schema not found: %s" % SCHEMA_PATH,
+            "restore schema/canvas.rng in this checkout; what a canvas node "
+            "may be is written there and nowhere else, so there is nothing to "
+            "validate against until it is back",
+            about=["schema %s" % SCHEMA_PATH],
+        )
 
     not_well_formed = _wellformedness_problem(path)
     if not_well_formed is not None:
@@ -139,14 +263,28 @@ def validate_file(path):
             stderr=subprocess.PIPE,
         )
     except OSError as error:
-        raise EnvironmentProblem("cannot run xmllint: %s" % error)
+        raise EnvironmentProblem(
+            "cannot run xmllint: %s" % error,
+            "put xmllint on PATH — it ships with libxml2, as `brew install "
+            "libxml2` or `apt install libxml2-utils` — and re-run; until it is "
+            "there no canvas can be validated, read or written",
+            about=["command xmllint"],
+        )
 
     if result.returncode == 0:
         return []
     if result.returncode not in _XMLLINT_DOCUMENT_PROBLEM:
         raise EnvironmentProblem(
             "xmllint exited %d validating %s against %s:\n%s"
-            % (result.returncode, path, SCHEMA_PATH, result.stderr.decode("utf-8", "replace").strip())
+            % (result.returncode, path, SCHEMA_PATH, result.stderr.decode("utf-8", "replace").strip()),
+            "repair %s until xmllint can compile it — the lines above are "
+            "xmllint's own report of why it cannot — and re-run; %s was never "
+            "examined" % (SCHEMA_PATH, path),
+            about=[
+                "file %s" % path,
+                "schema %s" % SCHEMA_PATH,
+                "xmllint exit %d" % result.returncode,
+            ],
         )
 
     lines = _scan(path)
@@ -174,21 +312,104 @@ def validate_file(path):
     return problems
 
 
+def _refuse(refused, code):
+    """Print one refusal in the shape every refusal in the tool prints."""
+    for line in refusal.lines("canvas-validate", refused, code, EXIT_MEANING[code]):
+        sys.stderr.write("%s\n" % line)
+
+
 def main(argv):
     """Exit 0 if every file given is a valid canvas, 1 if one is not, 2 if the
-    validator itself cannot run."""
+    validator itself cannot run.
+
+    Both non-zero exits print the same shape: the message, the diagnostics, the
+    files the refusal is about, the next action, and the code with what it
+    means. A caller reading stderr cannot see `README.md`'s table, so the
+    meaning of the code travels with the refusal.
+
+    The diagnostics are `validate_file`'s and are printed unchanged. They are
+    already the best node-naming in the tool — element, `id` and `v`, or the
+    element path where there is no `id` — and what they were missing is the
+    line that says what to do about it.
+
+    Under the `EnvironmentProblem`s this module raises deliberately there is
+    one more `except`, for `OSError` itself. That is the structural half: an
+    ordinary filesystem condition nobody anticipated comes out of it as a
+    refusal in this shape at exit 2, rather than as a traceback at Python's
+    exit 1 — which `README.md` gives to "the document is wrong, not the
+    validator", the opposite of what happened.
+    """
     if not argv:
-        sys.stderr.write("usage: canvas-validate FILE [FILE ...]\n")
+        _refuse(
+            refusal.Refused(
+                "no file to validate: this command validates the files it is "
+                "given, and it was given none",
+                "name at least one file: `bin/canvas-validate <file> [<file> "
+                "...]`; a canvas the store holds is at "
+                "$OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml",
+                about=["argument FILE"],
+                details=["usage: canvas-validate FILE [FILE ...]"],
+            ),
+            2,
+        )
         return 2
-    invalid = False
-    for path in argv:
-        try:
+
+    invalid = []
+    diagnostics = []
+    # Named before the loop so the guard below has it even if the very first
+    # file is the one that fails.
+    path = argv[0]
+    try:
+        for path in argv:
             problems = validate_file(path)
-        except EnvironmentProblem as error:
-            sys.stderr.write("canvas-validate: %s\n" % error)
-            return 2
-        for problem in problems:
-            sys.stderr.write("%s\n" % problem)
-        if problems:
-            invalid = True
-    return 1 if invalid else 0
+            diagnostics.extend(problems)
+            if problems:
+                invalid.append(path)
+    except EnvironmentProblem as error:
+        _refuse(error, 2)
+        return 2
+    except OSError as error:
+        # The floor, with the whole of this command's work inside it. Every
+        # guard in `validate_file` asks the filesystem a question and then acts
+        # on the answer, so each of them is true of the conditions somebody
+        # wrote down; `OSError` is the ones nobody did, at whatever depth and
+        # from whatever cause, and catching the base class here is what makes
+        # "no file produces a traceback or an unexplained exit code" a property
+        # of the structure rather than a claim about a list. Exit `2` for all
+        # of them, which is the code `README.md` and `validate_file`'s own
+        # docstring already give to a validator that could not run.
+        # `canvas/refusal.py` picks the next action by errno, because `chmod`
+        # is not the repair for a path that is not a directory.
+        _refuse(
+            refusal.from_os_error(
+                EnvironmentProblem,
+                error,
+                about=["file %s" % path],
+                # True here without a qualification the guard cannot make
+                # good on: this command reads, and nothing it calls writes a
+                # byte on any path.
+                aftermath=(
+                    "nothing was written, and %s was not examined, so nothing "
+                    "is known about whether it is a valid canvas" % path
+                ),
+            ),
+            2,
+        )
+        return 2
+
+    if not invalid:
+        return 0
+    _refuse(
+        refusal.Refused(
+            "not a valid canvas: %s" % ", ".join(invalid),
+            "repair the file at the line each diagnostic above names, then "
+            "re-run `bin/canvas-validate %s`; what a canvas node may be is "
+            "written in %s and nowhere else, and `xmllint --noout --relaxng "
+            "<that schema> <file>` asks it directly"
+            % (" ".join(invalid), SCHEMA_PATH),
+            about=["file %s" % path for path in invalid],
+            details=diagnostics,
+        ),
+        1,
+    )
+    return 1

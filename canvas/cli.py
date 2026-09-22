@@ -36,13 +36,50 @@ same reason `--why` does: it is a property of the write path. What is here is
 the flag, and the soft branch's news printed after the two lines that report
 success, because the todo asks for it in the same output.
 
-This is the only module that decides an exit code.
+This is the only module that decides an exit code, and as of the refusal
+surface that is true without a footnote. `argparse` used to decide `2` itself
+from inside `parse_args`, printing a sentence that named neither a node nor a
+next action and never reaching any of the code below. `_Parser.error` now
+raises a `store.ToolProblem` instead, so an invocation refused by the argument
+parser comes out of the same `except` as every other refusal, in the same
+shape, still exiting `2`.
+
+Every refusal this module prints has the same shape, and `canvas/refusal.py`
+states it: the message, whatever details came with it, then `Canvas-Node:` for
+every node involved, `Canvas-About:` for what it names where it has no node,
+`Canvas-Next:` for the one thing to do that would succeed, and `Canvas-Exit:`
+for the code and what the code means. The message says what is wrong; the next
+action says what to do, and it is stated once, there.
 """
 
 import argparse
+import os
 import sys
 
+from canvas import refusal
 from canvas import store
+
+
+#: What this command's exit codes mean, in `README.md` section *Exit codes*'s
+#: own words. Printed on every refusal, because a caller reading stderr cannot
+#: see a table in a Markdown file — and "no refusal exits with an unexplained
+#: non-zero code" is exactly the claim that a caller can tell which kind it hit
+#: without one.
+#:
+#: What a refusal did or did not write belongs to the refusal and not to the
+#: code: every refusal here writes nothing and most of them say so, but
+#: `_write_and_commit`'s last check fires after the commit was made, and a line
+#: printed under every exit 2 cannot claim otherwise on its behalf.
+EXIT_MEANING = {
+    1: "the request is wrong against the store as it stands; re-read and re-decide",
+    2: "the tool or its environment is wrong; do not touch the canvas",
+}
+
+
+def _refuse(refused, code):
+    """Print one refusal in the shape every refusal in the tool prints."""
+    for line in refusal.lines("canvas", refused, code, EXIT_MEANING[code]):
+        sys.stderr.write("%s\n" % line)
 
 
 def _create(args):
@@ -68,9 +105,32 @@ def _read(args):
     out.write(("Canvas-Base: %s\n" % sha).encode("utf-8"))
     out.write(body)
     out.flush()
-    for problem in problems:
-        sys.stderr.write("%s\n" % problem)
-    return 1 if problems else 0
+    if not problems:
+        return 0
+    # The one non-zero exit in this module that is not an exception: the
+    # document is still printed, because a caller cannot repair what it cannot
+    # see. It is a refusal all the same — the read did not give a usable answer
+    # — so it prints the same shape as every other one, diagnostics included.
+    # The path is re-derived rather than returned, because both calls have
+    # already succeeded by the time there is anything to say: the read found
+    # the file there.
+    path = store.canvas_path(store.canvas_directory(), args.ledger_id)
+    _refuse(
+        refusal.Refused(
+            "the canvas for %s is invalid: it is printed above, and the "
+            "diagnostics below say where" % args.ledger_id,
+            "repair %s: each diagnostic above names the line, and the node "
+            "where the document parses at all. A node the schema refuses is "
+            "corrected with `bin/canvas replace %s <node-id> --why \"<why>\"`, "
+            "one node at a time; XML that will not parse has to be repaired in "
+            "the file itself. What a canvas node may be is written in "
+            "schema/canvas.rng and nowhere else" % (path, args.ledger_id),
+            about=["ledger id %s" % args.ledger_id, "canvas %s" % path],
+            details=problems,
+        ),
+        1,
+    )
+    return 1
 
 
 def _history(args):
@@ -273,8 +333,205 @@ def _add_payload(parser, default_type):
     parser.add_argument("--href", help="the href attribute a <link> requires")
 
 
+#: The verbs, as the subparsers know them. Filled in by `build_parser` so that
+#: nothing here carries a second copy of the list.
+def _verb_names(parser):
+    return ", ".join(parser.verbs)
+
+
+def _supplied(top, argv):
+    """Take the command line apart far enough to name what it was about.
+
+    argparse composes its refusals inside `parse_args` and hands `error()` a
+    sentence and nothing else — not the node id that was on the command line,
+    not even the ledger id. This walks the argv `main` was handed, using the
+    options the parsers themselves declare, so that a refusal from the argument
+    parser can name the nodes involved like every other refusal does.
+
+    Returns `(verb, positionals by dest, options by option string)`. It is not a
+    second parser and does not decide anything: a token it reads wrongly makes a
+    refusal name one thing too many, never one too few, and never changes what
+    argparse already refused.
+    """
+    rest = list(argv)
+    verb = rest[0] if rest and rest[0] in top.verbs else None
+    if verb is not None:
+        rest = rest[1:]
+    options = {}
+    positional = []
+    while rest:
+        token = rest.pop(0)
+        if token.startswith("-") and token != "-":
+            name, separator, value = token.partition("=")
+            if separator:
+                options[name] = value
+            elif name in top.value_options and rest:
+                options[name] = rest.pop(0)
+            else:
+                options[name] = None
+            continue
+        positional.append(token)
+    return verb, dict(zip(top.positionals.get(verb, ()), positional)), options
+
+
+def _what_to_supply(parser, name):
+    """How to name one missing argument, in the parser's own words.
+
+    The shape and the help text are read off the action rather than written
+    again here, so the sentence a refusal prints and the sentence `--help`
+    prints cannot drift apart.
+    """
+    for action in parser._actions:
+        if name in action.option_strings:
+            metavar = action.metavar or action.dest.replace("-", "_").upper()
+            return "%s %s (%s)" % (action.option_strings[0], metavar, action.help)
+        if not action.option_strings and (
+            name == action.dest or name == action.metavar
+        ):
+            return "<%s> (%s)" % (action.metavar or action.dest, action.help)
+    return name
+
+
+def _invocation_problem(parser, message):
+    """The refusal argparse would otherwise have printed, with the rest of it.
+
+    The message argparse composed says what was wrong with the invocation and
+    it is kept verbatim — it is accurate, and a caller who has seen it before
+    will recognise it. What is added is everything it never had: the nodes that
+    were on the command line, the ledger id, and one concrete invocation that
+    would succeed.
+    """
+    top = getattr(parser, "top", parser)
+    verb, positionals, options = _supplied(top, getattr(top, "invocation", []))
+    addressed = [
+        value
+        for key, value in list(positionals.items()) + list(options.items())
+        if key in ("node_id", "node-id", "--after", "--into") and value
+    ]
+    # `root` names the canvas element, which carries no id and no v and is not
+    # a node. It is a position, and the store's own refusals say so.
+    nodes = [each for each in addressed if each != "root"]
+    about = ["command %s" % parser.prog]
+    if positionals.get("ledger_id"):
+        about.append("ledger id %s" % positionals["ledger_id"])
+    if "root" in addressed:
+        about.append("position root, the <canvas> element")
+
+    missing = _after(message, "the following arguments are required: ")
+    unrecognised = _after(message, "unrecognized arguments: ")
+    if missing is not None:
+        wanted = [name.strip() for name in missing.split(",")]
+        about.extend(
+            "option %s" % name for name in wanted if name.startswith("-")
+        )
+        supply = [_what_to_supply(parser, name) for name in wanted]
+        action = "re-run the same command with %s%s" % (
+            "all of: " if len(supply) > 1 else "",
+            "; ".join(supply),
+        )
+        if "--why" in wanted:
+            action += (
+                ". There is no default and no fallback: a reason a tool "
+                "invented is a sentence in the history that reads like "
+                "somebody decided something"
+            )
+    elif "not allowed with argument" in message or (
+        message.startswith("one of the arguments") and "is required" in message
+    ):
+        about.extend(["option --after", "option --into"])
+        action = (
+            "re-run naming exactly one position: --after <node-id> puts the "
+            "node immediately after that node, and --into <container-id> puts "
+            "it last among that container's children, where 'root' names the "
+            "canvas itself"
+        )
+    elif "invalid choice" in message:
+        about.append("argument verb")
+        action = (
+            "re-run with one of the verbs this command has: %s. There is no "
+            "other one — the semantics live in --why, not in a verb name"
+            % _verb_names(top)
+        )
+    elif unrecognised is not None:
+        about.extend(
+            "option %s" % token
+            for token in unrecognised.split()
+            if token.startswith("-")
+        )
+        action = (
+            "drop %s and re-run; `bin/canvas %s--help` lists every argument "
+            "this command takes, and there is no other one"
+            % (unrecognised, "%s " % verb if verb else "")
+        )
+    else:
+        action = (
+            "correct the invocation and re-run; `bin/canvas %s--help` lists "
+            "every argument this command takes"
+            % ("%s " % verb if verb else "")
+        )
+    # `canvas replace: ...`, not `canvas: canvas replace: ...` — the renderer
+    # already prefixes the command's name, and the part worth keeping is which
+    # subcommand refused.
+    named = parser.prog[len("canvas "):] if parser.prog.startswith("canvas ") else None
+    return store.ToolProblem(
+        "%s%s" % ("%s: " % named if named else "", message),
+        "%s. Nothing was written" % action.rstrip("."),
+        nodes=nodes,
+        about=about,
+    )
+
+
+def _after(message, prefix):
+    """The tail of `message` after `prefix`, or None. argparse's own wording."""
+    marker = message.find(prefix)
+    return None if marker < 0 else message[marker + len(prefix):].strip()
+
+
+class _Parser(argparse.ArgumentParser):
+    """An `ArgumentParser` whose refusals come out of the same `except` as the
+    store's.
+
+    `error()` raises instead of exiting, so that the eight refusals argparse
+    composes — the absent `--why` among them, which is the one the todo names
+    first — reach `main`'s handler and print the nodes, the next action and the
+    exit code every other refusal prints. The code is unchanged: argparse's
+    `error()` exited `2` and a `ToolProblem` exits `2`.
+
+    `--help` is untouched. It goes through `exit()`, not `error()`, and still
+    prints to stdout and exits `0`.
+    """
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        raise _invocation_problem(self, message)
+
+
+def _learn_the_command_line(parser, verbs):
+    """Teach the top parser what its own command line looks like.
+
+    Which options take a value, and which positionals each verb has, read off
+    the actions rather than listed again — so a flag added to a verb is a flag
+    `_supplied` already knows about.
+    """
+    parser.verbs = verbs.choices
+    parser.value_options = set()
+    parser.positionals = {None: []}
+    for each in [parser] + list(verbs.choices.values()):
+        for action in each._actions:
+            if action.option_strings and action.nargs != 0:
+                parser.value_options.update(action.option_strings)
+    for name, child in verbs.choices.items():
+        child.top = parser
+        parser.positionals[name] = [
+            action.dest
+            for action in child._actions
+            if not action.option_strings
+        ]
+    parser.top = parser
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="canvas",
         description="The canvas store: one XML file per ledger row, git-backed.",
     )
@@ -400,28 +657,113 @@ def build_parser():
     _add_author(move)
     move.set_defaults(handler=_move)
 
+    _learn_the_command_line(parser, verbs)
     return parser
+
+
+def _os_refusal(error, args):
+    """Any OS error at all, as a `ToolProblem` naming what the verb had in hand.
+
+    The last `except` in `main`, and the reason the class is closed rather than
+    enumerated. Every guard above this one asks the filesystem a question —
+    is the canvas there, is its directory readable — and then acts on the
+    answer, which means each of them is true of the paths somebody thought of.
+    One directory further up, a symlink, a path that changes between the check
+    and the open, and a raw `OSError` comes out of the guard's blind spot as a
+    traceback: Python's exit `1`, which `README.md` gives to "the request is
+    wrong against the store as it stands", and none of the four trailers.
+
+    `args` is what the parser produced, or `None` if it never got that far. The
+    ledger id and the node id are on it where the verb takes them, and they are
+    what makes the refusal name the thing the caller asked about rather than
+    the path alone.
+    """
+    nodes = []
+    about = []
+    for attribute, label in (("ledger_id", "ledger id"), ("base", "option --base")):
+        value = getattr(args, attribute, None)
+        if value:
+            about.append("%s %s" % (label, value))
+    for attribute in ("node_id", "after", "into"):
+        value = getattr(args, attribute, None)
+        # `--into root` names the canvas itself and not a node, and the root is
+        # kept out of `Canvas-Node:` everywhere else in this tool.
+        if value and value != "root":
+            nodes.append(value)
+    verb = getattr(args, "verb", None)
+    if verb:
+        about.append("verb %s" % verb)
+    return refusal.from_os_error(
+        store.ToolProblem,
+        error,
+        nodes=nodes,
+        about=about or ["command canvas"],
+        # This guard is outside every function that knows what it had done, so
+        # it cannot say nothing was written and must not pretend to. What it
+        # can do is name the command that answers the question.
+        aftermath=(
+            "this is the tool's outermost guard, so whether anything was "
+            "written before the error is not something it can see — "
+            "`bin/canvas read <ledger-id>` prints what the canvas holds now, "
+            "and `git -C $OPENCLAW_WORKSPACE/state/canvas log` what was "
+            "committed"
+        ),
+    )
 
 
 def main(argv):
     """Exit 0 if it worked, 1 if the request is wrong against the store as it
-    stands, 2 if the tool or its environment is wrong."""
+    stands, 2 if the tool or its environment is wrong.
+
+    One try block for all three kinds of refusal — the argument parser's, the
+    store's request refusals and the store's tool problems — because they now
+    print the same shape and differ only in the code they exit with.
+
+    And under those three, one more: `OSError`. The three above are refusals
+    this tool decided to make, and each of them is a condition somebody wrote
+    down. `OSError` is every condition nobody did — `PermissionError`,
+    `FileNotFoundError`, `IsADirectoryError`, `NotADirectoryError`,
+    `BrokenPipeError` and whatever the next one turns out to be — and catching
+    the base class here is what makes "no input to this command produces a
+    traceback or an unexplained exit code" a property of the structure instead
+    of a claim about a list. It is the floor and not a replacement: every guard
+    above it says something more specific, and a specific message is worth
+    more than the generic one.
+    """
     parser = build_parser()
-    args = parser.parse_args(argv)
-    if getattr(args, "handler", None) is None:
-        parser.print_usage(sys.stderr)
-        sys.stderr.write(
-            "canvas: a verb is required: create, read, history, replace, "
-            "insert, remove, move\n"
-        )
-        return 2
+    # What `_invocation_problem` reads to name the nodes that were on the
+    # command line. argparse gives `error()` a sentence and nothing else.
+    parser.invocation = list(argv)
+    args = None
     try:
+        args = parser.parse_args(argv)
+        if getattr(args, "handler", None) is None:
+            parser.print_usage(sys.stderr)
+            raise store.ToolProblem(
+                "a verb is required: %s" % _verb_names(parser),
+                "re-run with one of them: `bin/canvas <verb> --help` says what "
+                "each takes, and `bin/canvas read <ledger-id>` is the one that "
+                "changes nothing. Nothing was written",
+                about=["command canvas", "argument verb"],
+            )
         return args.handler(args)
-    except store.Refusal as refusal:
-        sys.stderr.write("canvas: %s\n" % refusal)
-        for detail in refusal.details:
-            sys.stderr.write("%s\n" % detail)
+    except store.Refusal as refused:
+        _refuse(refused, 1)
         return 1
     except store.ToolProblem as problem:
-        sys.stderr.write("canvas: %s\n" % problem)
+        _refuse(problem, 2)
+        return 2
+    except OSError as error:
+        if isinstance(error, BrokenPipeError):
+            # The consumer of stdout is gone. Python would otherwise try to
+            # flush the same dead pipe again while shutting down and print
+            # `Exception ignored in: <_io.BufferedWriter name='<stdout>'>` —
+            # which is a traceback by another name, after the refusal, on the
+            # stream a caller reads the refusal from. Point stdout at
+            # /dev/null so the refusal below is the whole of what is printed.
+            try:
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            except OSError:
+                pass
+        _refuse(_os_refusal(error, args), 2)
         return 2

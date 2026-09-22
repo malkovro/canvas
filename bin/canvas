@@ -18,6 +18,13 @@ nothing here knows anything about any of them.
 
 Exit 0 if it worked, 1 if the request is wrong against the store as it stands,
 2 if the tool or its environment is wrong.
+
+Every refusal prints the same shape on stderr: what is wrong, whatever came
+with it, then `Canvas-Node:` for every node involved, `Canvas-About:` for what
+it names where it has no node, `Canvas-Next:` for the one thing to do that
+would succeed, and `Canvas-Exit:` for the code and what the code means. The
+argument parser's own refusals are in that shape too. See README section
+*What a refusal prints*.
 """
 
 import os
