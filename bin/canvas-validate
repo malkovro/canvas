@@ -1,0 +1,22 @@
+#!/usr/bin/env python3
+"""Validate canvas files from a shell.
+
+A thin shim over canvas.validate.main. The vocabulary lives in
+schema/canvas.rng and the validation path lives in canvas/validate.py; nothing
+here knows anything about either.
+
+    bin/canvas-validate FILE [FILE ...]
+
+Exit 0 if every file is a valid canvas, 1 if one is not (each problem on
+stderr, naming the offending node), 2 if the validator itself cannot run.
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from canvas.validate import main
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="bc-1" schema="1">
+  <section id="a2jk" v="1" title="Level one">
+    <section id="c7vq" v="1" title="Level two">
+      <section id="f5bt" v="1" title="Level three, which nests one level too far">
+        <text id="d3nm" v="1">Unreachable.</text>
+      </section>
+    </section>
+  </section>
+</canvas>

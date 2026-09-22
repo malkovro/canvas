@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="bc-1" schema="1">
+  <text id="K3XQ" v="1">Uppercase.</text>
+  <text id="k3x" v="1">Three characters.</text>
+  <text id="k3xo" v="1">Contains a visually confusable o.</text>
+  <text id="k3x1" v="1">Contains a visually confusable 1.</text>
+</canvas>

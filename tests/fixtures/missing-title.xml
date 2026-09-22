@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="bc-1" schema="1">
+  <section id="a2jk" v="1">
+    <text id="q4rt" v="1">A section whose own content is its title, without one.</text>
+  </section>
+</canvas>

@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Canvas file format, schema version 1.
+
+  This grammar is the definition of the canvas vocabulary. It is normative and
+  it is the only place the vocabulary is written down: the validator in
+  canvas/validate.py knows about `id` and `v` as labels to print in a
+  diagnostic and knows nothing else about what is legal.
+
+  It stands on its own: xmllint validates a file against this grammar with no
+  Python involved at all. README.md gives the exact command.
+
+  The vocabulary is closed. There is no wildcard, no `<anyName/>`, no foreign
+  namespace and no escape hatch, by design: <decision>, <risk> and
+  <acceptance-criterion> are the named tripwire in the engineering spec, and a
+  closed list that can be opened by configuration is not closed.
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <start>
+    <ref name="canvas"/>
+  </start>
+
+  <!-- The root. It is the one node that carries neither `id` nor `v`:
+       node-identity.md §4 puts <canvas> outside the identity rules entirely. -->
+  <define name="canvas">
+    <element name="canvas">
+      <attribute name="ledger">
+        <data type="token">
+          <param name="minLength">1</param>
+        </data>
+      </attribute>
+      <!-- The schema version. Pinned to 1, so a file declaring a future
+           version fails against this schema rather than being read by it. -->
+      <attribute name="schema">
+        <value>1</value>
+      </attribute>
+      <zeroOrMore>
+        <choice>
+          <ref name="section-outer"/>
+          <ref name="leaf"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <!-- `id` and `v`, required on every node except the root.
+
+       id: node-identity.md §1 — four characters, first a lowercase letter, the
+       remaining three from lowercase letters and digits with the visually
+       confusable l, 1, o, 0 and i excluded. The exclusion clause is attached to
+       "remaining three", so the first character is [a-z]; a schema stricter
+       than the minting rule would reject an id `insert` is entitled to produce.
+
+       v: node-identity.md §4 — the number of commits whose `Canvas-Node:`
+       trailer names the node. A node is born at v="1", so v is a positive
+       integer with no leading zeros and v="0" is invalid. -->
+  <define name="node-attributes">
+    <attribute name="id">
+      <data type="token">
+        <param name="pattern">[a-z][a-hj-km-np-z2-9]{3}</param>
+      </data>
+    </attribute>
+    <attribute name="v">
+      <data type="token">
+        <param name="pattern">[1-9][0-9]*</param>
+      </data>
+    </attribute>
+  </define>
+
+  <!-- Section nests one level: two levels of <section> in total, a third is
+       invalid. The depth limit is why there are two patterns for one element
+       name rather than one recursive pattern. -->
+  <define name="section-outer">
+    <element name="section">
+      <ref name="node-attributes"/>
+      <attribute name="title"/>
+      <zeroOrMore>
+        <choice>
+          <ref name="section-inner"/>
+          <ref name="leaf"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="section-inner">
+    <element name="section">
+      <ref name="node-attributes"/>
+      <attribute name="title"/>
+      <zeroOrMore>
+        <ref name="leaf"/>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <!-- Every non-section node. <item>, <row> and <cell> are not here: they
+       exist only inside their own parent and nowhere else. -->
+  <define name="leaf">
+    <choice>
+      <ref name="text"/>
+      <ref name="list"/>
+      <ref name="table"/>
+      <ref name="figure"/>
+      <ref name="link"/>
+      <ref name="question"/>
+    </choice>
+  </define>
+
+  <define name="text">
+    <element name="text">
+      <ref name="node-attributes"/>
+      <text/>
+    </element>
+  </define>
+
+  <!-- Every container is zeroOrMore and never oneOrMore. One edit is one node,
+       and node-identity.md §4 gives the birth of a canvas no exemption from it,
+       so an empty <list>, an empty <table>, an empty <row>, an empty <section>
+       and a childless <canvas/> are all legal intermediate states. -->
+  <define name="list">
+    <element name="list">
+      <ref name="node-attributes"/>
+      <zeroOrMore>
+        <ref name="item"/>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="item">
+    <element name="item">
+      <ref name="node-attributes"/>
+      <text/>
+    </element>
+  </define>
+
+  <define name="table">
+    <element name="table">
+      <ref name="node-attributes"/>
+      <zeroOrMore>
+        <ref name="row"/>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="row">
+    <element name="row">
+      <ref name="node-attributes"/>
+      <zeroOrMore>
+        <ref name="cell"/>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="cell">
+    <element name="cell">
+      <ref name="node-attributes"/>
+      <text/>
+    </element>
+  </define>
+
+  <!-- A diagram. In schema v1 a <figure> holds a textual source only.
+       Admitting inline SVG means admitting a foreign namespace with an open
+       element set, which is the HTML problem the closed vocabulary exists to
+       prevent; the engineering spec leaves the renderer's source open, and
+       settling it the other way is a v2 change with its own reasoning. -->
+  <define name="figure">
+    <element name="figure">
+      <ref name="node-attributes"/>
+      <text/>
+    </element>
+  </define>
+
+  <!-- A pointer out. `href` is the target and the character data is the label;
+       a pointer with no target is not one. -->
+  <define name="link">
+    <element name="link">
+      <ref name="node-attributes"/>
+      <attribute name="href">
+        <data type="token">
+          <param name="minLength">1</param>
+        </data>
+      </attribute>
+      <text/>
+    </element>
+  </define>
+
+  <define name="question">
+    <element name="question">
+      <ref name="node-attributes"/>
+      <text/>
+    </element>
+  </define>
+
+</grammar>
