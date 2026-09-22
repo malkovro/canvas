@@ -361,6 +361,37 @@ def _not_a_repository(canvas_dir, wanted):
     )
 
 
+def _no_repository_at(canvas_dir, wanted):
+    """`_not_a_repository`, for the callers that ask a *whether* question.
+
+    The same fact, the same repair and the same exit `2`; only the sentence
+    differs, because `_not_a_repository`'s callers name what the repository
+    would have had ("sha to write against") and `_cannot_read_repository`'s
+    name what they were trying to find out ("whether there are any commits
+    in"). One helper cannot take both without reading as "it has no whether
+    there are any commits in".
+
+    It exists so that the two routes to one fact cannot drift apart: the check
+    that finds no `.git` and the syscall that meets `ENOENT` one moment later
+    are the same discovery, and a caller should not be able to tell which of
+    them happened from what the tool said.
+    """
+    return ToolProblem(
+        "%s is not a git repository: %s is not there, so there is no answer "
+        "here to %s it"
+        % (canvas_dir, os.path.join(canvas_dir, ".git"), wanted),
+        "make the first canvas with `bin/canvas create <ledger-id> --problem "
+        "\"<the problem>\" --expected-value \"<the expected value>\"`; that is "
+        "the only thing here that initialises the repository, and a read never "
+        "writes one; nothing was read, written or committed",
+        about=[
+            "canvas repository %s" % canvas_dir,
+            "path %s" % os.path.join(canvas_dir, ".git"),
+            "errno %d ENOENT" % errno.ENOENT,
+        ],
+    )
+
+
 def _no_commits(canvas_dir, wanted):
     """The repository is there and empty. Also exit 2, and the same answer."""
     return ToolProblem(
@@ -586,7 +617,36 @@ def _cannot_read_repository(canvas_dir, wanted, error=None, complaint=None):
     something definite about a repository that was successfully looked at.
     This one says only that the look failed, which is the honest answer when it
     did, and its next action repairs the thing that blocked the look.
+
+    **Which refusal that is, is decided by the errno, exactly as `_cannot_read`
+    decides it.** `ENOENT` is not the look failing: it is the look succeeding
+    and answering that there is no repository there. Said as "cannot tell", at
+    an aftermath of "what that repository holds is still unknown", the tool
+    contradicted the `errno 2 ENOENT` on its own `Canvas-About:` line — it can
+    tell, and what the repository holds is nothing, because there is none — and
+    then named `bin/canvas create` as the repair one line above a `Canvas-Exit:`
+    reading "do not touch the canvas".
+
+    So `ENOENT` returns `_not_a_repository`'s claim and `_not_a_repository`'s
+    repair, in `_not_a_repository`'s words. **And at `_not_a_repository`'s exit
+    `2`, which is the one place this helper deliberately differs from
+    `_cannot_read`.** `_cannot_read`'s `ENOENT` is exit `1` because a canvas
+    that is not there is a true statement about a store that is otherwise
+    intact, and the caller acts on it by creating that canvas. A `state/canvas`
+    that is not there is the store itself missing, and this same absence
+    already has an exit code: `is_repository` answers False for it one syscall
+    earlier and `_not_a_repository` refuses at `2`. Sending the racy route to
+    `1` would make the exit code a function of which side of a race the caller
+    landed on — which is the reason `_nothing_at` exists, applied here and
+    reaching the opposite answer, because it is `_not_a_repository` and not
+    `_cannot_read` that this route races against. Exit `1` would also be false
+    advice: it says "re-read and re-decide", and a read never initialises the
+    repository, so re-reading raises this again forever. `README.md` section
+    *Exit codes* states the same thing in prose, as the standing rule and not
+    as a note about this function.
     """
+    if getattr(error, "errno", None) == errno.ENOENT:
+        return _no_repository_at(canvas_dir, wanted)
     if error is not None:
         return ToolProblem(
             "cannot tell %s %s: looking at it was refused: %s"

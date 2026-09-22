@@ -19,6 +19,7 @@ impossible rather than merely unlikely.
 
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -3957,11 +3958,35 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
     #: table a caller reads has no row for it.
     DOCUMENTED_EXITS = (1, 2)
 
-    #: A repair, as a refusal writes one. `chmod` is the only command in the
-    #: surface that a caller runs *to make the refused command work* — `ls` and
-    #: `df` are there to show what state produced it — so it is the one whose
-    #: success is the refusal's own claim rather than a diagnostic.
-    CHMOD = re.compile(r"`chmod (\S+) ([^`]+)`")
+    #: A repair, as a `Canvas-Next:` writes one: a command introduced by the
+    #: word `run`. `README.md` section *What a refusal prints* settles the rule
+    #: this encodes — a next action **may** name a command that exits non-zero,
+    #: because a refusal about a path that is gone has to be able to tell a
+    #: caller to look at it and every way of looking at a path that is gone
+    #: exits non-zero; what it may not do is *claim* one. The claim is the
+    #: repair, the repair is the command the line says to `run`, and that one
+    #: has to exit `0` when run exactly as printed.
+    #:
+    #: The lookbehind is what keeps `re-run` — which ends every template — from
+    #: being read as a repair marker.
+    REPAIR = re.compile(r"(?<![-\w])run `([^`]+)`")
+
+    #: Every command a next action names, marked or not. Used only to check the
+    #: rule in the other direction: see `CHMOD`.
+    COMMAND = re.compile(r"`([^`]+)`")
+
+    #: `chmod` is the one command in the surface that exists only to make the
+    #: refused command work — `ls`, `df` and `ulimit` are there to show what
+    #: state produced it — so a `chmod` that is *not* marked as a repair is the
+    #: rule being escaped rather than an exception to it. This is what stops
+    #: `assertRepairsRun` being satisfied by deleting the word `run`.
+    CHMOD = re.compile(r"`(chmod \S+ [^`]+)`")
+
+    #: A command with a placeholder in it is a *form* — `bin/canvas create
+    #: <ledger-id> …` — and a form is never run as printed by anybody, so it is
+    #: never marked as a repair. Asserted, not assumed: a marked repair that
+    #: carried one would send a caller to run a command line that cannot work.
+    PLACEHOLDER = re.compile(r"<[^`>]+>")
 
     #: Sentences that assert the canvas is still where the tool left it, and
     #: the `Canvas-About:` kinds that name the path they are asserting it of.
@@ -4015,44 +4040,85 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
                 )
 
     def assertRepairsRun(self, trailers, msg):
-        """Every `chmod` the next action names has to exit 0 when run.
+        """Every command the next action says to `run` has to exit 0 when run.
 
-        This is what `chmod u+r <a canvas that was removed>` fails: it exits
-        `1`, so the caller told to run it is told to run something that cannot
-        work, and the re-run it is supposed to enable never happens.
+        The rule `README.md` section *What a refusal prints* settles, enforced
+        here rather than described: a `Canvas-Next:` **may** name a command
+        that exits non-zero, and the word `run` is what marks the one it may
+        not. This used to be a `chmod`-only exemption — the assertion ran the
+        `chmod` a next action named and silently skipped every other command,
+        because `ls -ld <a path that is gone>` exits `1` and there was no way
+        to say that this was fine while `chmod u+r <a canvas that was removed>`
+        exiting `1` was the defect. There is now: the first is a diagnostic and
+        the line does not tell you to run it, the second is a repair and the
+        line does.
 
-        The mode is put back afterwards, so a test that sets one up to be
-        refused is not quietly repaired by the assertion that checks it.
+        Three things are checked, and together they are the rule:
+
+        - **every marked repair runs, whatever the command is.** Not a list of
+          command names this assertion is allowed to execute — the marker is
+          syntactic, so a template that adds a repair nobody here anticipated
+          is covered the moment it is written.
+        - **a marked repair carries no placeholder.** `bin/canvas create
+          <ledger-id> …` is a form, it exits `2` run as printed, and marking it
+          would be the same defect one level along.
+        - **every `chmod` a next action names is marked.** Otherwise the rule
+          is satisfied by deleting the word `run`, and the exemption comes back
+          wearing a justification.
+
+        Modes are put back afterwards, so a test that sets one up to be refused
+        is not quietly repaired by the assertion that checks it.
         """
-        for mode, path in self.CHMOD.findall(trailers["Canvas-Next"][0]):
-            self.assertTrue(
-                os.path.exists(path),
-                "%s: named `chmod %s %s`, and %s is not there"
-                % (msg, mode, path, path),
+        next_action = trailers["Canvas-Next"][0]
+        repairs = self.REPAIR.findall(next_action)
+        for command in repairs:
+            self.assertFalse(
+                self.PLACEHOLDER.search(command),
+                "%s: `%s` is marked as a repair and has a placeholder in it, "
+                "so it cannot be run as printed" % (msg, command),
             )
-            # Safety, asserted rather than assumed: nothing outside a
-            # temporary directory this test made ever has its mode changed.
+            argv = shlex.split(command)
             self.assertTrue(
-                path.startswith(tempfile.gettempdir())
-                or path.startswith(self.workspace),
-                "%s: refusing to chmod %s, which is not under a tempdir"
-                % (msg, path),
+                argv, "%s: `%s` is marked as a repair and is not a command"
+                % (msg, command),
             )
-            original = stat.S_IMODE(os.stat(path).st_mode)
+            paths = [word for word in argv[1:] if word.startswith("/")]
+            for path in paths:
+                self.assertTrue(
+                    os.path.exists(path),
+                    "%s: named `%s` as the repair, and %s is not there"
+                    % (msg, command, path),
+                )
+                # Safety, asserted rather than assumed: nothing outside a
+                # temporary directory this test made is ever touched.
+                self.assertTrue(
+                    path.startswith(tempfile.gettempdir())
+                    or path.startswith(self.workspace),
+                    "%s: refusing to run `%s` against %s, which is not under "
+                    "a tempdir" % (msg, command, path),
+                )
+            modes = [(path, stat.S_IMODE(os.stat(path).st_mode)) for path in paths]
             result = subprocess.run(
-                ["chmod", mode, path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
             try:
                 self.assertEqual(
                     0, result.returncode,
-                    "%s: `chmod %s %s` exited %d: %s"
-                    % (msg, mode, path, result.returncode,
+                    "%s: `%s` is named as the repair and exited %d: %s"
+                    % (msg, command, result.returncode,
                        result.stderr.decode("utf-8", "replace")),
                 )
             finally:
-                os.chmod(path, original)
+                for path, mode in modes:
+                    os.chmod(path, mode)
+        for command in self.CHMOD.findall(next_action):
+            self.assertIn(
+                command, repairs,
+                "%s: named `%s` without telling the caller to run it. A chmod "
+                "is a repair, and a repair is marked `run `%s``, so that the "
+                "caller can tell it from the diagnostics beside it and this "
+                "assertion can run it\n%s" % (msg, command, command, next_action),
+            )
 
     def assertActionable(self, code, stderr, msg, nodes=()):
         """The done condition, for one refusal."""
@@ -4317,6 +4383,137 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         )
         self.assertActionable(code, stderr, "the ENOENT race, canvas-validate")
         self.assertNotIn("the file is there", stderr)
+
+    # ------------------------------------------------------------------
+    # The same race, one level up: the repository removed after the check
+    # ------------------------------------------------------------------
+    #
+    # `is_repository` asks `os.stat(.git)` and `head_sha` runs `rev-parse`
+    # after it, so a `state/canvas/.git` removed in between raises `ENOENT`
+    # where the guard above already decided the repository was there — the
+    # canvas file's race, one level up. `_cannot_read_repository` answered it
+    # with "cannot tell whether there are any commits in <dir>" at an aftermath
+    # of "what that repository holds is still unknown", one line under its own
+    # `Canvas-About: errno 2 ENOENT`. Both sentences are false at that errno:
+    # it can tell, and what the repository holds is nothing, because there is
+    # no repository. The check one syscall earlier says exactly that, in
+    # `_not_a_repository`, and the two have to agree — a caller must not be
+    # able to read which side of a race it landed on out of what the tool said.
+    #
+    # They agree at exit `2`, not at `_cannot_read`'s `1`, and `README.md`
+    # section *Exit codes* carries the reason: a canvas that is gone is one
+    # file missing from an intact store, and a `state/canvas` that is gone is
+    # the store. Exit `1` would also be false advice here, because a read never
+    # initialises the repository, so the re-read it asks for raises this again.
+
+    REPOSITORY_RACE = (
+        "import os, shutil, sys\n"
+        "sys.path.insert(0, %(root)r)\n"
+        "target = os.path.abspath(%(target)r)\n"
+        "seen = [0]\n"
+        "asked = os.stat\n"
+        "def vanishing(path, *a, **k):\n"
+        "    answer = asked(path, *a, **k)\n"
+        "    try:\n"
+        "        same = os.path.abspath(path) == target\n"
+        "    except TypeError:\n"
+        "        same = False\n"
+        "    if same:\n"
+        "        seen[0] += 1\n"
+        "        if seen[0] == 1:\n"
+        "            shutil.rmtree(target)\n"
+        "    return answer\n"
+        "os.stat = vanishing\n"
+        "from canvas.cli import main\n"
+        "sys.exit(main(%(args)r))\n"
+    )
+
+    def raced_repository(self, args):
+        """Run an entry point with `state/canvas/.git` removed after the check.
+
+        `os.stat` rather than `os.path.isdir`, because `is_repository` asks
+        `os.stat` outright — it needs `S_ISDIR` and not a boolean, so that a
+        regular file where `.git` belongs is answered definitely rather than
+        inferred.
+        """
+        environment = dict(os.environ)
+        environment["OPENCLAW_WORKSPACE"] = self.workspace
+        script = self.REPOSITORY_RACE % {
+            "root": ROOT,
+            "target": os.path.join(self.canvas_dir, ".git"),
+            "args": list(args),
+        }
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        return (
+            result.returncode,
+            result.stdout,
+            result.stderr.decode("utf-8", "replace"),
+        )
+
+    def test_a_repository_removed_after_the_check_says_it_is_not_there(self):
+        """The racy answer and the checked answer are the same answer.
+
+        Both routes are run against the same store, in that order — the race
+        is what removes `.git`, and the plain read after it is the check
+        meeting the absence head-on. What each says is then compared, because
+        the claim under test is not "this message is nice" but "these two
+        cannot disagree".
+        """
+        code, _, raced = self.raced_repository(["read", "a-ledger-row"])
+        self.assertFalse(os.path.exists(os.path.join(self.canvas_dir, ".git")))
+        self.assertEqual(2, code, raced)
+        self.assertActionable(code, raced, "the repository ENOENT race")
+
+        # The two false sentences, named. They are what `ENOENT` reached
+        # before, and neither is true of a repository that is not there.
+        self.assertNotIn("cannot tell", raced)
+        self.assertNotIn("what that repository holds is still unknown", raced)
+
+        # What it says instead is what the check says, in the check's words.
+        checked_code, _, checked = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(2, checked_code, checked)
+        self.assertActionable(
+            checked_code, checked, "the repository absent at the check"
+        )
+        claim = "%s is not a git repository" % self.canvas_dir
+        self.assertIn(claim, raced)
+        self.assertIn(claim, checked)
+        self.assertIn("errno 2 ENOENT", raced)
+
+        # And the repair it names is run, as it names it: `create` is the one
+        # thing that initialises the repository, and the read after it works.
+        self.assertIn("bin/canvas create", self.surface(raced)["Canvas-Next"][0])
+        code, _, stderr = self.run_canvas(
+            "create", "rebuilt", "--problem", "P", "--expected-value", "V"
+        )
+        self.assertEqual(0, code, stderr)
+        code, stdout, stderr = self.run_canvas("read", "rebuilt")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"<canvas", stdout)
+
+    def test_a_repository_that_cannot_be_read_still_says_it_cannot_tell(self):
+        """`EACCES` is the look failing, and that sentence is true of it.
+
+        The half of `_cannot_read_repository` the errno rule leaves alone. It
+        is asserted here so that "`ENOENT` says the repository is not there"
+        cannot be satisfied by deleting the honest sentence for every errno.
+        """
+        git_dir = os.path.join(self.canvas_dir, ".git")
+        original = stat.S_IMODE(os.stat(git_dir).st_mode)
+        os.chmod(git_dir, 0o000)
+        try:
+            code, _, stderr = self.run_canvas("read", "a-ledger-row")
+        finally:
+            os.chmod(git_dir, original)
+        self.assertEqual(2, code, stderr)
+        self.assertIn("cannot tell whether there are any commits in", stderr)
+        self.assertIn("errno 13 EACCES", stderr)
+        self.assertNotIn("is not a git repository", stderr)
 
     # ------------------------------------------------------------------
     # The errno nobody anticipated

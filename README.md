@@ -564,6 +564,25 @@ same trailers, the same documented code and a next action naming the path and
 the condition, rather than inheriting the sentence written for the errno
 somebody happened to meet first.
 
+**A canvas file that vanished is `1`; the `state/canvas` repository that
+vanished is `2`, and that is deliberate.** Both are `ENOENT`, both reach the
+tool one syscall after a check that said otherwise, and the errno decides the
+refusal in both — it is only the code the two land on that differs, because the
+two absences are not the same fact. A canvas that is not there is one missing
+file in a store that is otherwise intact, and the caller acts on it by creating
+that canvas: `1`, "re-read and re-decide". A `state/canvas` that is not there is
+the store itself missing, and that absence already has a code — the check one
+syscall earlier answers "not a git repository" and refuses at `2`. Putting the
+later answer at `1` would make the exit code depend on which side of a race the
+caller landed on, which is the thing this section's `ENOENT` rule exists to
+stop; it would just be the repository's race rather than the canvas file's. It
+would also be false advice, because a read never initialises the repository, so
+the re-read `1` asks for raises the same refusal again. What the errno changes
+here is what the tool *says*: `ENOENT` gets the claim and the repair the check
+gives — the repository is not there, make the first canvas with `bin/canvas
+create` — and not "cannot tell whether there are any commits in it", which
+contradicts the `errno 2 ENOENT` on the refusal's own `Canvas-About:` line.
+
 **No failed look is reported as a finding.** That rule holds for the repository
 and the workspace as well as for the canvas file, and each of the three used to
 break it in the same way — a call that can fail for two reasons was read as
@@ -636,6 +655,80 @@ everywhere else in the tool, so a refusal naming one uses the same word.
 - **The argument parser's refusals are in it too.** `canvas/cli.py` subclasses
   `ArgumentParser` so that `error()` raises rather than exiting, which is what
   lets an absent `--why` name the node the edit was for. It still exits `2`.
+- **A `Canvas-Next:` may name a command that exits non-zero, and one word says
+  which.** A command written after the word **`run`** is the *repair*: it is
+  printed ready to run against real paths, running it is what makes the refused
+  command work, and it exits `0`. Everything else a next action names is either
+  a **diagnostic** — `ls -ld`, `ls -l`, `df -h`, `ulimit -n`, and `bin/canvas
+  read <ledger-id>` where a staleness refusal sends you to look at the canvas
+  again — there to show the state that produced the refusal; or a **form** — a
+  command with a `<placeholder>` in it that the caller fills in, such as
+  `bin/canvas create <ledger-id> --problem "<the problem>" --expected-value
+  "<the expected value>"`.
+
+  The rule is not about a command's exit code, it is about what the line
+  *claims*: the line claims the repair, and claims nothing about the rest. A
+  diagnostic's exit status is the answer rather than a failure. It may be `0` —
+  `bin/canvas read` is — and on the conditions these refusals are about it is
+  usually not: `ls -ld` on a path that is genuinely gone exits `1`, and so does
+  every other way of looking at a path that is gone. That is why the rule
+  cannot be "every command a next action names succeeds". That rule would leave
+  a refusal about a missing path unable to tell a caller to look at it, which
+  is the one thing a caller facing `ENOENT` most needs, and it is not even
+  statable: four of the things these templates name are not runnable commands
+  at all — `ulimit -n` is a shell builtin, `| cat | head -1` is a pipe
+  fragment, `chown` is named bare with no operands, and a form exits `2` run
+  verbatim on its own placeholder. The rule is **"every command a next action
+  tells you to *run* succeeds"**.
+
+  So `ls -ld <a canvas that was removed>` exiting `1` is the refusal working,
+  and `chmod u+r <a canvas that was removed>` exiting `1` is the defect this
+  surface exists to close — and a caller tells the two apart from one word,
+  without having to know which commands this tool happens to use. A form is
+  never marked `run`, because it cannot be run as printed.
+
+  `tests/test_store.py` is where this stops being a convention.
+  `assertRepairsRun` runs every command a next action marks `run`, whatever the
+  command is, and requires that it exits `0` and carries no placeholder — and,
+  in the other direction, that every `chmod` a next action names is marked, so
+  that the rule cannot be escaped by dropping the word.
+
+  **Where the word does not mean this yet: four next actions in
+  `canvas/store.py`.** `grep -n 'run \`' canvas/store.py` returns exactly four
+  lines — `:546` in `_git_checked`, `:667` in `_cannot_read_repository`,
+  `:735` in `ensure_repository` and `:885` in `_log` — and every one of them
+  puts the marker in front of a *diagnostic*: “run `git …` yourself to see
+  what it objects to”. That is the opposite of what the word is settled to
+  mean here. All four predate this rule — `git blame` puts them at `f51ec57`
+  and `46f333c`, and they are already there at the revision this branch was cut
+  from — and the rule's scope when it was written was `canvas/refusal.py`'s
+  templates, so they were left standing rather than overlooked.
+
+  **The suite does not catch them, and that is why this branch is green with
+  them in it.** `assertRepairsRun` only sees a next action a test actually
+  reaches, and no test reaches any of these four branches: spliced with a probe
+  that records each one it enters, the whole suite runs 263 tests, passes, and
+  leaves the probe file uncreated. So the rule above is enforced everywhere the
+  tests go and unenforced on exactly these four lines. Two of them are
+  demonstrably wrong as marked — `:546`'s `git rev-parse HEAD` and `:667`'s
+  `git --git-dir=… rev-parse HEAD` exit `128`, not `0`, on the conditions
+  their refusals are about — and `:546`'s command carries no `--git-dir` at
+  all, so it is not even asked about the repository the refusal names.
+
+  **The fix is owned by [todo
+  10330693749](https://app.basecamp.com/3934852/buckets/48039419/todos/10330693749)**,
+  “Make the word `run` mean one thing in `canvas/store.py` too, and cover the
+  four refusals that print it”, and it is deliberately not made here. It is
+  not a rewording: the four have to be decided one at a time — `:735`'s `git
+  init -b main -- %s` is a genuine repair and should keep the marker if it can
+  be made to exit `0`, while the other three are looking rather than repairing
+  — and each decision only sticks once a test reaches the branch that prints
+  it. That todo scopes the string changes together with that coverage, with
+  `assertRepairsRun` extended to check the reverse direction for `git` as it
+  already does for `chmod`. Until it lands, the word means one thing in
+  `canvas/refusal.py` and these four lines in `canvas/store.py` are the
+  documented exception.
+
 - **`canvas/refusal.py` is where the shape lives**, and it is a structure and
   not a convention: the next action is a constructor argument with no default,
   and a refusal that names neither a node nor anything else cannot be built.
