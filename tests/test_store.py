@@ -2016,7 +2016,8 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
         "require_reason", "history_length", "next_version", "default_author",
         "preflight",
         # Imported modules, not API.
-        "collections", "os", "re", "secrets", "stat", "subprocess", "document",
+        "collections", "errno", "os", "re", "secrets", "stat", "subprocess",
+        "document",
         "validate_file",
         "EnvironmentProblem",
         # The shape every refusal takes, and the one place it is rendered.

@@ -59,6 +59,7 @@ the feature.
 """
 
 import collections
+import errno
 import os
 import re
 import secrets
@@ -394,9 +395,89 @@ def _git_checked(canvas_dir, *arguments):
     return result.stdout.decode("utf-8", "replace")
 
 
+def _illegible(canvas_dir):
+    """Why this process cannot read the canvas repository, or None when it can.
+
+    The positive evidence every claim of emptiness below has to produce first.
+    `git` reports "this repository has no commits" and "I could not open this
+    repository" through the same failing exit status, so a caller that reads a
+    non-zero exit as emptiness states something false whenever the second one
+    is what happened — and the repair it then names, `create` the first canvas,
+    fails in turn against a repository that is already there. Asking the
+    filesystem whether `.git` can be read and traversed is what tells the two
+    apart, and it is asked *before* the emptiness is asserted rather than after
+    the assertion has already gone out.
+    """
+    git_dir = os.path.join(canvas_dir, ".git")
+    try:
+        os.stat(git_dir)
+    except OSError as error:
+        return error
+    if not os.access(git_dir, os.R_OK | os.X_OK):
+        # `os.stat` succeeds on a directory whose own mode is 000 — the mode
+        # that refuses it is read on the way *in*, not on the way to it — so
+        # the mode has to be asked about separately.
+        return PermissionError(
+            errno.EACCES, os.strerror(errno.EACCES), git_dir
+        )
+    return None
+
+
+def _cannot_read_repository(canvas_dir, wanted, error=None, complaint=None):
+    """The repository is there and this process cannot read it. Exit 2.
+
+    Distinct from `_not_a_repository` and `_no_commits`, which both say
+    something definite about a repository that was successfully looked at.
+    This one says only that the look failed, which is the honest answer when it
+    did, and its next action repairs the thing that blocked the look.
+    """
+    if error is not None:
+        return ToolProblem(
+            "cannot tell %s %s: looking at it was refused: %s"
+            % (wanted, canvas_dir, refusal.os_condition(error)),
+            refusal.os_next_action(
+                error,
+                aftermath=(
+                    "nothing was read, written or committed, and what that "
+                    "repository holds is still unknown"
+                ),
+            ),
+            about=["canvas repository %s" % canvas_dir]
+            + refusal.os_about(error, unless=["canvas repository %s" % canvas_dir]),
+        )
+    return ToolProblem(
+        "cannot tell %s %s: git refused the question: %s"
+        % (wanted, canvas_dir, complaint or "it gave no reason"),
+        "run `git --git-dir=%s rev-parse HEAD` yourself to see what it objects "
+        "to, and repair the repository; nothing was read, written or "
+        "committed, and what that repository holds is still unknown"
+        % os.path.join(canvas_dir, ".git"),
+        about=["canvas repository %s" % canvas_dir, "command git"],
+    )
+
+
 def is_repository(canvas_dir):
-    """A single local check. No ancestor discovery of any kind."""
-    return os.path.isdir(os.path.join(canvas_dir, ".git"))
+    """Whether `state/canvas` holds a repository. A single local check.
+
+    No ancestor discovery of any kind. Raises rather than answering False when
+    this process cannot see `.git` well enough to tell: `os.path.isdir`
+    answers False both for a repository that is not there and for one under a
+    directory this process may not traverse, and "is not a git repository" is
+    true of only the first.
+    """
+    git_dir = os.path.join(canvas_dir, ".git")
+    try:
+        return stat.S_ISDIR(os.stat(git_dir).st_mode)
+    except FileNotFoundError:
+        return False
+    except NotADirectoryError:
+        # A component of the path is a regular file, so nothing can be under
+        # it. Definite, and the guards above this one say what is there.
+        return False
+    except OSError as error:
+        raise _cannot_read_repository(
+            canvas_dir, "whether there is a git repository at", error
+        )
 
 
 def ensure_repository(canvas_dir):
@@ -443,16 +524,49 @@ def ensure_repository(canvas_dir):
 
 
 def head_sha(canvas_dir):
-    """The repository head, or None when it has no commits yet.
+    """The repository head, or None when it genuinely has no commits yet.
 
     The *repository* head, not the file's last-touching commit. That is what
     `--base` is compared against, and it is what makes the sha a read hands out
     usable as the base of the next write with no second lookup.
+
+    **None means one thing: this process looked, and there is no commit.** It
+    used to mean that or "the look failed", because `git rev-parse HEAD` exits
+    `128` both on an unborn branch and on a `.git` it may not read, and the
+    return code alone does not say which. Every caller then turned that one
+    `None` into a definite claim — `_no_commits` said a repository with three
+    commits in it had none, and `_log` returned no commits at all, so `history`
+    said a node three commits name "was never a node of this canvas". Both
+    statements are false, and both next actions fail when run.
+
+    So the question is asked in the form that distinguishes the two answers,
+    and the answer is then confirmed before it is believed:
+
+    - `rev-parse --verify --quiet HEAD` exits `0` with the sha, or `1` in
+      silence when git resolved the question and the ref is simply not there.
+      A fatal condition — no repository, no permission — is `128` with a
+      reason on stderr, which is a different exit status and not an answer.
+    - Even at `1`, `_illegible` confirms the repository can actually be read
+      before "no commits" is returned. Two independent signals have to agree;
+      where they do not, the tool says it cannot tell rather than picking one.
     """
-    result = _git(canvas_dir, "rev-parse", "HEAD")
-    if result.returncode != 0:
+    result = _git(canvas_dir, "rev-parse", "--verify", "--quiet", "HEAD")
+    complaint = result.stderr.decode("utf-8", "replace").strip()
+    if result.returncode == 0:
+        return result.stdout.decode("utf-8", "replace").strip()
+    if result.returncode == 1 and not complaint:
+        problem = _illegible(canvas_dir)
+        if problem is not None:
+            raise _cannot_read_repository(
+                canvas_dir, "whether there are any commits in", problem
+            )
         return None
-    return result.stdout.decode("utf-8", "replace").strip()
+    raise _cannot_read_repository(
+        canvas_dir,
+        "whether there are any commits in",
+        _illegible(canvas_dir),
+        complaint=complaint,
+    )
 
 
 def _configured(canvas_dir, key, fallback):
@@ -542,6 +656,10 @@ def _log(canvas_dir, arguments, complaint):
         canvas_dir, *(["log", "--reverse", "--format=%s" % _LOG_FORMAT] + arguments)
     )
     if result.returncode != 0:
+        # `head_sha` raises rather than answering None when it cannot tell, so
+        # reaching None here is positive evidence of an empty repository and
+        # not merely a second failure read as one. That is what stops a log
+        # this process was refused from being reported as a node's whole life.
         if head_sha(canvas_dir) is None:
             # No commits at all. git log exits non-zero on an unborn branch
             # rather than printing nothing.
