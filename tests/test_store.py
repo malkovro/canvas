@@ -3327,16 +3327,36 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
     that run after it — or defeat `shutil.rmtree` in the fixture's cleanup.
     """
 
-    #: The canvas file, then every directory above it up to the workspace. The
-    #: order is deepest first, which is the order the three earlier rounds of
-    #: this work discovered them in.
+    #: The canvas file, the repository beside it, then every directory above
+    #: it up to the workspace. The order is deepest first, which is the order
+    #: the four earlier rounds of this work discovered them in. `.git` is on
+    #: the chain because the round before this one walked the directories and
+    #: not the repository, and the store reads both.
     def chain(self):
         return [
             self.canvas_file(),
+            os.path.join(self.canvas_dir, ".git"),
             self.canvas_dir,
             os.path.join(self.workspace, "state"),
             self.workspace,
         ]
+
+    #: Sentences that assert a definite fact about the store: that a node was
+    #: never there, that a repository is empty or absent, that a path is not a
+    #: directory. Each is a statement about something the process *looked at*
+    #: and found. Under a blocked ancestor nothing was looked at, the store is
+    #: whole, and so every one of them is false — which is the defect that
+    #: `assertConforms` cannot see, because a lie in the right shape has a
+    #: `Canvas-Next:`, a `Canvas-Exit:` and no traceback exactly like the
+    #: truth does.
+    DEFINITE_CLAIMS = (
+        "was never a node of this canvas",
+        "has no commits",
+        "is not a git repository",
+        "no canvas for ledger id",
+        "names nothing that exists",
+        "is not a directory",
+    )
 
     def at_mode(self, path, mode):
         """Set a mode for the duration of a `with` block, and put it back."""
@@ -3435,18 +3455,176 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
         """The same chain, readable but not writable."""
         self.walk(0o555)
 
+    def test_no_blocked_ancestor_makes_the_tool_state_a_falsehood(self):
+        """The second tooth: the refusal has to be *true*, not merely shaped.
+
+        `walk` asks whether the output conforms, and a false statement conforms
+        as readily as a true one — which is how three rounds of this passed
+        their own surface tests while the tool told callers that a node three
+        commits name had never existed and that a repository with three commits
+        in it had none. So this asserts on the content: the store here is whole
+        and only a mode changed, therefore no refusal may claim that anything
+        in it is absent, empty or the wrong kind of thing. Every such sentence
+        is a thing the process would have had to look at to know, and it looked
+        at nothing.
+        """
+        for blocked in self.chain():
+            original = self.at_mode(blocked, 0o000)
+            try:
+                for args in self.invocations():
+                    code, _, stderr = self.run_canvas(*args)
+                    if code == 0:
+                        continue
+                    for claim in self.DEFINITE_CLAIMS:
+                        self.assertNotIn(claim, stderr, (blocked, args, claim))
+                code, stderr = self.validate(self.canvas_file())
+                if code != 0:
+                    for claim in self.DEFINITE_CLAIMS:
+                        self.assertNotIn(claim, stderr, (blocked, "validate", claim))
+            finally:
+                os.chmod(blocked, original)
+
+    # -- the repository, which the round before this one did not walk ------
+
+    def test_an_unreadable_repository_is_not_reported_as_having_no_commits(self):
+        # `git rev-parse HEAD` exits 128 on an unborn branch and on a `.git`
+        # it may not read, so `head_sha` used to answer None for both and
+        # `read` announced that a repository with commits in it had none. The
+        # next action it gave — create the first canvas — fails in turn.
+        git_dir = os.path.join(self.canvas_dir, ".git")
+        original = self.at_mode(git_dir, 0o000)
+        try:
+            code, _, stderr = self.verb("read")
+            self.assertConforms(code, stderr, "read with .git unreadable")
+            self.assertEqual(2, code, stderr)
+            self.assertNotIn("has no commits", stderr)
+            self.assertIn("cannot tell", stderr)
+            self.assertIn("errno 13 EACCES", stderr)
+        finally:
+            os.chmod(git_dir, original)
+        # The repair the refusal named, carried out: the same command works.
+        code, stdout, stderr = self.verb("read")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"<canvas", stdout)
+
+    def test_an_unreadable_repository_does_not_deny_a_node_ever_existed(self):
+        # The same None, reached through `_log`'s empty-history branch. An
+        # empty log was read as "no commit names this id", and the id it
+        # denied is one the canvas is made of.
+        git_dir = os.path.join(self.canvas_dir, ".git")
+        original = self.at_mode(git_dir, 0o000)
+        try:
+            code, _, stderr = self.verb("history", self.problem_id)
+            self.assertConforms(code, stderr, "history with .git unreadable")
+            self.assertEqual(2, code, stderr)
+            self.assertNotIn("was never a node of this canvas", stderr)
+            self.assertNotIn("no node with id", stderr)
+            self.assertIn("cannot tell", stderr)
+        finally:
+            os.chmod(git_dir, original)
+        # And the node was there the whole time.
+        code, stdout, stderr = self.verb("history", self.problem_id)
+        self.assertEqual(0, code, stderr)
+        self.assertIn(self.problem_id.encode(), stdout)
+
+    # -- above the workspace, which no chain rooted at it can reach ---------
+
+    def nested_workspace(self):
+        """A workspace some directories down inside its own tempdir.
+
+        The fixture's workspace sits directly in `$TMPDIR`, and a test may not
+        chmod that — so the only way to block something *above* a workspace is
+        to build one with ancestors of its own. Every one of them is restored
+        in the caller's `finally`, and the whole tree is removed by cleanup.
+        """
+        root = tempfile.mkdtemp(prefix="canvas-above-test-")
+        self.addCleanup(shutil.rmtree, root, True)
+        workspace = os.path.join(root, "a", "b", "c", "ws")
+        os.makedirs(workspace)
+        code, _, stderr = self.run_canvas(
+            "create", "a-ledger-row", "--problem", "P",
+            "--expected-value", "V",
+            workspace=workspace,
+        )
+        self.assertEqual(0, code, stderr)
+        return root, workspace
+
+    def test_an_unreadable_ancestor_above_the_workspace_is_not_a_falsehood(self):
+        """`os.path.isdir` said the workspace was not a directory when `ls -ld`
+        showed that it was, because the mode that refused the look was three
+        levels above it. `bin/canvas-validate` got this right and `bin/canvas`
+        did not, so one store had two answers."""
+        root, workspace = self.nested_workspace()
+        for depth in ("a", os.path.join("a", "b"), os.path.join("a", "b", "c")):
+            blocked = os.path.join(root, depth)
+            original = self.at_mode(blocked, 0o000)
+            try:
+                code, _, stderr = self.run_canvas(
+                    "read", "a-ledger-row", workspace=workspace
+                )
+                self.assertConforms(code, stderr, blocked)
+                self.assertEqual(2, code, "%s\n%s" % (blocked, stderr))
+                self.assertNotIn("is not a directory", stderr)
+                self.assertIn("cannot tell", stderr)
+                self.assertIn("errno 13 EACCES", stderr)
+                # The repair names the shallowest blocked directory, not the
+                # workspace, because `chmod` on the workspace cannot be run.
+                next_action = self.surface(stderr)["Canvas-Next"][0]
+                self.assertIn("chmod u+rx %s" % blocked, next_action)
+            finally:
+                os.chmod(blocked, original)
+        # Nothing above it blocked any more: the store was whole all along.
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", workspace=workspace
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"<canvas", stdout)
+
+    def test_every_verb_survives_every_ancestor_above_the_workspace(self):
+        """The whole matrix again, above the workspace this time."""
+        root, workspace = self.nested_workspace()
+        for depth in ("a", os.path.join("a", "b"), os.path.join("a", "b", "c")):
+            blocked = os.path.join(root, depth)
+            original = self.at_mode(blocked, 0o000)
+            try:
+                for args in self.invocations():
+                    code, _, stderr = self.run_canvas(
+                        *args, workspace=workspace
+                    )
+                    self.assertNotIn(
+                        "Traceback (most recent call last)", stderr,
+                        (blocked, args),
+                    )
+                    if code != 0:
+                        self.assertConforms(code, stderr, (blocked, args))
+                        for claim in self.DEFINITE_CLAIMS:
+                            self.assertNotIn(claim, stderr, (blocked, args, claim))
+            finally:
+                os.chmod(blocked, original)
+
     def test_a_read_refuses_at_every_blocked_ancestor(self):
-        """The tooth in `walk`: `read` has to open the canvas, so an
-        unreachable file or an unreachable directory anywhere above it is a
-        refusal — never a success, and never exit 1, which would tell a caller
-        the request was wrong when the store was fine and the process could
-        not see it."""
+        """The tooth in `walk`: `read` has to open the canvas *and* ask the
+        repository for the sha it prints, so an unreachable file, an
+        unreachable `.git` or an unreachable directory anywhere above them is
+        a refusal — never a success, and never exit 1, which would tell a
+        caller the request was wrong when the store was fine and the process
+        could not see it.
+
+        `bin/canvas-validate` is held to the same bar on everything it reads,
+        which is the document and not the repository: it is asked whether one
+        file conforms to the schema, it never opens `.git`, and demanding that
+        it fail over a repository it has no business in would be demanding a
+        bug.
+        """
+        git_dir = os.path.join(self.canvas_dir, ".git")
         for blocked in self.chain():
             original = self.at_mode(blocked, 0o000)
             try:
                 code, _, stderr = self.verb("read")
                 self.assertEqual(2, code, "%s\n%s" % (blocked, stderr))
                 self.assertConforms(code, stderr, blocked)
+                if blocked == git_dir:
+                    continue
                 code, stderr = self.validate(self.canvas_file())
                 self.assertEqual(2, code, "%s\n%s" % (blocked, stderr))
                 self.assertConforms(code, stderr, blocked)
