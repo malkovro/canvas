@@ -24,6 +24,14 @@ repository. Pinning makes that impossible to express.
 Every write is validated through `canvas.validate.validate_file` at a temporary
 path and only then renamed into place, so an invalid canvas is never reachable
 at the canvas's own path, let alone committed.
+
+**No canvas is ever written without a reason.** `write_and_commit` is the only
+function that puts a canvas on its real path, and it takes the reason as an
+argument and calls `require_reason` before it writes a byte. The rule is a
+property of the write path itself, not of the command line above it: a future
+caller that never goes near `canvas/cli.py` cannot write an unexplained edit,
+because there is no function here that will do it. `create`'s three commits
+carry their reasons the same way the four verbs carry `--why`.
 """
 
 import os
@@ -207,19 +215,7 @@ def is_free(canvas_dir, candidate):
     repository, with no path filter, because ids are unique across it and not
     within one file.
     """
-    result = _git(
-        canvas_dir, "log", "--grep=Canvas-Node: %s" % candidate, "--format=%H"
-    )
-    if result.returncode != 0:
-        if head_sha(canvas_dir) is None:
-            # No commits at all, so no id has ever been used. git log exits
-            # non-zero on an unborn branch rather than printing nothing.
-            return True
-        raise ToolProblem(
-            "cannot search the canvas history for %s: %s"
-            % (candidate, result.stderr.decode("utf-8", "replace").strip())
-        )
-    return result.stdout.strip() == b""
+    return history_length(canvas_dir, candidate) == 0
 
 
 def mint(canvas_dir):
@@ -242,6 +238,63 @@ def mint(canvas_dir):
 # --------------------------------------------------------------------------
 # Writing
 # --------------------------------------------------------------------------
+
+
+def require_reason(why):
+    """Return the edit's reason, or refuse. Required, no default, no fallback.
+
+    Absent, empty and whitespace-only are the same answer: no. There is no
+    generated default and nothing to fall back to, because a reason a tool
+    invented is worse than no reason at all — it is a sentence in the history
+    that reads like somebody decided something.
+
+    A missing or empty reason is the *invocation* being wrong rather than the
+    request being wrong against the store, so it is a `ToolProblem`: exit 2,
+    nothing written, the same code `canvas/cli.py` already gives any other
+    malformed argument. Both codes are non-zero; this one is the one that says
+    the command was not well formed, which is what an empty `--why` is.
+    """
+    if why is None or not why.strip():
+        raise ToolProblem(
+            "--why is required and must not be empty: every edit to a canvas "
+            "records the reason it was made, and there is no default"
+        )
+    return why.strip()
+
+
+def history_length(canvas_dir, node_id):
+    """How many commits name this node — which is exactly what `v` counts.
+
+    `node-identity.md` section 4: "`v` equals the number of commits whose
+    `Canvas-Node:` trailer names that node." Taken from the log at write time
+    rather than by adding one to the attribute in the file, so the number in
+    the document cannot drift away from the invariant that defines it. The log
+    is the record; the `v` attribute is a cache of it.
+    """
+    result = _git(
+        canvas_dir, "log", "--grep=Canvas-Node: %s" % node_id, "--format=%H"
+    )
+    if result.returncode != 0:
+        if head_sha(canvas_dir) is None:
+            # No commits at all. git log exits non-zero on an unborn branch
+            # rather than printing nothing.
+            return 0
+        raise ToolProblem(
+            "cannot search the canvas history for %s: %s"
+            % (node_id, result.stderr.decode("utf-8", "replace").strip())
+        )
+    return len(result.stdout.split())
+
+
+def next_version(canvas_dir, node_id):
+    """The `v` the node will carry once this commit has named it.
+
+    One rule covers all three verbs that write a `v`: the commit about to be
+    made is the next one to name the node, so `v` is the count so far plus one.
+    A freshly minted id has a count of zero — that is what `mint` checked — so
+    `insert` gets `document.BIRTH_VERSION` out of the same arithmetic.
+    """
+    return str(history_length(canvas_dir, node_id) + 1)
 
 
 def default_author(canvas_dir):
@@ -301,7 +354,7 @@ def preflight(path, ledger_id, contents):
 
 
 def write_and_commit(
-    canvas_dir, path, root, subject, author, node_id=None, base=None
+    canvas_dir, path, root, verb, subject_name, why, author, node_id=None, base=None
 ):
     """Validate the document, put it at `path`, commit it. Return the new sha.
 
@@ -309,7 +362,22 @@ def write_and_commit(
     validated there. Only a document the validator passed is renamed onto the
     canvas's own path, so an invalid canvas is never reachable as a canvas — the
     rename is the moment it becomes one, and it is atomic.
+
+    **This is where "no write without a reason" is enforced**, and it is here
+    rather than in `canvas/cli.py` on purpose. The todo's done condition is
+    about code paths and not about a command line, so the check belongs to the
+    only function that can put a canvas on its path. `why` is a positional
+    argument with no default, so a caller cannot forget it, and
+    `require_reason` runs before the temporary file is opened, so a refused
+    edit leaves nothing behind — not even a rejected temporary.
+
+    The subject is built here and not handed in, for the same reason: a caller
+    that composed its own subject could compose one with no reason in it. The
+    shape is `<verb> <subject> : <reason>`, which is what `create` already
+    wrote and what `engineering-spec.md` shows for `replace`.
     """
+    why = require_reason(why)
+    subject = "%s %s: %s" % (verb, subject_name, why)
     text = document.serialise(root)
     temporary = "%s.tmp-%d" % (path, os.getpid())
     try:
@@ -362,7 +430,7 @@ def write_and_commit(
 
 
 # --------------------------------------------------------------------------
-# The two operations
+# Creating and reading
 # --------------------------------------------------------------------------
 
 
@@ -417,7 +485,9 @@ def create(ledger_id, problem, expected_value, author=None):
         canvas_dir,
         path,
         root,
-        "create %s: born at open, root only" % ledger_id,
+        "create",
+        ledger_id,
+        "born at open, root only",
         author,
     )
 
@@ -432,7 +502,9 @@ def create(ledger_id, problem, expected_value, author=None):
             canvas_dir,
             path,
             root,
-            "insert %s: %s" % (node_id, reason),
+            "insert",
+            node_id,
+            reason,
             author,
             node_id=node_id,
             base=sha,
@@ -473,3 +545,342 @@ def read(ledger_id):
     with open(path, "rb") as handle:
         body = handle.read()
     return sha, body, _validate(path, path)
+
+
+# --------------------------------------------------------------------------
+# The four verbs
+# --------------------------------------------------------------------------
+#
+# `replace`, `insert`, `remove`, `move`, and no more. There is no `resolve`, no
+# `collapse` and no `supersede`: the semantics live in the reason, where they
+# can be anything, and not in a verb name, where they can only be what somebody
+# thought of in advance.
+#
+# Each of them is exactly one commit, because `write_and_commit` writes and
+# commits in one call and there is no other way to put a canvas on its path.
+# Each names exactly one node in a `Canvas-Node:` trailer, which is what makes
+# `git log --grep='Canvas-Node: b7'` that node's whole life.
+#
+# Each takes a `ledger_id` as well as the node id. `node-identity.md` makes ids
+# unique across the whole repository, so a node id alone does identify a node —
+# but `state/canvas` holds one file per ledger row, `--into root` names a root
+# that every one of those files has, and finding the file by scanning them all
+# would need a match-count guard for the case where two files answer. Naming the
+# canvas is the cheaper half of that trade, and it is what `create` and `read`
+# already do.
+#
+# None of them accepts `--base`. The staleness rule is a separate task; the
+# `Canvas-Base:` trailer written here is the truthful record of the head this
+# edit was applied to, compared against nothing, exactly as `create`'s own
+# insert commits already write it.
+
+
+def _open_canvas(ledger_id):
+    """The canvas an edit is about to change: (dir, path, root, head sha).
+
+    Re-read from disk on every invocation, because the document an edit applies
+    to is the one that is there now and not the one its caller last saw.
+
+    A stored document that is not well-formed is a `Refusal` and not a
+    `ToolProblem`: the store is wrong, the tool is fine, and the answer is to
+    repair the file rather than to stop touching canvases. That is the same
+    call `README.md` already makes for "no canvas for this ledger id".
+    """
+    canvas_dir = canvas_directory()
+    path = canvas_path(canvas_dir, ledger_id)
+
+    if not os.path.isfile(path):
+        raise Refusal(
+            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path)
+        )
+    if not is_repository(canvas_dir):
+        raise ToolProblem(
+            "%s is not a git repository, so it has no sha to write against"
+            % canvas_dir
+        )
+    base = head_sha(canvas_dir)
+    if base is None:
+        raise ToolProblem(
+            "%s has no commits, so it has no sha to write against" % canvas_dir
+        )
+    try:
+        root = document.parse(path)
+    except document.NotWellFormed as error:
+        raise Refusal("%s" % error)
+    return canvas_dir, path, root, base
+
+
+def _addressed(root, node_id, ledger_id):
+    """The node an edit names, or a Refusal that names what was not found.
+
+    Addressing is by explicit node id and nothing else — no selector, no path,
+    no "the first heading". A selector would need a match-count guard beside it
+    the day it arrived, because a selector can match two; an id cannot.
+    """
+    if node_id == document.ROOT:
+        raise Refusal(
+            "the root is not a node: <canvas> carries no id and no v, so it "
+            "cannot be replaced, removed or moved. Edit its children instead"
+        )
+    node = document.find(root, node_id)
+    if node is None:
+        raise Refusal(
+            "no node with id %s in the canvas for %s: nothing was changed"
+            % (node_id, ledger_id)
+        )
+    return node
+
+
+def _one_position(after, into):
+    """A position is named by exactly one of `--after` and `--into`."""
+    if (after is None) == (into is None):
+        raise ToolProblem(
+            "a position is named by exactly one of --after <node-id> or "
+            "--into <container-id>"
+        )
+
+
+def _place(root, node, after, into):
+    """Put the node at the named position, or refuse naming the id that missed."""
+    try:
+        if after is not None:
+            document.place_after(root, after, node)
+        else:
+            document.place_into(root, into, node)
+    except document.PositionProblem as problem:
+        raise Refusal("%s: nothing was changed" % problem)
+
+
+def _child_ids(children):
+    return ", ".join(child.get("id") or "<no id>" for child in children)
+
+
+def insert(
+    ledger_id,
+    why,
+    after=None,
+    into=None,
+    node_type="text",
+    text=None,
+    title=None,
+    href=None,
+    author=None,
+):
+    """Add one node. The only verb that mints an id. Returns (node_id, sha).
+
+    Born at `v="1"`, which is `next_version` of an id no commit has ever named.
+    No other node's `v` changes, because no other node is named by this commit.
+
+    `node_type` defaults to `text` — the node type `create` already makes, and
+    the one a canvas is mostly built from. It is a default for a node type and
+    not for a reason: `--why` has none and never will.
+    """
+    why = require_reason(why)
+    _one_position(after, into)
+    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    if author is None:
+        author = default_author(canvas_dir)
+
+    node_id = mint(canvas_dir)
+    node = document.new_node(
+        node_id,
+        node_type,
+        text=text,
+        attributes={"title": title, "href": href},
+    )
+    _place(root, node, after, into)
+
+    sha = write_and_commit(
+        canvas_dir,
+        path,
+        root,
+        "insert",
+        node_id,
+        why,
+        author,
+        node_id=node_id,
+        base=base,
+    )
+    return node_id, sha
+
+
+def replace(
+    ledger_id,
+    node_id,
+    why,
+    node_type=None,
+    text=None,
+    title=None,
+    href=None,
+    author=None,
+):
+    """Replace one node's content, possibly with a node of a different type.
+
+    **The type change is the point.** An options `<table>` settling into a
+    `<text>` is `replace` on the table node, and it is how a decision gets made
+    in a canvas. The id is unchanged across it — `node-identity.md` section 2:
+    "`replace` never mints and never changes an id" — so the settled decision
+    still reaches every argument that produced it. `node_type` defaults to the
+    type the node already has, so renaming a section or rewriting a paragraph
+    does not have to restate what it already is.
+
+    Two refusals, both of them `node-identity.md` section 5's, which decided
+    them in writing before any verb existed:
+
+    - A type change while the node has children, because the new type has
+      nowhere to put them. Move them out first; they keep their ids throughout,
+      which is the entire benefit.
+    - Character data while the node has children, because a node in this
+      vocabulary never holds both, so the text would be silently dropped.
+
+    The children of a node that keeps its type are carried over untouched: same
+    ids, same `v`, same content, same order. There is no way to supply children
+    in a payload at all, which is what makes "a `replace` payload that rewrites
+    N children" inexpressible rather than merely refused.
+    """
+    why = require_reason(why)
+    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    node = _addressed(root, node_id, ledger_id)
+    children = list(node)
+    becomes = node_type or node.tag
+
+    if children and becomes != node.tag:
+        raise Refusal(
+            "refusing to change <%s> %s into <%s> while it has %d child node(s) "
+            "(%s): a <%s> has nowhere to put them. Move each child out with "
+            "its own --why first, then replace the empty node"
+            % (node.tag, node_id, becomes, len(children), _child_ids(children), becomes)
+        )
+    if children and text is not None:
+        raise Refusal(
+            "refusing to give <%s> %s character data while it has %d child "
+            "node(s) (%s): a node holds children or text, never both, so the "
+            "text would be dropped. Edit the children one at a time"
+            % (node.tag, node_id, len(children), _child_ids(children))
+        )
+
+    if author is None:
+        author = default_author(canvas_dir)
+
+    replacement = document.new_node(
+        node_id,
+        becomes,
+        version=next_version(canvas_dir, node_id),
+        text=text,
+        attributes={"title": title, "href": href},
+    )
+    replacement.extend(children)
+    document.replace_node(root, node_id, replacement)
+
+    return write_and_commit(
+        canvas_dir,
+        path,
+        root,
+        "replace",
+        node_id,
+        why,
+        author,
+        node_id=node_id,
+        base=base,
+    )
+
+
+def remove(ledger_id, node_id, why, author=None):
+    """Take one node out of the document. Its id is retired, never reminted.
+
+    There is no `v` left to bump: the commit that removed it is the last entry
+    in its history, and `is_free` greps that history, so the id can never be
+    handed to a different node later.
+
+    A node with children is refused — `node-identity.md` section 5 for the
+    `<section>` case, and the same argument holds for every container. A
+    cascading delete either names N nodes in one trailer or lets N−1 nodes
+    vanish in a commit no grep on them will ever return, so a reader asking a
+    dead id for its history would be shown a node that, by its own record, is
+    still alive. Empty it first, each removal with its own reason.
+    """
+    why = require_reason(why)
+    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    node = _addressed(root, node_id, ledger_id)
+    children = list(node)
+
+    if children:
+        raise Refusal(
+            "refusing to remove <%s> %s while it has %d child node(s) (%s): "
+            "one edit is one node. Remove each child with its own --why first, "
+            "then remove the empty node"
+            % (node.tag, node_id, len(children), _child_ids(children))
+        )
+
+    if author is None:
+        author = default_author(canvas_dir)
+    document.detach(root, node_id)
+
+    return write_and_commit(
+        canvas_dir,
+        path,
+        root,
+        "remove",
+        node_id,
+        why,
+        author,
+        node_id=node_id,
+        base=base,
+    )
+
+
+def move(ledger_id, node_id, why, after=None, into=None, author=None):
+    """Change one node's position and nothing else.
+
+    `node-identity.md` section 3: the id is unchanged, the content is
+    unchanged, the type is unchanged, and the node's children travel with it
+    untouched. `v` bumps, because the node was the subject of an edit — and
+    neither the old parent's nor the new parent's does, because a commit names
+    the child and a container's `v` counts only the commits that name it.
+
+    Moving a node inside itself is refused. It is the one position that is not
+    a position: the subtree would leave the document altogether and the commit
+    would name one node while N disappeared.
+    """
+    why = require_reason(why)
+    _one_position(after, into)
+    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    node = _addressed(root, node_id, ledger_id)
+
+    target_id = after if after is not None else into
+    target = document.find(root, target_id)
+    if target is None:
+        raise Refusal(
+            "no node with id %s in the canvas for %s: nothing was moved"
+            % (target_id, ledger_id)
+        )
+    if document.contains(node, target):
+        raise Refusal(
+            "refusing to move <%s> %s %s %s: that position is inside the node "
+            "being moved, so the node and its children would leave the document"
+            % (
+                node.tag,
+                node_id,
+                "after" if after is not None else "into",
+                target_id,
+            )
+        )
+
+    if author is None:
+        author = default_author(canvas_dir)
+
+    node.set("v", next_version(canvas_dir, node_id))
+    document.detach(root, node_id)
+    _place(root, node, after, into)
+
+    return write_and_commit(
+        canvas_dir,
+        path,
+        root,
+        "move",
+        node_id,
+        why,
+        author,
+        node_id=node_id,
+        base=base,
+    )

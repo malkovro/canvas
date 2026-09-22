@@ -632,5 +632,654 @@ class LiveWorkspaceIsUntouched(StoreTestCase):
         self.assertIn("OPENCLAW_WORKSPACE", stderr)
 
 
+class VerbTestCase(StoreTestCase):
+    """A canvas with its two first nodes, and the means to look at it after an
+    edit: the tree, the ids in it, and whether anything moved at all."""
+
+    def setUp(self):
+        StoreTestCase.setUp(self)
+        self.create(problem="The problem stated.", value="The value expected.")
+        self.problem_id, self.value_id = self.ids()
+
+    def tree(self, ledger_id="a-ledger-row"):
+        return ElementTree.parse(self.canvas_file(ledger_id)).getroot()
+
+    def ids(self):
+        return [node.get("id") for node in self.tree().iter() if node.get("id")]
+
+    def node(self, node_id):
+        for node in self.tree().iter():
+            if node.get("id") == node_id:
+                return node
+        return None
+
+    def history(self, node_id):
+        """The commits that name the node — what `v` counts."""
+        return self.git(
+            "log", "--grep=Canvas-Node: %s" % node_id, "--format=%H"
+        ).split()
+
+    def state(self):
+        """Everything an edit could have changed, in one comparable value."""
+        with open(self.canvas_file(), "rb") as handle:
+            return (
+                handle.read(),
+                self.git("log", "--format=%H"),
+                self.git("status", "--porcelain"),
+            )
+
+    def verb(self, *args):
+        """Run an editing verb against this canvas. Returns (code, out, err)."""
+        return self.run_canvas(args[0], "a-ledger-row", *args[1:])
+
+    def inserted(self, *args):
+        """Run an insert that is expected to work, and return the minted id."""
+        code, stdout, stderr = self.verb("insert", *args)
+        self.assertEqual(0, code, stderr)
+        return stdout.decode("utf-8").splitlines()[0].split(": ", 1)[1]
+
+
+class TheFourVerbsApplyToARealCanvas(VerbTestCase):
+    """The done condition's first clause: each verb applies to a canvas built
+    by `create`, and what it leaves behind is a valid canvas."""
+
+    def test_insert_adds_a_node_after_the_named_sibling(self):
+        node_id = self.inserted(
+            "--after", self.problem_id, "--text", "A note.", "--why", "the note"
+        )
+        self.assertEqual(
+            [self.problem_id, node_id, self.value_id],
+            [child.get("id") for child in self.tree()],
+        )
+        self.assertEqual("A note.", self.node(node_id).text)
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_insert_into_root_appends_to_the_document(self):
+        node_id = self.inserted("--into", "root", "--text", "Last.", "--why", "the end")
+        self.assertEqual(
+            [self.problem_id, self.value_id, node_id],
+            [child.get("id") for child in self.tree()],
+        )
+
+    def test_insert_into_an_empty_container_names_its_first_position(self):
+        # node-identity.md section 6: the gap --after cannot name.
+        list_id = self.inserted("--into", "root", "--type", "list", "--why", "a list")
+        self.assertEqual([], list(self.node(list_id)))
+        item_id = self.inserted(
+            "--into", list_id, "--type", "item", "--text", "a bullet", "--why", "one"
+        )
+        self.assertEqual([item_id], [child.get("id") for child in self.node(list_id)])
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_insert_can_add_every_node_type_the_vocabulary_has(self):
+        made = {
+            "text": self.inserted("--into", "root", "--type", "text",
+                                  "--text", "prose", "--why", "prose"),
+            "question": self.inserted("--into", "root", "--type", "question",
+                                      "--text", "open?", "--why", "a question"),
+            "figure": self.inserted("--into", "root", "--type", "figure",
+                                    "--text", "a -> b", "--why", "a figure"),
+            "link": self.inserted("--into", "root", "--type", "link",
+                                  "--href", "https://example.invalid/x",
+                                  "--text", "the todo", "--why", "a link"),
+            "list": self.inserted("--into", "root", "--type", "list", "--why", "a list"),
+            "table": self.inserted("--into", "root", "--type", "table", "--why",
+                                   "the options"),
+            "section": self.inserted("--into", "root", "--type", "section",
+                                     "--title", "A heading", "--why", "a section"),
+        }
+        for tag, node_id in made.items():
+            self.assertEqual(tag, self.node(node_id).tag)
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_replace_changes_the_content_and_keeps_the_id(self):
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "The problem, restated.",
+            "--why", "the first statement was too narrow",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("The problem, restated.", self.node(self.problem_id).text)
+        self.assertEqual(
+            [self.problem_id, self.value_id],
+            [child.get("id") for child in self.tree()],
+        )
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_remove_takes_the_node_out_of_the_document(self):
+        code, _, stderr = self.verb("remove", self.problem_id, "--why", "answered")
+        self.assertEqual(0, code, stderr)
+        self.assertEqual([self.value_id], [child.get("id") for child in self.tree()])
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_move_changes_the_position_and_nothing_else(self):
+        before = self.node(self.value_id)
+        code, _, stderr = self.verb(
+            "move", self.value_id, "--after", "root", "--why", "wrong order"
+        )
+        # --after root is the one position the root cannot name.
+        self.assertEqual(1, code, stderr)
+
+        code, _, stderr = self.verb(
+            "move", self.problem_id, "--after", self.value_id,
+            "--why", "the value reads better first",
+        )
+        self.assertEqual(0, code, stderr)
+        after = self.node(self.problem_id)
+        self.assertEqual(
+            [self.value_id, self.problem_id],
+            [child.get("id") for child in self.tree()],
+        )
+        self.assertEqual("text", after.tag)
+        self.assertEqual("The problem stated.", after.text)
+        self.assertEqual(before.text, self.node(self.value_id).text)
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_move_reparents_into_a_section_and_back_out(self):
+        section_id = self.inserted(
+            "--into", "root", "--type", "section", "--title", "A heading",
+            "--why", "somewhere to put it",
+        )
+        code, _, stderr = self.verb(
+            "move", self.problem_id, "--into", section_id, "--why", "it belongs here"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(
+            [self.problem_id], [child.get("id") for child in self.node(section_id)]
+        )
+        code, _, stderr = self.verb(
+            "move", self.problem_id, "--into", "root", "--why", "out again"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual([], list(self.node(section_id)))
+        self.assertEqual(
+            [self.value_id, section_id, self.problem_id],
+            [child.get("id") for child in self.tree()],
+        )
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_every_verb_leaves_nothing_uncommitted_behind(self):
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "one")
+        self.verb("replace", node_id, "--text", "y", "--why", "two")
+        self.verb("move", node_id, "--after", self.problem_id, "--why", "three")
+        self.verb("remove", node_id, "--why", "four")
+        self.assertEqual("", self.git("status", "--porcelain"))
+        leftovers = [
+            name for name in os.listdir(self.canvas_dir)
+            if name != ".git" and not name.endswith(".xml")
+        ]
+        self.assertEqual([], leftovers)
+
+    def test_every_verb_prints_the_node_it_changed_and_the_new_sha(self):
+        for args in (
+            ("insert", "--into", "root", "--text", "x", "--why", "one"),
+            ("replace", self.problem_id, "--text", "y", "--why", "two"),
+            ("move", self.problem_id, "--into", "root", "--why", "three"),
+            ("remove", self.problem_id, "--why", "four"),
+        ):
+            code, stdout, stderr = self.verb(*args)
+            self.assertEqual(0, code, stderr)
+            lines = stdout.decode("utf-8").splitlines()
+            self.assertTrue(lines[0].startswith("Canvas-Node: "), lines)
+            self.assertTrue(NODE_ID.match(lines[0].split(": ", 1)[1]), lines[0])
+            self.assertEqual(
+                "Canvas-Base: %s" % self.git("rev-parse", "HEAD").strip(), lines[1]
+            )
+
+
+class ReplaceCanProduceADifferentNodeType(VerbTestCase):
+    """The spec's worked example, and the most consequential edit the tool
+    supports: an options <table> settling into a <text>, under the same id."""
+
+    def test_a_table_becomes_a_text_and_keeps_its_id(self):
+        table_id = self.inserted(
+            "--into", "root", "--type", "table", "--why", "the options to compare"
+        )
+        self.assertEqual("table", self.node(table_id).tag)
+
+        code, _, stderr = self.verb(
+            "replace", table_id, "--type", "text",
+            "--text", "Chose A.",
+            "--why", "chose A over B: B needs a migration we are not paying for",
+        )
+        self.assertEqual(0, code, stderr)
+
+        settled = self.node(table_id)
+        self.assertEqual("text", settled.tag)
+        self.assertEqual(table_id, settled.get("id"))
+        self.assertEqual("Chose A.", settled.text)
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_the_settled_decision_still_reaches_the_argument_that_produced_it(self):
+        # The whole reason the id survives a type change: one grep, both halves.
+        table_id = self.inserted(
+            "--into", "root", "--type", "table", "--why", "the options to compare"
+        )
+        self.verb(
+            "replace", table_id, "--type", "text", "--text", "Chose A.",
+            "--why", "chose A over B",
+        )
+        subjects = self.git(
+            "log", "--reverse", "--grep=Canvas-Node: %s" % table_id, "--format=%s"
+        ).splitlines()
+        self.assertEqual(
+            ["insert %s: the options to compare" % table_id,
+             "replace %s: chose A over B" % table_id],
+            subjects,
+        )
+
+    def test_a_type_change_with_no_children_is_allowed_for_a_container(self):
+        list_id = self.inserted("--into", "root", "--type", "list", "--why", "a list")
+        code, _, stderr = self.verb(
+            "replace", list_id, "--type", "question", "--text", "Still open?",
+            "--why", "it was a question all along",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("question", self.node(list_id).tag)
+
+    def test_replacing_a_section_renames_it_and_leaves_its_children_alone(self):
+        # node-identity.md section 5: children keep their ids, v, content, order.
+        section_id = self.inserted(
+            "--into", "root", "--type", "section", "--title", "Old heading",
+            "--why", "a section",
+        )
+        first = self.inserted("--into", section_id, "--text", "one", "--why", "a")
+        second = self.inserted("--into", section_id, "--text", "two", "--why", "b")
+
+        code, _, stderr = self.verb(
+            "replace", section_id, "--title", "New heading", "--why", "clearer name"
+        )
+        self.assertEqual(0, code, stderr)
+
+        section = self.node(section_id)
+        self.assertEqual("New heading", section.get("title"))
+        self.assertEqual([first, second], [child.get("id") for child in section])
+        self.assertEqual(["one", "two"], [child.text for child in section])
+        self.assertEqual(["1", "1"], [child.get("v") for child in section])
+
+
+class EveryVerbRequiresAReason(VerbTestCase):
+    """The done condition's second and third clauses: every verb is refused
+    with a non-zero exit when `--why` is absent or empty, and there is no code
+    path that writes to a canvas without one."""
+
+    def edits(self):
+        """One invocation of each verb, minus its --why."""
+        return (
+            ("insert", "--into", "root", "--text", "A node."),
+            ("replace", self.problem_id, "--text", "Restated."),
+            ("remove", self.problem_id),
+            ("move", self.problem_id, "--after", self.value_id),
+        )
+
+    def test_a_missing_why_is_refused_with_a_non_zero_exit(self):
+        for edit in self.edits():
+            before = self.state()
+            code, stdout, stderr = self.verb(*edit)
+            self.assertNotEqual(0, code, edit)
+            self.assertEqual(b"", stdout, edit)
+            self.assertIn("why", stderr, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_an_empty_why_is_refused_with_a_non_zero_exit(self):
+        for edit in self.edits():
+            before = self.state()
+            code, stdout, stderr = self.verb(*(edit + ("--why", "")))
+            self.assertNotEqual(0, code, edit)
+            self.assertEqual(b"", stdout, edit)
+            self.assertIn("--why", stderr, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_a_whitespace_only_why_is_refused_too(self):
+        for reason in (" ", "\t", "\n", "   \t  "):
+            for edit in self.edits():
+                before = self.state()
+                code, _, _ = self.verb(*(edit + ("--why", reason)))
+                self.assertNotEqual(0, code, (edit, reason))
+                self.assertEqual(before, self.state(), (edit, reason))
+
+    def test_a_refused_edit_mints_no_id(self):
+        before = self.git("log", "--format=%H").split()
+        self.verb("insert", "--into", "root", "--text", "x", "--why", "")
+        self.assertEqual(before, self.git("log", "--format=%H").split())
+
+    def test_the_write_path_itself_refuses_a_reasonless_write(self):
+        # The done condition is about code paths, not about the CLI surface: a
+        # caller that never goes near canvas/cli.py must not be able to write
+        # an unexplained edit either. write_and_commit is the only function
+        # that puts a canvas on its real path, and it will not.
+        from canvas import store
+
+        for reason in (None, "", "   ", "\n"):
+            with self.assertRaises(store.ToolProblem):
+                store.require_reason(reason)
+
+        with self.assertRaises(store.ToolProblem):
+            store.write_and_commit(
+                self.canvas_dir,
+                self.canvas_file(),
+                document.new_canvas("a-ledger-row"),
+                "replace",
+                "q4rt",
+                "  ",
+                "a | by-hand",
+            )
+        # And it wrote nothing on the way to refusing.
+        self.assertEqual(
+            ["The problem stated.", "The value expected."],
+            [child.text for child in self.tree()],
+        )
+
+    def test_the_reason_a_verb_was_given_is_the_commit_subject(self):
+        why = "chose A over B: B needs a migration we are not paying for"
+        node_id = self.inserted("--into", "root", "--text", "Chose A.", "--why", why)
+        self.assertEqual("insert %s: %s" % (node_id, why), self.subjects()[-1])
+
+    def test_the_reason_is_recorded_only_in_the_history_never_in_the_xml(self):
+        why = "a reason that must not become an attribute"
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", why)
+        with open(self.canvas_file(), encoding="utf-8") as handle:
+            self.assertNotIn(why, handle.read())
+        self.assertIn(why, self.git("log", "-1", "--format=%s"))
+        self.assertIsNone(self.node(node_id).get("why"))
+
+
+class TheVerbsAddressNodesByIdAndNothingElse(VerbTestCase):
+    """Addressing is by explicit node id. An id that is not in the canvas is a
+    refusal, not a silent no-op."""
+
+    def test_an_absent_node_id_is_refused_by_every_verb(self):
+        for edit in (
+            ("replace", "zzzz", "--text", "x"),
+            ("remove", "zzzz"),
+            ("move", "zzzz", "--after", self.problem_id),
+            ("move", self.problem_id, "--after", "zzzz"),
+            ("move", self.problem_id, "--into", "zzzz"),
+            ("insert", "--after", "zzzz", "--text", "x"),
+            ("insert", "--into", "zzzz", "--text", "x"),
+        ):
+            before = self.state()
+            code, stdout, stderr = self.verb(*(edit + ("--why", "a reason")))
+            self.assertEqual(1, code, edit)
+            self.assertEqual(b"", stdout, edit)
+            self.assertIn("zzzz", stderr, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_the_root_is_not_a_node_any_verb_can_edit(self):
+        for edit in (
+            ("replace", "root", "--text", "x"),
+            ("remove", "root"),
+            ("move", "root", "--after", self.problem_id),
+        ):
+            before = self.state()
+            code, _, stderr = self.verb(*(edit + ("--why", "a reason")))
+            self.assertEqual(1, code, edit)
+            self.assertIn("root", stderr, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_no_verb_offers_a_selector(self):
+        for flag in ("--matching", "--select", "--xpath", "--heading"):
+            code, _, _ = self.verb(
+                "replace", flag, "the caching section", "--why", "x"
+            )
+            self.assertEqual(2, code, flag)
+
+    def test_no_verb_accepts_base(self):
+        # The staleness rule is a separate task. Nothing here compares a
+        # supplied sha against anything, so nothing here accepts one.
+        head = self.git("rev-parse", "HEAD").strip()
+        for edit in (
+            ("replace", self.problem_id, "--text", "x"),
+            ("remove", self.problem_id),
+            ("move", self.problem_id, "--into", "root"),
+            ("insert", "--into", "root", "--text", "x"),
+        ):
+            before = self.state()
+            code, _, _ = self.verb(*(edit + ("--base", head, "--why", "a reason")))
+            self.assertEqual(2, code, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_a_position_needs_exactly_one_of_after_and_into(self):
+        for edit in (
+            ("insert", "--text", "x"),
+            ("insert", "--after", self.problem_id, "--into", "root", "--text", "x"),
+            ("move", self.problem_id),
+            ("move", self.problem_id, "--after", self.problem_id, "--into", "root"),
+        ):
+            code, _, _ = self.verb(*(edit + ("--why", "a reason")))
+            self.assertEqual(2, code, edit)
+
+    def test_an_edit_to_a_ledger_row_with_no_canvas_is_refused(self):
+        code, stdout, stderr = self.run_canvas(
+            "remove", "no-such-row", self.problem_id, "--why", "a reason"
+        )
+        self.assertEqual(1, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn("no-such-row", stderr)
+
+    def test_an_edit_addresses_only_the_canvas_it_was_given(self):
+        # Ids are unique across the repository, and an edit still names the
+        # canvas it applies to, so a node id from another row is not found here.
+        self.create(ledger_id="another-row", problem="Elsewhere.", value="Also.")
+        other = [
+            child.get("id")
+            for child in ElementTree.parse(self.canvas_file("another-row")).getroot()
+        ][0]
+        code, _, stderr = self.verb("remove", other, "--why", "a reason")
+        self.assertEqual(1, code)
+        self.assertIn(other, stderr)
+        self.assertEqual(
+            [other], [child.get("id") for child in
+                      ElementTree.parse(self.canvas_file("another-row")).getroot()][:1]
+        )
+
+
+class IdentityHoldsAcrossTheFourVerbs(VerbTestCase):
+    """node-identity.md sections 1 to 4, checked over a sequence of edits: v is
+    the number of commits naming the node, and nothing else is touched."""
+
+    def test_an_inserted_node_is_born_at_v_one_with_a_minted_id(self):
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "one")
+        self.assertTrue(NODE_ID.match(node_id), node_id)
+        self.assertEqual("1", self.node(node_id).get("v"))
+        self.assertNotIn(node_id, (self.problem_id, self.value_id))
+
+    def test_replace_and_move_bump_v_and_insert_does_not_touch_anybody_elses(self):
+        self.verb("replace", self.problem_id, "--text", "Restated.", "--why", "one")
+        self.assertEqual("2", self.node(self.problem_id).get("v"))
+        self.verb("move", self.problem_id, "--into", "root", "--why", "two")
+        self.assertEqual("3", self.node(self.problem_id).get("v"))
+        self.assertEqual("1", self.node(self.value_id).get("v"))
+
+    def test_v_always_equals_the_number_of_commits_naming_the_node(self):
+        section_id = self.inserted(
+            "--into", "root", "--type", "section", "--title", "A heading",
+            "--why", "a section",
+        )
+        leaf = self.inserted("--into", section_id, "--text", "one", "--why", "a leaf")
+        self.verb("replace", leaf, "--text", "two", "--why", "reworded")
+        self.verb("move", leaf, "--into", "root", "--why", "it did not belong")
+        self.verb("replace", section_id, "--title", "Renamed", "--why", "clearer")
+
+        for node in self.tree().iter():
+            if node.get("id") is None:
+                continue
+            self.assertEqual(
+                str(len(self.history(node.get("id")))),
+                node.get("v"),
+                node.get("id"),
+            )
+        # And specifically: the container's v counted its own commits only, not
+        # the commits that named its children.
+        self.assertEqual("2", self.node(section_id).get("v"))
+        # Inserted, replaced, moved: three commits name it, so v is three.
+        self.assertEqual("3", self.node(leaf).get("v"))
+
+    def test_a_removed_id_is_retired_and_never_reminted(self):
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "one")
+        self.verb("remove", node_id, "--why", "it was wrong")
+        self.assertIsNone(self.node(node_id))
+        # Its history is still there, ending with the commit that removed it,
+        # which is what makes `is_free` say no for ever.
+        self.assertEqual(2, len(self.history(node_id)))
+        self.assertEqual(
+            "remove %s: it was wrong" % node_id,
+            self.git("log", "-1", "--grep=Canvas-Node: %s" % node_id, "--format=%s"
+                     ).strip(),
+        )
+        from canvas import store
+        self.assertFalse(store.is_free(self.canvas_dir, node_id))
+
+    def test_every_edit_is_exactly_one_commit_naming_exactly_one_node(self):
+        before = len(self.subjects())
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "one")
+        self.verb("replace", node_id, "--text", "y", "--why", "two")
+        self.verb("move", node_id, "--after", self.problem_id, "--why", "three")
+        self.verb("remove", node_id, "--why", "four")
+        self.assertEqual(before + 4, len(self.subjects()))
+        for body in self.bodies()[before:]:
+            self.assertEqual(1, body.count("Canvas-Node:"), body)
+            self.assertIn("Canvas-Author:", body)
+            self.assertIn("Canvas-Base:", body)
+
+    def test_an_edit_bases_on_the_head_it_was_applied_to(self):
+        head = self.git("rev-parse", "HEAD").strip()
+        self.inserted("--into", "root", "--text", "x", "--why", "one")
+        self.assertIn("Canvas-Base: %s" % head, self.bodies()[-1])
+
+    def test_an_explicit_author_is_used_verbatim_by_every_verb(self):
+        author = "leo | step:implement | run:ship-the-flag-3"
+        node_id = self.inserted(
+            "--into", "root", "--text", "x", "--why", "one", "--author", author
+        )
+        for args in (
+            ("replace", node_id, "--text", "y", "--why", "two"),
+            ("move", node_id, "--after", self.problem_id, "--why", "three"),
+            ("remove", node_id, "--why", "four"),
+        ):
+            code, _, stderr = self.verb(*(args + ("--author", author)))
+            self.assertEqual(0, code, stderr)
+        for body in self.bodies()[3:]:
+            self.assertIn("Canvas-Author: %s" % author, body)
+
+
+class OneEditIsStillOneNode(VerbTestCase):
+    """node-identity.md section 5 decided these two refusals in writing before
+    any verb existed. A verb that shipped without them could delete N nodes in
+    one commit from the day it landed."""
+
+    def section_with_children(self):
+        section_id = self.inserted(
+            "--into", "root", "--type", "section", "--title", "A heading",
+            "--why", "a section",
+        )
+        first = self.inserted("--into", section_id, "--text", "one", "--why", "a")
+        second = self.inserted("--into", section_id, "--text", "two", "--why", "b")
+        return section_id, first, second
+
+    def test_removing_a_node_that_still_has_children_is_refused(self):
+        section_id, first, second = self.section_with_children()
+        before = self.state()
+        code, stdout, stderr = self.verb("remove", section_id, "--why", "tidying up")
+        self.assertEqual(1, code)
+        self.assertEqual(b"", stdout)
+        # The refusal names the section and every child it would have taken.
+        for named in (section_id, first, second):
+            self.assertIn(named, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_emptying_a_container_leaves_it_written_as_an_empty_one(self):
+        # A container's character data in this vocabulary is serialise's own
+        # indentation, so removing its last child must not promote that
+        # whitespace to content: <table id v/>, not <table id v>\n  </table>.
+        table_id = self.inserted(
+            "--into", "root", "--type", "table", "--why", "the options"
+        )
+        row_id = self.inserted(
+            "--into", table_id, "--type", "row", "--why", "the first option"
+        )
+        code, _, stderr = self.verb("remove", row_id, "--why", "no longer a candidate")
+        self.assertEqual(0, code, stderr)
+
+        self.assertEqual([], list(self.node(table_id)))
+        self.assertIsNone(self.node(table_id).text)
+        with open(self.canvas_file(), encoding="utf-8") as handle:
+            self.assertIn('<table id="%s" v="1"/>' % table_id, handle.read())
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_an_emptied_node_can_then_be_removed(self):
+        section_id, first, second = self.section_with_children()
+        for child in (first, second):
+            code, _, stderr = self.verb("remove", child, "--why", "no longer needed")
+            self.assertEqual(0, code, stderr)
+        code, _, stderr = self.verb("remove", section_id, "--why", "empty now")
+        self.assertEqual(0, code, stderr)
+        self.assertIsNone(self.node(section_id))
+
+    def test_changing_the_type_of_a_node_that_has_children_is_refused(self):
+        section_id, first, second = self.section_with_children()
+        before = self.state()
+        code, _, stderr = self.verb(
+            "replace", section_id, "--type", "text", "--text", "flattened",
+            "--why", "it reads better as prose",
+        )
+        self.assertEqual(1, code)
+        for named in (section_id, first, second):
+            self.assertIn(named, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_giving_a_node_with_children_character_data_is_refused(self):
+        # A node holds children or text, never both, so this text would be
+        # silently dropped by the serialiser. Refused instead.
+        section_id, _, _ = self.section_with_children()
+        before = self.state()
+        code, _, stderr = self.verb(
+            "replace", section_id, "--text", "prose", "--why", "a note"
+        )
+        self.assertEqual(1, code)
+        self.assertIn(section_id, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_moving_a_node_inside_itself_is_refused(self):
+        section_id, first, _ = self.section_with_children()
+        for position in (("--into", section_id), ("--after", first)):
+            before = self.state()
+            code, _, stderr = self.verb(
+                *(("move", section_id) + position + ("--why", "a reason"))
+            )
+            self.assertEqual(1, code, position)
+            self.assertIn(section_id, stderr)
+            self.assertEqual(before, self.state(), position)
+
+    def test_an_edit_that_would_write_an_invalid_canvas_is_refused(self):
+        # The verdict is the validator's: <decision> is the named tripwire and
+        # nothing in Python restates the vocabulary to catch it earlier.
+        before = self.state()
+        code, _, stderr = self.verb(
+            "insert", "--into", "root", "--type", "decision", "--text", "A.",
+            "--why", "a decision",
+        )
+        self.assertEqual(1, code)
+        self.assertIn("decision", stderr)
+        self.assertEqual(before, self.state())
+
+    def test_an_edit_whose_text_xml_cannot_hold_is_refused(self):
+        before = self.state()
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "a\bb", "--why", "a reason"
+        )
+        self.assertEqual(1, code)
+        self.assertNotEqual("", stderr)
+        self.assertEqual(before, self.state())
+
+    def test_a_section_missing_its_required_title_is_refused(self):
+        before = self.state()
+        code, _, stderr = self.verb(
+            "insert", "--into", "root", "--type", "section", "--why", "a section"
+        )
+        self.assertEqual(1, code)
+        self.assertIn("section", stderr)
+        self.assertEqual(before, self.state())
+
+
 if __name__ == "__main__":
     unittest.main()

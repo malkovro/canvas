@@ -31,6 +31,25 @@ The root is addressed by the reserved word `root`, because `<canvas>` carries no
 Last child rather than first, because then `into C` always means "append to C"
 for empty and non-empty alike, and a document built with repeated `into` comes
 out in reading order.
+
+## What a round trip preserves, and what it does not
+
+The four verbs re-read the file before they write it, so this is now a live
+question rather than a deferred one, and `parse` answers it: **a canvas is its
+element tree, and nothing else.** Comments and processing instructions do not
+survive a round trip, inside the root or outside it.
+
+That is a decision and not an accident. `schema/canvas.rng` admits no comment
+as content — the vocabulary is eleven element names and their attributes — so a
+comment in a canvas is not part of the document the schema defines, and no
+reader of a canvas can be relying on one. Preserving them would mean carrying a
+parallel representation of the file through every edit for the sake of text the
+grammar says is not there. What a canvas records instead is its history, which
+is where a comment would have gone: the reason is the commit subject.
+
+The practical reach of this is small, because every canvas on disk was written
+by `serialise`, which emits no comments. Only a hand-edited file can lose one,
+and it loses it on its first edit, visibly, in that edit's own diff.
 """
 
 from xml.etree import ElementTree as ET
@@ -53,6 +72,10 @@ class PositionProblem(Exception):
     """A position named an id that is not in this document."""
 
 
+class NotWellFormed(Exception):
+    """The file on disk is not XML, so there is no tree to edit."""
+
+
 def new_canvas(ledger_id):
     """The childless root, which is the whole output of the creation commit.
 
@@ -66,25 +89,66 @@ def new_canvas(ledger_id):
     return root
 
 
+def new_node(node_id, tag, version=BIRTH_VERSION, text=None, attributes=None):
+    """A node of any type: its `id` and `v` first, then whatever else it carries.
+
+    Which element names exist, and which attributes each one requires, is
+    `schema/canvas.rng`'s business and not this function's. It will build a
+    `<decision>` node quite happily; what stops that document ever reaching a
+    canvas's path is the validator, which is the only thing here that ever
+    decides what is legal. Nothing in this module is a second copy of the
+    vocabulary.
+
+    Attribute order is cosmetic, and chosen to match `tests/fixtures/valid.xml`:
+    `id`, then `v`, then the rest. An attribute whose value is None is not
+    written, so a caller can hand over the flags it was given without first
+    working out which of them were supplied.
+    """
+    node = ET.Element(tag)
+    node.set("id", node_id)
+    node.set("v", version)
+    for name, value in (attributes or {}).items():
+        if value is not None:
+            node.set(name, value)
+    if text is not None:
+        node.text = text
+    return node
+
+
 def new_text(node_id, content):
     """A `<text>` node at birth: the minted id, and v="1"."""
-    node = ET.Element("text")
-    node.set("id", node_id)
-    node.set("v", BIRTH_VERSION)
-    node.text = content
-    return node
+    return new_node(node_id, "text", text=content)
 
 
 def parse(path):
     """Read a canvas from disk into a tree.
 
-    Comments and processing instructions outside the root cannot be represented
-    by ElementTree and are lost on a round trip. Nothing in `create` or `read`
-    round-trips a file — `create` builds in memory and `read` prints the bytes
-    on disk verbatim — so nothing here can lose one today. Whoever writes the
-    four verbs, which do re-read before they write, has to decide that.
+    Comments and processing instructions are lost on a round trip, which is
+    *What a round trip preserves* above: a canvas is its element tree. The four
+    verbs re-read before they write, and that is the decision they inherit.
+
+    A file that is not well-formed XML is not a tree at all, and that is a
+    different thing from a file whose tree breaks the grammar — the second is
+    the validator's verdict and arrives with diagnostics naming the node. This
+    raises `NotWellFormed` so a caller can tell the two apart and say which.
+
+    The character data of an element that has children is dropped, because in
+    this vocabulary there is no such thing: no element in the grammar holds
+    character data and child elements at once, so what a parser finds there is
+    `serialise`'s own indentation and nothing else. Keeping it would make an
+    emptied container render as `<table id="z9sf" v="1">\n    </table>` after
+    the removal of its last child — the whitespace, now the only thing left,
+    having been promoted to content by a `remove` that never meant to write
+    any. A leaf's character data is its content and is untouched.
     """
-    return ET.parse(path).getroot()
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as error:
+        raise NotWellFormed("%s: not well-formed XML: %s" % (path, error))
+    for element in root.iter():
+        if len(element):
+            element.text = None
+    return root
 
 
 def _parents(root):
@@ -134,6 +198,56 @@ def place_into(root, container_id, node):
     if container is None:
         raise PositionProblem("no node with id %s in this canvas" % container_id)
     container.append(node)
+
+
+def parent_of(root, node_id):
+    """The element the named node hangs from.
+
+    None for the root, which has none, and None for an id that is not in this
+    document. ElementTree has no parent pointer, so this is a walk.
+    """
+    node = find(root, node_id)
+    if node is None or node is root:
+        return None
+    return _parents(root).get(id(node))
+
+
+def replace_node(root, node_id, replacement):
+    """Put `replacement` at the position the named node currently occupies.
+
+    The position is the node's index in its own parent, so nothing around it
+    moves: `replace` changes one node and leaves every sibling's id, `v`,
+    content and order exactly as they were.
+    """
+    node = find(root, node_id)
+    parent = parent_of(root, node_id)
+    if node is None or parent is None:
+        raise PositionProblem("no node with id %s in this canvas" % node_id)
+    parent[list(parent).index(node)] = replacement
+
+
+def detach(root, node_id):
+    """Take the named node out of the document and return it.
+
+    `remove` throws away what this returns and `move` puts it back somewhere
+    else, which is why it hands the element back rather than swallowing it.
+    """
+    node = find(root, node_id)
+    parent = parent_of(root, node_id)
+    if node is None or parent is None:
+        raise PositionProblem("no node with id %s in this canvas" % node_id)
+    parent.remove(node)
+    return node
+
+
+def contains(ancestor, candidate):
+    """Is `candidate` the element `ancestor` itself, or one of its descendants?
+
+    What `move` asks before it moves anything. A node moved inside itself would
+    leave the document altogether, taking its children with it, and the commit
+    that did it would name one node while N vanished.
+    """
+    return any(element is candidate for element in ancestor.iter())
 
 
 def _escape_text(value):
