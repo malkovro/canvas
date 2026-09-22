@@ -693,6 +693,42 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   in the other direction, that every `chmod` a next action names is marked, so
   that the rule cannot be escaped by dropping the word.
 
+  **Where the word does not mean this yet: four next actions in
+  `canvas/store.py`.** `grep -n 'run \`' canvas/store.py` returns exactly four
+  lines — `:546` in `_git_checked`, `:667` in `_cannot_read_repository`,
+  `:735` in `ensure_repository` and `:885` in `_log` — and every one of them
+  puts the marker in front of a *diagnostic*: “run `git …` yourself to see
+  what it objects to”. That is the opposite of what the word is settled to
+  mean here. All four predate this rule — `git blame` puts them at `f51ec57`
+  and `46f333c`, and they are already there at the revision this branch was cut
+  from — and the rule's scope when it was written was `canvas/refusal.py`'s
+  templates, so they were left standing rather than overlooked.
+
+  **The suite does not catch them, and that is why this branch is green with
+  them in it.** `assertRepairsRun` only sees a next action a test actually
+  reaches, and no test reaches any of these four branches: spliced with a probe
+  that records each one it enters, the whole suite runs 263 tests, passes, and
+  leaves the probe file uncreated. So the rule above is enforced everywhere the
+  tests go and unenforced on exactly these four lines. Two of them are
+  demonstrably wrong as marked — `:546`'s `git rev-parse HEAD` and `:667`'s
+  `git --git-dir=… rev-parse HEAD` exit `128`, not `0`, on the conditions
+  their refusals are about — and `:546`'s command carries no `--git-dir` at
+  all, so it is not even asked about the repository the refusal names.
+
+  **The fix is owned by [todo
+  10330693749](https://app.basecamp.com/3934852/buckets/48039419/todos/10330693749)**,
+  “Make the word `run` mean one thing in `canvas/store.py` too, and cover the
+  four refusals that print it”, and it is deliberately not made here. It is
+  not a rewording: the four have to be decided one at a time — `:735`'s `git
+  init -b main -- %s` is a genuine repair and should keep the marker if it can
+  be made to exit `0`, while the other three are looking rather than repairing
+  — and each decision only sticks once a test reaches the branch that prints
+  it. That todo scopes the string changes together with that coverage, with
+  `assertRepairsRun` extended to check the reverse direction for `git` as it
+  already does for `chmod`. Until it lands, the word means one thing in
+  `canvas/refusal.py` and these four lines in `canvas/store.py` are the
+  documented exception.
+
 - **`canvas/refusal.py` is where the shape lives**, and it is a structure and
   not a convention: the next action is a constructor argument with no default,
   and a refusal that names neither a node nor anything else cannot be built.
