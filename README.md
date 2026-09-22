@@ -124,13 +124,14 @@ hand out an id another canvas already used.
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
     bin/canvas read    <ledger_id>
     bin/canvas history <ledger_id> <node-id>
-    bin/canvas replace <ledger_id> <node-id> --why TEXT [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
-    bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
-    bin/canvas remove  <ledger_id> <node-id> --why TEXT [--author TEXT]
-    bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--author TEXT]
+    bin/canvas replace <ledger_id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
+    bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
+    bin/canvas remove  <ledger_id> <node-id> --why TEXT [--base SHA] [--author TEXT]
+    bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--author TEXT]
 
-The read hands out the current sha; nothing enforces `--base` and no verb
-accepts one.
+The read hands out the current sha and all four verbs take it back as
+`--base`: the sha the edit was decided against. [The staleness
+rule](#--base-and-the-two-branches) is what it buys.
 
 ### Creating a canvas
 
@@ -392,6 +393,102 @@ The single write that names no node is the birth of a canvas, and the only
 document it may produce is the root alone, which is why `create` is three
 commits and not one.
 
+#### `--base`, and the two branches
+
+`--base <sha>` is the sha a write was decided against — the one a `read` handed
+out. All four verbs take it and the store enforces it, and what it buys is the
+split `engineering-spec.md` § *Staleness* names. Nothing reconciles and nothing
+merges: **the refusal is the feature**, which is also why this is not CRDTs.
+
+    $ bin/canvas read my-task
+    Canvas-Base: 4f1a2c9…
+    …
+    $ bin/canvas replace my-task b7pk --text "Chose A." \
+                 --why "chose A over B" --base 4f1a2c9…
+
+**Nothing moved** — `--base` is the head, or nothing has touched this canvas
+since it. The write applies and says nothing extra. A read-then-write round
+trip against an unchanged canvas is silent:
+
+    Canvas-Node: b7pk
+    Canvas-Base: 9c1e0a7…
+
+Silent means no diff, not no output. Those two lines are the verb's ordinary
+success output and the sha on the second is what the next write bases on.
+
+**Something else moved — the soft branch.** The write applies, and the same
+output that reports success carries what the writer did not know: the range,
+the reason for each commit in it, and git's own unified diff of this canvas
+between `--base` and the head the write was applied to. The write's own commit
+is not in it — it is not news to its author.
+
+    Canvas-Node: b7pk
+    Canvas-Base: 9c1e0a7…
+    Canvas-News: 1 commit(s) between 4f1a2c9… and 31499cf…
+    replace itpe: they revised the expected value
+    diff --git a/my-task.xml b/my-task.xml
+    …
+    -  <text id="itpe" v="1">A writer can learn what to write against.</text>
+    +  <text id="itpe" v="2">A writer learns what it did not know.</text>
+
+**The node being written moved — the hard branch.** Exit `1`. Nothing is
+applied, nothing is merged, nothing is committed, no file is written — not even
+a temporary — and no id is minted. The refusal names the node and carries that
+node's diff since `--base` on stderr, one block per commit that moved it: the
+commit, its subject with the reason in it, and its patch. One commit is one
+node, so a commit's own patch *is* that node's diff for that edit.
+
+    $ bin/canvas replace my-task b7pk --text "Chose A." --why "…" --base 4f1a2c9…
+    canvas: refusing to write b7pk: it moved in 1 commit(s) between --base
+    4f1a2c9… and 31499cf…, so this edit was decided against text that is no
+    longer there. …
+    Canvas-Commit: 31499cf…
+    replace b7pk: they got there first
+    diff --git a/my-task.xml b/my-task.xml
+    …
+
+A node **removed** since `--base` is the hard branch too, with the removal as
+its diff — rather than the bare "no node with id b7pk", which a writer working
+from a stale read cannot learn anything from.
+
+**`insert` never takes the hard branch.** Its node is minted after the check,
+and an id no commit has ever named cannot have moved. The position anchor it
+names is a different node: an anchor that is *gone* is already a refusal, and
+an anchor that merely changed is reported in the news rather than refused — the
+writer is told, and the node it asked to file beside it is filed beside it.
+
+**Both branches are scoped to this canvas's own file.** `state/canvas` is one
+repository holding every ledger row and the sha is repository-wide on purpose,
+so without the path filter an edit to an unrelated row would make every writer
+stale and the soft branch would fire carrying an empty diff. With it, the sha
+stays a repository-wide identity key and the news is about the document the
+writer actually read. `history` path-scopes for the same reason.
+
+##### What an omitted `--base` means, and three ways one can be unusable
+
+**`--base` is optional, and an omitted one is not a base of "now".** It is the
+absence of the question: nothing is compared, and the verb behaves exactly as
+it did before this rule existed. That is deliberately not `--why`'s shape —
+`--why` has no value the tool could correctly compute, so an absent one is a
+malformed invocation, while an absent `--base` asks for no check and there is
+no silently wrong answer hiding in it. `create` takes none under either
+reading: the birth of a canvas has no prior state it could have been decided
+against, which is also why its root commit writes no `Canvas-Base:` trailer.
+
+| the `--base` given | exit | why |
+|---|---|---|
+| not a sha at all | `2` | the invocation is wrong, as a malformed ledger id is |
+| a well-formed sha this repository never handed out | `1` | a true statement about the store, like "no canvas for this ledger id". Re-read and re-decide |
+| known, but not an ancestor of the head | `1` | the canvas repository has one line of history and nothing here branches, so this came from a rewritten history or somewhere else — and `<base>..HEAD` would answer "nothing moved" for it, a vacuous pass wearing the safe case's face |
+
+An abbreviation git can still resolve is accepted. `read` hands out the full
+forty characters, but there is no reason to refuse a shorter one supplied later.
+
+The `Canvas-Base:` trailer the commit carries is a **different fact** and is
+written either way: it is the truthful record of the head the edit was applied
+to, not of the base the writer declared. On the soft branch those are two
+different shas, and the commit records the one a reader of the history needs.
+
 ### Naming a position
 
 `node-identity.md` §6 settles how a position is named, including the first
@@ -406,8 +503,8 @@ that the verbs inherit an answer instead of improvising one.
 | exit | meaning |
 |---|---|
 | `0` | it worked |
-| `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, there is no such node in this canvas's history, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`**), a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, or the document is invalid. Re-read and re-decide |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
 
 This is `bin/canvas-validate`'s `1` / `2` split with its purpose preserved, and
 it differs from it in one deliberate place. `canvas-validate` maps a missing
@@ -424,9 +521,15 @@ with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
 
 ### What the store deliberately does not do
 
-- **It does not enforce `--base`.** The read hands out the sha and stops
-  there, and no verb accepts one. The `Canvas-Base:` trailer an edit writes is
-  the truthful record of the head it was applied to, compared against nothing.
+- **It does not reconcile or merge.** `--base` *is* enforced — see
+  [the two branches](#--base-and-the-two-branches) — and enforcing it means
+  refusing. A stale write is never merged into the current document, never
+  rebased onto it, and never applied in part. The writer re-reads and
+  re-decides, which is the one thing a CRDT cannot be made to do.
+- **It does not diff a node structurally.** Both branches hand back git's own
+  unified diff of the canvas file, scoped to a commit or to a range. One commit
+  is one node, so a commit's patch already *is* that node's diff, and a
+  node-granular differ would be restating git rather than using it.
 - **It does not report a node's history beyond one node at a time.**
   `bin/canvas history <ledger_id> <node-id>` returns one node's edits, oldest
   first, with the reason for each. There is no verb that reports a whole

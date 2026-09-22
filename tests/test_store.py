@@ -1023,20 +1023,23 @@ class TheVerbsAddressNodesByIdAndNothingElse(VerbTestCase):
             )
             self.assertEqual(2, code, flag)
 
-    def test_no_verb_accepts_base(self):
-        # The staleness rule is a separate task. Nothing here compares a
-        # supplied sha against anything, so nothing here accepts one.
-        head = self.git("rev-parse", "HEAD").strip()
+    def test_every_verb_accepts_base(self):
+        # The staleness rule: each verb takes the sha the edit was decided
+        # against. Each of these declares the head as it stands when it runs,
+        # so nothing moved in between and each of them applies.
         for edit in (
             ("replace", self.problem_id, "--text", "x"),
-            ("remove", self.problem_id),
             ("move", self.problem_id, "--into", "root"),
             ("insert", "--into", "root", "--text", "x"),
+            ("remove", self.problem_id),
         ):
+            head = self.git("rev-parse", "HEAD").strip()
             before = self.state()
-            code, _, _ = self.verb(*(edit + ("--base", head, "--why", "a reason")))
-            self.assertEqual(2, code, edit)
-            self.assertEqual(before, self.state(), edit)
+            code, _, stderr = self.verb(
+                *(edit + ("--base", head, "--why", "a reason"))
+            )
+            self.assertEqual(0, code, (edit, stderr))
+            self.assertNotEqual(before, self.state(), edit)
 
     def test_a_position_needs_exactly_one_of_after_and_into(self):
         for edit in (
@@ -1583,6 +1586,413 @@ class WhatOneNodeMeansWhenTheNodeHasChildren(VerbTestCase):
             self.assertEqual({node_id}, set(self.ids()) - before, node_type)
             self.assertEqual([], list(self.node(node_id)), node_type)
             self.assertEqual("1", self.node(node_id).get("v"), node_type)
+
+
+class TheBaseStalenessRule(VerbTestCase):
+    """engineering-spec.md section "Staleness", both branches, and the third
+    case that is the ordinary one.
+
+    The todo's done condition, clause by clause: a write whose own node moved
+    since `--base` is refused with that node's diff and a non-zero exit; a
+    write whose node did not move applies and reports the diff of what else
+    changed; a read-then-write round trip against an unchanged canvas succeeds
+    silently.
+    """
+
+    def head(self):
+        return self.git("rev-parse", "HEAD").strip()
+
+    def document(self):
+        with open(self.canvas_file(), "rb") as handle:
+            return handle.read()
+
+    def by_somebody_else(self, *args):
+        """An edit that lands while our writer is not looking. No --base."""
+        code, _, stderr = self.verb(*args)
+        self.assertEqual(0, code, stderr)
+
+    # ------------------------------------------------------------------
+    # Nothing moved
+    # ------------------------------------------------------------------
+
+    def test_a_read_then_write_round_trip_against_an_unchanged_canvas_is_silent(self):
+        # The sha a read hands out is literally the one the next write declares.
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(0, code, stderr)
+        base = stdout.decode("utf-8").splitlines()[0].split(": ", 1)[1]
+
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Restated.",
+            "--why", "sharper", "--base", base,
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("", stderr)
+        # Silent means no news, not no output: the two lines every verb prints
+        # are its ordinary success output, and the sha on the second is what
+        # the next write bases on.
+        self.assertEqual(
+            ["Canvas-Node: %s" % self.problem_id, "Canvas-Base: %s" % self.head()],
+            stdout.decode("utf-8").splitlines(),
+        )
+        self.assertEqual("Restated.", self.node(self.problem_id).text)
+
+    def test_every_verb_is_silent_when_nothing_moved(self):
+        for edit in (
+            ("replace", self.problem_id, "--text", "x"),
+            ("move", self.problem_id, "--into", "root"),
+            ("insert", "--into", "root", "--text", "x"),
+            ("remove", self.problem_id),
+        ):
+            base = self.head()
+            code, stdout, stderr = self.verb(
+                *(edit + ("--base", base, "--why", "a reason"))
+            )
+            self.assertEqual(0, code, (edit, stderr))
+            self.assertEqual("", stderr, edit)
+            self.assertEqual(2, len(stdout.decode("utf-8").splitlines()), edit)
+
+    def test_an_omitted_base_asks_for_no_check_and_gets_none(self):
+        # The decision this task took: --base is optional, and omitting it is
+        # the absence of the question rather than a base of "now". A canvas
+        # that moved underneath a write with no --base is still written.
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.value_id, "--text", "Moved.", "--why", "elsewhere"
+        )
+        self.assertNotEqual(base, self.head())
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Mine.", "--why", "my edit"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("", stderr)
+        self.assertEqual(2, len(stdout.decode("utf-8").splitlines()))
+        self.assertEqual("Mine.", self.node(self.problem_id).text)
+
+    # ------------------------------------------------------------------
+    # The hard branch: the node this write names moved
+    # ------------------------------------------------------------------
+
+    def test_the_hard_branch_refuses_and_leaves_head_and_document_identical(self):
+        for edit in (
+            ("replace", "--text", "Mine."),
+            ("remove",),
+            ("move", "--into", "root"),
+        ):
+            node_id = self.inserted(
+                "--into", "root", "--text", "Ours.", "--why", "a contested node"
+            )
+            base = self.head()
+            self.by_somebody_else(
+                "replace", node_id, "--text", "Theirs.", "--why", "they got there first"
+            )
+
+            head_before = self.head()
+            document_before = self.document()
+            code, stdout, stderr = self.verb(
+                edit[0], node_id, *(edit[1:] + ("--why", "my edit", "--base", base))
+            )
+            self.assertEqual(1, code, (edit, stderr))
+            self.assertEqual(b"", stdout, edit)
+            # Applies nothing, writes no commit, leaves the document byte-identical.
+            self.assertEqual(head_before, self.head(), edit)
+            self.assertEqual(document_before, self.document(), edit)
+            self.assertEqual("", self.git("status", "--porcelain"), edit)
+            self.assertIn(node_id, stderr, edit)
+
+    def test_the_hard_branch_output_carries_that_nodes_diff_since_base(self):
+        node_id = self.inserted(
+            "--into", "root", "--text", "Before.", "--why", "a contested node"
+        )
+        base = self.head()
+        self.by_somebody_else(
+            "replace", node_id, "--text", "After.", "--why", "they got there first"
+        )
+
+        code, _, stderr = self.verb(
+            "replace", node_id, "--text", "Mine.",
+            "--why", "my edit", "--base", base,
+        )
+        self.assertEqual(1, code)
+        # git's own unified diff of that node's change, and the reason for it.
+        self.assertIn("--- a/", stderr)
+        self.assertIn("+++ b/", stderr)
+        self.assertIn('-  <text id="%s" v="1">Before.</text>' % node_id, stderr)
+        self.assertIn('+  <text id="%s" v="2">After.</text>' % node_id, stderr)
+        self.assertIn("replace %s: they got there first" % node_id, stderr)
+        self.assertIn("Canvas-Commit: %s" % self.head(), stderr)
+
+    def test_the_hard_branch_carries_every_commit_that_moved_the_node(self):
+        node_id = self.inserted(
+            "--into", "root", "--text", "One.", "--why", "born"
+        )
+        base = self.head()
+        self.by_somebody_else("replace", node_id, "--text", "Two.", "--why", "second")
+        self.by_somebody_else("move", node_id, "--after", self.problem_id,
+                              "--why", "third")
+
+        code, _, stderr = self.verb(
+            "remove", node_id, "--why", "my edit", "--base", base
+        )
+        self.assertEqual(1, code)
+        self.assertIn("replace %s: second" % node_id, stderr)
+        self.assertIn("move %s: third" % node_id, stderr)
+        self.assertIn("2 commit(s)", stderr)
+
+    def test_a_node_removed_since_base_is_the_hard_branch_with_its_diff(self):
+        # The ultimate move. Without the check this is the bare "no node with
+        # id X", which a writer working from a stale read learns nothing from.
+        node_id = self.inserted(
+            "--into", "root", "--text", "Doomed.", "--why", "a node"
+        )
+        base = self.head()
+        self.by_somebody_else("remove", node_id, "--why", "no longer needed")
+
+        code, _, stderr = self.verb(
+            "replace", node_id, "--text", "Mine.",
+            "--why", "my edit", "--base", base,
+        )
+        self.assertEqual(1, code)
+        self.assertIn("remove %s: no longer needed" % node_id, stderr)
+        self.assertIn('-  <text id="%s" v="1">Doomed.</text>' % node_id, stderr)
+
+    def test_the_hard_branch_mints_nothing_and_writes_no_temporary(self):
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "a node")
+        base = self.head()
+        self.by_somebody_else("replace", node_id, "--text", "y", "--why", "theirs")
+
+        before = sorted(os.listdir(self.canvas_dir))
+        code, _, _ = self.verb(
+            "replace", node_id, "--text", "z", "--why", "mine", "--base", base
+        )
+        self.assertEqual(1, code)
+        # Not the file, not a commit, not a temporary — and no drawn id, so the
+        # space `is_free` greps has no gap nothing can account for.
+        self.assertEqual(before, sorted(os.listdir(self.canvas_dir)))
+
+    def test_a_node_that_did_not_move_is_not_the_hard_branch_on_a_prefix(self):
+        # Ids are four characters and the match is on the trailer's value for
+        # equality, so a node whose id merely starts the same is not this node.
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "mine")
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.value_id, "--text",
+            "quoting Canvas-Node: %s at it" % node_id, "--why",
+            "a reason that quotes Canvas-Node: %s" % node_id,
+        )
+        code, _, stderr = self.verb(
+            "replace", node_id, "--text", "y", "--why", "mine", "--base", base
+        )
+        # A reason quoting the trailer text is not an edit to the node it names.
+        self.assertEqual(0, code, stderr)
+
+    # ------------------------------------------------------------------
+    # The soft branch: something else moved
+    # ------------------------------------------------------------------
+
+    def test_the_soft_branch_applies_and_reports_the_other_nodes_change(self):
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.value_id, "--text", "Expected differently.",
+            "--why", "they revised the expected value",
+        )
+        head_before = self.head()
+
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Restated.",
+            "--why", "my edit", "--base", base,
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("", stderr)
+        printed = stdout.decode("utf-8")
+        lines = printed.splitlines()
+
+        # It applied: one commit, the node this write named, the new head.
+        self.assertEqual("Restated.", self.node(self.problem_id).text)
+        self.assertEqual("Canvas-Node: %s" % self.problem_id, lines[0])
+        self.assertEqual("Canvas-Base: %s" % self.head(), lines[1])
+
+        # And the same output carries the diff of what it did not know: the
+        # range, the reason, and git's own diff of the other node's change.
+        self.assertIn("Canvas-News: 1 commit(s) between %s and %s"
+                      % (base, head_before), printed)
+        self.assertIn("replace %s: they revised the expected value"
+                      % self.value_id, printed)
+        self.assertIn('-  <text id="%s" v="1">The value expected.</text>'
+                      % self.value_id, printed)
+        self.assertIn('+  <text id="%s" v="2">Expected differently.</text>'
+                      % self.value_id, printed)
+
+    def test_the_soft_branchs_news_excludes_this_writes_own_commit(self):
+        # "What it did not know" is what landed before the write, so the range
+        # ends at the head the write was applied to. Its own edit is not news.
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.value_id, "--text", "Elsewhere.", "--why", "theirs"
+        )
+        code, stdout, _ = self.verb(
+            "replace", self.problem_id, "--text", "Mine.",
+            "--why", "my edit", "--base", base,
+        )
+        self.assertEqual(0, code)
+        printed = stdout.decode("utf-8")
+        self.assertNotIn("Mine.", printed.split("Canvas-News:", 1)[1])
+        self.assertNotIn("my edit", printed)
+
+    def test_the_soft_branch_reports_every_commit_in_between(self):
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.value_id, "--text", "One.", "--why", "first by them"
+        )
+        self.by_somebody_else(
+            "replace", self.value_id, "--text", "Two.", "--why", "second by them"
+        )
+        code, stdout, _ = self.verb(
+            "remove", self.problem_id, "--why", "my edit", "--base", base
+        )
+        self.assertEqual(0, code)
+        printed = stdout.decode("utf-8")
+        self.assertIn("2 commit(s)", printed)
+        self.assertIn("first by them", printed)
+        self.assertIn("second by them", printed)
+
+    def test_insert_always_takes_the_soft_branch_even_when_its_anchor_moved(self):
+        # The node an insert names is minted after the check, so it cannot have
+        # moved. The anchor is a different node: an anchor that changed is
+        # reported in the news, not refused — an anchor that is gone is already
+        # `_place`'s refusal and stays there.
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.problem_id, "--text", "Reworded.", "--why", "theirs"
+        )
+        code, stdout, stderr = self.verb(
+            "insert", "--after", self.problem_id, "--text", "A note.",
+            "--why", "filed beside it", "--base", base,
+        )
+        self.assertEqual(0, code, stderr)
+        printed = stdout.decode("utf-8")
+        node_id = printed.splitlines()[0].split(": ", 1)[1]
+        self.assertIn("Canvas-News:", printed)
+        self.assertIn("replace %s: theirs" % self.problem_id, printed)
+        self.assertEqual(
+            [self.problem_id, node_id, self.value_id],
+            [child.get("id") for child in self.tree()],
+        )
+
+    def test_the_soft_branch_is_still_one_commit_with_all_three_trailers(self):
+        # The invariants this rule must not weaken: one edit is one commit, and
+        # the commit records the head it was applied to.
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.value_id, "--text", "Elsewhere.", "--why", "theirs"
+        )
+        head_before = self.head()
+        commits_before = len(self.subjects())
+
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Mine.",
+            "--why", "my edit", "--base", base,
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(commits_before + 1, len(self.subjects()))
+        body = self.bodies()[-1]
+        self.assertIn("Canvas-Node: %s" % self.problem_id, body)
+        self.assertIn("Canvas-Author: ", body)
+        # The trailer is the head the edit was applied to, not the base it
+        # declared. Those are two different facts and only one is stale.
+        self.assertIn("Canvas-Base: %s" % head_before, body)
+        self.assertNotIn("Canvas-Base: %s" % base, body)
+
+    def test_a_change_to_another_canvas_is_not_news_and_is_not_staleness(self):
+        # state/canvas is one repository for every ledger row and the sha is
+        # repository-wide on purpose. Scoping to this canvas's file is what
+        # keeps the round trip silent in a store where other rows are busy.
+        base = self.head()
+        self.create(ledger_id="another-row", problem="Elsewhere.", value="Also.")
+        self.assertNotEqual(base, self.head())
+
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Mine.",
+            "--why", "my edit", "--base", base,
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("", stderr)
+        self.assertEqual(2, len(stdout.decode("utf-8").splitlines()))
+
+    # ------------------------------------------------------------------
+    # A base that is not usable
+    # ------------------------------------------------------------------
+
+    def test_a_malformed_base_is_the_invocation_being_wrong(self):
+        for declared in ("not-a-sha", "", "zzzz", "12", "g" * 40, "HEAD~1"):
+            before = self.state()
+            code, stdout, stderr = self.verb(
+                "replace", self.problem_id, "--text", "x",
+                "--why", "a reason", "--base", declared,
+            )
+            self.assertEqual(2, code, declared)
+            self.assertEqual(b"", stdout, declared)
+            self.assertIn("--base", stderr, declared)
+            self.assertEqual(before, self.state(), declared)
+
+    def test_a_well_formed_base_this_repository_never_handed_out_is_refused(self):
+        unknown = "0123456789" * 4
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "x",
+            "--why", "a reason", "--base", unknown,
+        )
+        self.assertEqual(1, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn(unknown, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_a_known_base_that_is_not_an_ancestor_of_the_head_is_refused(self):
+        # A commit this repository has but that nothing on the current line of
+        # history descends from. `<base>..HEAD` would answer "nothing moved"
+        # for it, which is a vacuous pass wearing the safe case's face.
+        elsewhere = self.git(
+            "-c", "user.name=elsewhere", "-c", "user.email=elsewhere@localhost",
+            "commit-tree", self.git("rev-parse", "HEAD^{tree}").strip(),
+            "-m", "a commit on no branch",
+        ).strip()
+        self.assertEqual(
+            elsewhere, self.git("rev-parse", "--verify", elsewhere).strip()
+        )
+
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "x",
+            "--why", "a reason", "--base", elsewhere,
+        )
+        self.assertEqual(1, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn(elsewhere, stderr)
+        self.assertIn("ancestor", stderr)
+        self.assertEqual(before, self.state())
+
+    def test_an_abbreviated_base_resolves(self):
+        # `read` hands out the full forty characters, but git resolves an
+        # abbreviation supplied later and there is no reason to refuse one.
+        base = self.head()
+        self.by_somebody_else(
+            "replace", self.value_id, "--text", "Elsewhere.", "--why", "theirs"
+        )
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Mine.",
+            "--why", "my edit", "--base", base[:12],
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn("Canvas-News:", stdout.decode("utf-8"))
+
+    def test_create_takes_no_base(self):
+        # The birth of a canvas has no prior state it could have been decided
+        # against, which is also why its root commit writes no Canvas-Base:.
+        code, _, _ = self.run_canvas(
+            "create", "yet-another-row", "--problem", "P",
+            "--expected-value", "V", "--base", self.head(),
+        )
+        self.assertEqual(2, code)
+        self.assertFalse(os.path.exists(self.canvas_file("yet-another-row")))
 
 
 class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):

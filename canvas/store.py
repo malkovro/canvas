@@ -47,6 +47,15 @@ document: a caller that hands in a whole tree is expressing a whole-document
 rewrite, and the way to make that inexpressible is not to offer the parameter.
 `_write_and_commit` is private for that reason and guarded anyway, because a
 leading underscore is a convention and the guard is a refusal.
+
+**No canvas is ever written against a base the writer no longer holds.** A
+write may declare the sha it was decided against, and `_check_base` then splits
+on what moved in between: the node this write names moved and the write is
+refused, carrying that node's diff, before anything is minted, written or
+committed; only something else moved and the write applies, with the news of it
+handed back to the caller to print beside its success; nothing moved and there
+is nothing to say. Nothing is reconciled and nothing is merged. The refusal is
+the feature.
 """
 
 import collections
@@ -201,9 +210,9 @@ def ensure_repository(canvas_dir):
 def head_sha(canvas_dir):
     """The repository head, or None when it has no commits yet.
 
-    The *repository* head, not the file's last-touching commit. That is what a
-    later `--base` is compared against, and it is what makes the sha a read
-    hands out usable as the base of the next write with no second lookup.
+    The *repository* head, not the file's last-touching commit. That is what
+    `--base` is compared against, and it is what makes the sha a read hands out
+    usable as the base of the next write with no second lookup.
     """
     result = _git(canvas_dir, "rev-parse", "HEAD")
     if result.returncode != 0:
@@ -261,6 +270,16 @@ _LOG_FORMAT = (
 )
 
 
+class _Record(collections.namedtuple("_Record", "sha subject named author")):
+    """One commit, as `_LOG_FORMAT` prints it.
+
+    The sha, the whole commit subject, the values of its `Canvas-Node:`
+    trailers, and its author line. Every log query below decodes into this, so
+    the ones that ask different questions cannot disagree about what a commit's
+    trailers say.
+    """
+
+
 class Edit(collections.namedtuple("Edit", "sha verb reason author")):
     """One commit that named a node: what it did, why, and who did it.
 
@@ -277,6 +296,37 @@ def _edit_from(sha, subject, author):
     return Edit(sha, verb, reason, author)
 
 
+def _log(canvas_dir, arguments, complaint):
+    """`git log` over the canvas repository, decoded into records, oldest first.
+
+    One place runs the query and one place decodes the format, so the callers
+    below — which ask different questions of the same log — cannot drift apart
+    on what a commit's trailers say.
+    """
+    result = _git(
+        canvas_dir, *(["log", "--reverse", "--format=%s" % _LOG_FORMAT] + arguments)
+    )
+    if result.returncode != 0:
+        if head_sha(canvas_dir) is None:
+            # No commits at all. git log exits non-zero on an unborn branch
+            # rather than printing nothing.
+            return []
+        raise ToolProblem(
+            "%s: %s" % (complaint, result.stderr.decode("utf-8", "replace").strip())
+        )
+
+    records = []
+    for record in result.stdout.decode("utf-8", "replace").split(_RECORD):
+        record = record.strip("\n")
+        if not record:
+            continue
+        sha, subject, named, authors = record.split(_FIELD)
+        records.append(
+            _Record(sha, subject, named.split("\x1d"), authors.replace("\x1d", ", "))
+        )
+    return records
+
+
 def _node_commits(canvas_dir, node_id, path=None):
     """The commits whose `Canvas-Node:` trailer is exactly `node_id`, oldest first.
 
@@ -285,33 +335,35 @@ def _node_commits(canvas_dir, node_id, path=None):
     section 1 makes ids unique across `state/canvas` and not within one file,
     so a path-scoped `is_free` would hand out an id another canvas already used.
     """
-    arguments = ["log", "--reverse", "--format=%s" % _LOG_FORMAT]
+    arguments = []
     if _SAFE_IN_A_PATTERN.match(node_id):
         arguments += ["--extended-regexp", "--grep=^Canvas-Node: %s$" % node_id]
     if path is not None:
         arguments += ["--", path]
 
-    result = _git(canvas_dir, *arguments)
-    if result.returncode != 0:
-        if head_sha(canvas_dir) is None:
-            # No commits at all. git log exits non-zero on an unborn branch
-            # rather than printing nothing.
-            return []
-        raise ToolProblem(
-            "cannot search the canvas history for %s: %s"
-            % (node_id, result.stderr.decode("utf-8", "replace").strip())
+    return [
+        _edit_from(record.sha, record.subject, record.author)
+        for record in _log(
+            canvas_dir,
+            arguments,
+            "cannot search the canvas history for %s" % node_id,
         )
+        if node_id in record.named
+    ]
 
-    edits = []
-    for record in result.stdout.decode("utf-8", "replace").split(_RECORD):
-        record = record.strip("\n")
-        if not record:
-            continue
-        sha, subject, named, authors = record.split(_FIELD)
-        if node_id not in named.split("\x1d"):
-            continue
-        edits.append(_edit_from(sha, subject, authors.replace("\x1d", ", ")))
-    return edits
+
+def _commits_in(canvas_dir, since, path):
+    """Every commit that touched this canvas's file in `since..HEAD`, oldest first.
+
+    The whole range and not one node's share of it: which node each commit
+    named travels on the record, so the staleness split below reads both of its
+    branches out of one query.
+    """
+    return _log(
+        canvas_dir,
+        ["%s..HEAD" % since, "--", path],
+        "cannot list what changed in %s since %s" % (path, since),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -757,9 +809,11 @@ def create(ledger_id, problem, expected_value, author=None):
     requires. The root commit carries no `Canvas-Node:` — the root is not a node
     — and no `Canvas-Base:`, because there was no prior state to decide against.
     The two insert commits each base on the commit before them, which is
-    literally true and makes the chain self-describing. Writing a truthful
-    trailer is not enforcing `--base`: nothing here compares a supplied base
-    against anything.
+    literally true and makes the chain self-describing. `create` declares no
+    `--base` of its own, and takes no flag for one: the four verbs declare the
+    sha they were decided against and `_check_base` holds them to it, but the
+    birth of a canvas has no prior state it could have been decided against, so
+    there is nothing for it to declare and nothing to compare.
 
     The two nodes are `<text>` nodes, problem first. They carry no marker saying
     which is which: the vocabulary has no semantic node and inventing one is the
@@ -898,6 +952,193 @@ def history(ledger_id, node_id):
     return edits
 
 
+
+# --------------------------------------------------------------------------
+# Staleness: what moved since --base
+# --------------------------------------------------------------------------
+#
+# `engineering-spec.md` section "Staleness". Every read hands out the current
+# sha; a write declares the sha it was decided against, and the tool splits on
+# what moved in between. Two named branches, and a third case that is the
+# ordinary one:
+#
+# - **The node this write names moved since `--base`** -> hard refusal. The
+#   tool exits non-zero, applies nothing, commits nothing, mints nothing, and
+#   prints that node's diff since `--base`. The writer re-reads and re-decides.
+# - **Something else moved since `--base`** -> the write applies, and the same
+#   output that reports success carries the diff of everything that changed in
+#   between. The writer is told, in the same breath as being told it succeeded,
+#   what it did not know.
+# - **Nothing moved** -> the write applies and says nothing extra. A read and
+#   then a write against an unchanged canvas is silent.
+#
+# Nothing here reconciles and nothing merges, and that is not an omission. The
+# spec rejects CRDTs and operational transform twice over: they auto-merge and
+# therefore never refuse, and the refusal is the feature.
+#
+# **Both branches are scoped to this canvas's own file.** `state/canvas` is one
+# repository holding every ledger row, and `head_sha` is repository-wide on
+# purpose — that is what makes the sha a read hands out an identity key rather
+# than one file's version number. Without the path filter, an edit to an
+# unrelated ledger row would make every writer stale and the soft branch would
+# fire carrying an empty diff, so "a read-then-write round trip against an
+# unchanged canvas succeeds silently" would stop being true in any busy store.
+# With it, the sha stays repository-wide and the news is about the document the
+# writer actually read. `history` path-scopes for the same reason.
+#
+# **`--base` is optional, and an omitted one is not a base of "now".** It is
+# the absence of the question: the write carries no staleness claim, nothing is
+# compared, and the verb behaves exactly as it did before this rule existed.
+# That is deliberately not `--why`'s shape. `--why` has no value the tool could
+# correctly compute, so an absent one is a malformed invocation; an absent
+# `--base` asks for no check and gets none, and there is no silently wrong
+# answer hiding in that case. `create` takes none under either reading: the
+# birth of a canvas has no prior state it could have been decided against.
+
+
+#: What `--base` may be: the sha a read handed out, or an abbreviation of one
+#: git can still resolve. Anything else is the invocation being wrong rather
+#: than a fact about the store, which is `README.md`'s own call for a malformed
+#: ledger id — that stays `2` while a well-formed one naming nothing is `1`.
+_A_SHA = re.compile(r"\A[0-9a-fA-F]{4,40}\Z")
+
+
+def _resolve_base(canvas_dir, declared, head):
+    """The full sha `--base` names, or the refusal that says why it is not one.
+
+    Three answers, and they are three different things:
+
+    - **Not a sha at all** -> `ToolProblem`, exit 2. The invocation is wrong.
+    - **A well-formed sha this repository never handed out** -> `Refusal`, exit
+      1. That is a true statement about the store as it stands, and the answer
+      is to re-read and re-decide, exactly as it is for "no canvas for this
+      ledger id" and "no node with id X in this canvas".
+    - **Known, but not an ancestor of the head** -> `Refusal`, exit 1. The
+      canvas repository has one line of history and nothing in this store ever
+      creates a branch, so a known non-ancestor came from a rewritten history
+      or from somewhere else. `<base>..HEAD` would answer "nothing moved" for
+      it, which is a vacuous pass wearing the safe case's face. That silent
+      pass is the one outcome worth spending a check to prevent.
+    """
+    if not _A_SHA.match(declared):
+        raise ToolProblem(
+            "not a usable --base: %r; a base is the commit sha a read handed "
+            "out, four to forty hexadecimal characters" % declared
+        )
+    resolved = _git(
+        canvas_dir, "rev-parse", "--verify", "--quiet", "%s^{commit}" % declared
+    )
+    if resolved.returncode != 0:
+        raise Refusal(
+            "no commit %s in this canvas repository: --base names the sha a "
+            "read handed out, and this one was never handed out here. Read the "
+            "canvas and write against the sha it prints" % declared
+        )
+    base = resolved.stdout.decode("utf-8", "replace").strip()
+    if base != head:
+        ancestry = _git(canvas_dir, "merge-base", "--is-ancestor", base, "HEAD")
+        if ancestry.returncode != 0:
+            raise Refusal(
+                "--base %s is not an ancestor of %s, this canvas repository's "
+                "head: nothing that led here was decided against it, so what "
+                "changed in between is not a question this store can answer. "
+                "Read the canvas and write against the sha it prints"
+                % (base, head)
+            )
+    return base
+
+
+def _patch(canvas_dir, sha, path):
+    """One commit's own diff of this canvas's file, as git prints it.
+
+    One commit is one node, so a commit's file-scoped patch *is* that node's
+    diff for that edit, and no extraction step is needed. None is built,
+    either: a node-granular structural differ is exactly what `README.md`
+    section "What the store deliberately does not do" declined to write, on the
+    grounds that `git show` is right there and wrapping it would be restating
+    git rather than using it.
+    """
+    return _git_checked(
+        canvas_dir, "show", "--format=", "--patch", sha, "--", path
+    ).splitlines()
+
+
+def _diff(canvas_dir, base, head, path):
+    """The unified diff of this canvas's file between two commits."""
+    return _git_checked(canvas_dir, "diff", base, head, "--", path).splitlines()
+
+
+def _check_base(canvas_dir, path, node_id, head, declared):
+    """Split on what moved since `--base`. Return the news, or None.
+
+    `None` means there is nothing to say: no base was declared, or this canvas
+    has not moved since the one that was. Anything else is the soft branch —
+    the lines the verb's success output carries after it has reported the node
+    and the new sha.
+
+    The hard branch is a `Refusal` raised from here, carrying that node's diff
+    since `--base` in its details, which `canvas/cli.py` already prints one line
+    at a time on stderr. It is raised **before** the caller mints an id and
+    before `_write_and_commit` opens anything, so a refused write leaves nothing
+    behind: no file, no temporary, no commit — and no gap in the id space,
+    because `is_free` decides freeness by grepping the history and a
+    minted-then-refused id would be a draw nothing can account for.
+
+    `node_id` is None for `insert`, whose node is minted after this runs and
+    therefore cannot have moved: an id no commit has ever named has no history
+    to have moved in. The position anchor an `insert` names is a different
+    node, and an anchor that no longer exists is already a refusal, in
+    `_place`. An anchor that merely changed is reported rather than refused: it
+    arrives in the news the soft branch hands back, which is the writer being
+    told what it did not know.
+    """
+    if declared is None:
+        return None
+    base = _resolve_base(canvas_dir, declared, head)
+    if base == head:
+        return None
+
+    moved = _commits_in(canvas_dir, base, path)
+    if not moved:
+        return None
+
+    # Equality on the trailer's value, never a substring match. Ids are four
+    # characters, so `--grep='Canvas-Node: b7'` answers for `b7pk` when it was
+    # asked about `b7`, and counts a reason that merely quotes the trailer text
+    # as an edit. This is `_node_commits`' rule applied to the same field of the
+    # same record: the anchored `--grep` there is a pre-filter and never the
+    # authority, and a query already narrowed to one range and one file has
+    # nothing left for a pre-filter to narrow.
+    theirs = [
+        record
+        for record in moved
+        if node_id is not None and node_id in record.named
+    ]
+    if theirs:
+        details = []
+        for record in theirs:
+            if details:
+                details.append("")
+            details.append("Canvas-Commit: %s" % record.sha)
+            details.append(record.subject)
+            details.extend(_patch(canvas_dir, record.sha, path))
+        raise Refusal(
+            "refusing to write %s: it moved in %d commit(s) between --base %s "
+            "and %s, so this edit was decided against text that is no longer "
+            "there. Nothing was applied and nothing was merged. Its diff since "
+            "%s follows; read the canvas again and re-decide against the sha "
+            "the read prints" % (node_id, len(theirs), declared, head, declared),
+            details,
+        )
+
+    news = [
+        "Canvas-News: %d commit(s) between %s and %s" % (len(moved), base, head)
+    ]
+    news.extend(record.subject for record in moved)
+    news.extend(_diff(canvas_dir, base, head, path))
+    return news
+
+
 # --------------------------------------------------------------------------
 # The four verbs
 # --------------------------------------------------------------------------
@@ -921,14 +1162,25 @@ def history(ledger_id, node_id):
 # canvas is the cheaper half of that trade, and it is what `create` and `read`
 # already do.
 #
-# None of them accepts `--base`. The staleness rule is a separate task; the
-# `Canvas-Base:` trailer written here is the truthful record of the head this
-# edit was applied to, compared against nothing, exactly as `create`'s own
-# insert commits already write it.
+# Each of them accepts an optional `base`: the sha the edit was decided
+# against. `_check_base` splits on what moved since — a hard refusal carrying
+# that node's diff when the node this write names moved, the news of everything
+# else when it did not, and silence when nothing did. Declaring none asks for no
+# check and gets none.
+#
+# The `Canvas-Base:` trailer the commit carries is a different fact and is
+# written either way: it is the truthful record of the head this edit was
+# applied to, exactly as `create`'s own insert commits already write it. What a
+# writer declared and what it was applied to are the same sha whenever the write
+# was not stale, and the commit records the second of them because that is the
+# one a reader of the history needs.
 
 
 def _open_canvas(ledger_id):
     """The canvas an edit is about to change: (dir, path, root, head sha).
+
+    The head is both what the edit will be applied to — the `Canvas-Base:` its
+    commit records — and what a declared `--base` is compared against.
 
     Re-read from disk on every invocation, because the document an edit applies
     to is the one that is there now and not the one its caller last saw.
@@ -950,8 +1202,8 @@ def _open_canvas(ledger_id):
             "%s is not a git repository, so it has no sha to write against"
             % canvas_dir
         )
-    base = head_sha(canvas_dir)
-    if base is None:
+    head = head_sha(canvas_dir)
+    if head is None:
         raise ToolProblem(
             "%s has no commits, so it has no sha to write against" % canvas_dir
         )
@@ -959,7 +1211,7 @@ def _open_canvas(ledger_id):
         root = document.parse(path)
     except document.NotWellFormed as error:
         raise Refusal("%s" % error)
-    return canvas_dir, path, root, base
+    return canvas_dir, path, root, head
 
 
 def _addressed(root, node_id, ledger_id):
@@ -1017,8 +1269,9 @@ def insert(
     title=None,
     href=None,
     author=None,
+    base=None,
 ):
-    """Add one node. The only verb that mints an id. Returns (node_id, sha).
+    """Add one node. The only verb that mints an id. Returns (node_id, sha, news).
 
     Born at `v="1"`, which is `next_version` of an id no commit has ever named.
     No other node's `v` changes, because no other node is named by this commit.
@@ -1026,10 +1279,18 @@ def insert(
     `node_type` defaults to `text` — the node type `create` already makes, and
     the one a canvas is mostly built from. It is a default for a node type and
     not for a reason: `--why` has none and never will.
+
+    `base` is the sha this edit was decided against and `news` is what changed
+    between it and the head the edit was applied to — None when no base was
+    declared or when this canvas did not move. **An `insert` never takes the
+    hard branch**: the node it names is minted below, after the check, and an
+    id no commit has ever named cannot have moved. The check still runs, for
+    the news and for the three ways a base can be unusable.
     """
     why = require_reason(why)
     _one_position(after, into)
-    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    news = _check_base(canvas_dir, path, None, head, base)
     if author is None:
         author = default_author(canvas_dir)
 
@@ -1051,9 +1312,9 @@ def insert(
         why,
         author,
         node_id=node_id,
-        base=base,
+        base=head,
     )
-    return node_id, sha
+    return node_id, sha, news
 
 
 def replace(
@@ -1065,8 +1326,14 @@ def replace(
     title=None,
     href=None,
     author=None,
+    base=None,
 ):
     """Replace one node's content, possibly with a node of a different type.
+
+    Returns `(sha, news)`: the new head, and what changed between the declared
+    `base` and the head this edit was applied to — None when no base was
+    declared or when this canvas did not move. A node that moved in between is
+    the hard branch, and `_check_base` raises it before anything is written.
 
     **The type change is the point.** An options `<table>` settling into a
     `<text>` is `replace` on the table node, and it is how a decision gets made
@@ -1093,7 +1360,11 @@ def replace(
     N children" inexpressible rather than merely refused.
     """
     why = require_reason(why)
-    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    # Before `_addressed`, so that a node *removed* since `--base` is the hard
+    # branch with its own diff, rather than the bare "no node with id X" a
+    # writer working from a stale read cannot learn anything from.
+    news = _check_base(canvas_dir, path, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
     children = list(node)
     becomes = node_type or node.tag
@@ -1127,7 +1398,7 @@ def replace(
     replacement.extend(children)
     document.replace_node(root, node_id, replacement)
 
-    return _write_and_commit(
+    sha = _write_and_commit(
         canvas_dir,
         path,
         root,
@@ -1136,12 +1407,15 @@ def replace(
         why,
         author,
         node_id=node_id,
-        base=base,
+        base=head,
     )
+    return sha, news
 
 
-def remove(ledger_id, node_id, why, author=None):
+def remove(ledger_id, node_id, why, author=None, base=None):
     """Take one node out of the document. Its id is retired, never reminted.
+
+    Returns `(sha, news)`, on the same terms as `replace`.
 
     There is no `v` left to bump: the commit that removed it is the last entry
     in its history, and `is_free` greps that history, so the id can never be
@@ -1156,7 +1430,8 @@ def remove(ledger_id, node_id, why, author=None):
     first, each removal with its own reason.
     """
     why = require_reason(why)
-    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    news = _check_base(canvas_dir, path, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
     children = list(node)
 
@@ -1172,7 +1447,7 @@ def remove(ledger_id, node_id, why, author=None):
         author = default_author(canvas_dir)
     document.detach(root, node_id)
 
-    return _write_and_commit(
+    sha = _write_and_commit(
         canvas_dir,
         path,
         root,
@@ -1181,12 +1456,15 @@ def remove(ledger_id, node_id, why, author=None):
         why,
         author,
         node_id=node_id,
-        base=base,
+        base=head,
     )
+    return sha, news
 
 
-def move(ledger_id, node_id, why, after=None, into=None, author=None):
+def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None):
     """Change one node's position and nothing else.
+
+    Returns `(sha, news)`, on the same terms as `replace`.
 
     `node-identity.md` section 3: the id is unchanged, the content is
     unchanged, the type is unchanged, and the node's children travel with it
@@ -1200,7 +1478,8 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None):
     """
     why = require_reason(why)
     _one_position(after, into)
-    canvas_dir, path, root, base = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    news = _check_base(canvas_dir, path, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
 
     target_id = after if after is not None else into
@@ -1229,7 +1508,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None):
     document.detach(root, node_id)
     _place(root, node, after, into)
 
-    return _write_and_commit(
+    sha = _write_and_commit(
         canvas_dir,
         path,
         root,
@@ -1238,5 +1517,6 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None):
         why,
         author,
         node_id=node_id,
-        base=base,
+        base=head,
     )
+    return sha, news
