@@ -521,7 +521,7 @@ that the verbs inherit an answer instead of improvising one.
 |---|---|
 | `0` | it worked |
 | `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, or a `state/canvas` that cannot be written or looked in**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
 `Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A
@@ -541,6 +541,15 @@ not to stop touching the canvas. It maps to `1`. A *malformed* ledger id stays
 A ledger id has to be a filename: one or more of `[A-Za-z0-9._-]`, not starting
 with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
 `state/canvas/`.
+
+A canvas this process cannot read is `2` and not `1`, which is the same call
+made the other way round. "No canvas for this ledger id" is a fact about the
+store and the caller can act on it; "the canvas is there and I am not allowed
+to read it" is a fact about the *process*, and the store is intact. Exit `1`
+would tell a caller to re-read and re-decide, and the re-read would fail in
+exactly the same way. The two are told apart rather than guessed at: where
+`state/canvas` cannot be looked in at all, the tool says it cannot tell whether
+that canvas exists, because it cannot.
 
 ### What a refusal prints
 
