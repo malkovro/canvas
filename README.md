@@ -324,14 +324,7 @@ too, and say what to type:
     Canvas-About: ledger id a-row
     Canvas-About: option --why
     Canvas-Next: re-run the same command with --why TEXT (why this edit is being made; required, with no default). There is no default and no fallback: a reason a tool invented is a sentence in the history that reads like somebody decided something. Nothing was written
-    Canvas-Exit: 2 — the tool or its invocation is wrong; nothing was written, so do not touch the canvas
-
-The rule lives in `canvas/store.py` and not in the command line above it.
-`_write_and_commit` is the only function that puts a canvas on its real path,
-it takes the reason as a positional argument and it calls `require_reason`
-before it opens a file. **There is no code path that writes to a canvas without
-a reason** — including from Python, including for `create`, whose three commits
-carry their reasons the same way.
+    Canvas-Exit: 2 — the tool or its environment is wrong; do not touch the canvas
 
 #### How new content is supplied
 
