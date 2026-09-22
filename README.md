@@ -42,7 +42,7 @@ are valid.
 |---|---|
 | `0` | every file given is a valid canvas; nothing on stderr |
 | `1` | the document is wrong — not well-formed, or it violates the schema. One diagnostic per problem on stderr, each naming the offending node |
-| `2` | the tool or its invocation is wrong — no arguments, file missing or unreadable, `xmllint` not on `PATH`, schema missing or uncompilable |
+| `2` | the tool or its invocation is wrong — no arguments, file missing, unreadable, not a regular file, or in a directory this process may not look in, `xmllint` not on `PATH`, schema missing or uncompilable, or **any other condition the operating system refuses the command with**. The refusal carries the errno, so a caller can tell a permission problem from a missing file |
 
 The `1` / `2` split is the point: an agent has to be able to tell "your canvas
 is invalid, fix the node I named" from "the validator is broken, do not touch
@@ -520,8 +520,8 @@ that the verbs inherit an answer instead of improvising one.
 | exit | meaning |
 |---|---|
 | `0` | it worked |
-| `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, or a `state/canvas` that cannot be written or looked in**. Do not touch the canvas |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, or the document is invalid. Re-read and re-decide |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, or any other condition the operating system refuses the command with**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
 `Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A
@@ -602,6 +602,34 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   not a convention: the next action is a constructor argument with no default,
   and a refusal that names neither a node nor anything else cannot be built.
   That is the same move `_write_and_commit` already makes for `--why`.
+- **An operating system condition is a refusal like any other, at whatever
+  depth.** A guard that asks the filesystem a question and acts on the answer
+  is only ever true of the paths somebody thought of — one directory further
+  up, a symlink, a path that changes between the check and the open, and the
+  raw `OSError` came out as a traceback: Python's exit `1`, which this table
+  gives to "the request is wrong against the store as it stands", and none of
+  the four trailers. So the last `except` in both commands is `OSError` itself,
+  and it prints this shape at exit `2`. What it carries:
+  - the **errno and its `strerror`**, on `Canvas-About: errno 13 EACCES` and in
+    the message, because `[Errno 13] Permission denied` and `[Errno 2] No such
+    file` are opposite facts raised from the same `open()` and nothing else in
+    the output tells them apart;
+  - the **paths the error names** — both of them where there are two, as
+    `rename` and `link` have;
+  - a **`Canvas-Next:` chosen by errno**, because `chmod` is not the repair for
+    a path that is not a directory and "create it" is not the repair for one
+    that is already there. A permission refusal names the *shallowest* ancestor
+    this process cannot traverse rather than the path the error carries,
+    because `chmod u+rx <that path>` fails with `EACCES` in turn when the mode
+    that refuses it is three levels up.
+  This is the floor and not a replacement: every guard above it says something
+  more specific, and a specific message is worth more than the generic one.
+- **"Every refusal writes nothing" is a claim the outermost guard does not
+  make.** It sits outside every function that knows what it had done, so rather
+  than assert something it cannot see, it names the two commands that answer
+  the question — `bin/canvas read <ledger-id>` and `git -C
+  $OPENCLAW_WORKSPACE/state/canvas log`. `bin/canvas-validate`'s does say
+  nothing was written, because that command reads and nothing it calls writes.
 
 ### What the store deliberately does not do
 
