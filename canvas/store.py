@@ -138,11 +138,49 @@ def canvas_directory():
             "writes real state wherever it was invoked",
             about=["environment variable OPENCLAW_WORKSPACE"],
         )
-    if not os.path.isdir(workspace):
+    # Asked of the filesystem, not inferred from `os.path.isdir`. That helper
+    # answers False for a workspace that is not there, for one under a
+    # directory this process may not traverse, and for a regular file — three
+    # states flattened into one bit, of which "is not a directory" is true of
+    # one. An unreadable directory three levels above the workspace made the
+    # tool say the workspace was not a directory when `ls -ld` showed it was,
+    # and the repair it named — point the variable somewhere that exists —
+    # could not work, because the variable was already right.
+    try:
+        found = os.stat(workspace)
+    except FileNotFoundError:
         raise ToolProblem(
-            "OPENCLAW_WORKSPACE is not a directory: %s" % workspace,
+            "OPENCLAW_WORKSPACE names nothing that exists: %s" % workspace,
             "point OPENCLAW_WORKSPACE at a directory that exists and re-run; "
             "nothing was created, for the same reason there is no default",
+            about=[
+                "environment variable OPENCLAW_WORKSPACE",
+                "value %s" % workspace,
+            ],
+        )
+    except OSError as error:
+        raise ToolProblem(
+            "cannot tell whether OPENCLAW_WORKSPACE is a directory: looking "
+            "at %s was refused: %s" % (workspace, refusal.os_condition(error)),
+            refusal.os_next_action(
+                error,
+                aftermath=(
+                    "nothing was read, written or created, and whether that "
+                    "workspace is there at all is still unknown"
+                ),
+            ),
+            about=[
+                "environment variable OPENCLAW_WORKSPACE",
+                "value %s" % workspace,
+            ]
+            + refusal.os_about(error, unless=["value %s" % workspace]),
+        )
+    if not stat.S_ISDIR(found.st_mode):
+        raise ToolProblem(
+            "OPENCLAW_WORKSPACE is not a directory: %s" % workspace,
+            "point OPENCLAW_WORKSPACE at a directory — `ls -ld %s` shows what "
+            "is there now — and re-run; nothing was created, for the same "
+            "reason there is no default" % workspace,
             about=[
                 "environment variable OPENCLAW_WORKSPACE",
                 "value %s" % workspace,
