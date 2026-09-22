@@ -179,6 +179,20 @@ def validate_file(path):
     canvas".
     """
     if not os.path.isfile(path):
+        # `os.path.isfile` answers False both for a file that is not there and
+        # for one in a directory this process may not look in. Those are
+        # opposite facts and only the first is "name a file that is there".
+        directory = os.path.dirname(path) or "."
+        if os.path.isdir(directory) and not os.access(directory, os.R_OK | os.X_OK):
+            raise EnvironmentProblem(
+                "cannot tell whether %s is there: %s is there and this "
+                "process cannot look in it" % (path, directory),
+                "make %s readable and traversable — `ls -ld %s` shows who owns "
+                "it and what its mode is, and `chmod u+rx %s` is usually the "
+                "repair — and re-run; nothing was examined"
+                % (directory, directory, directory),
+                about=["file %s" % path, "directory %s" % directory],
+            )
         raise EnvironmentProblem(
             "no such file: %s" % path,
             "name a file that is there and re-run `bin/canvas-validate "

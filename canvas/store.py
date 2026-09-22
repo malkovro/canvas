@@ -175,7 +175,32 @@ def canvas_path(canvas_dir, ledger_id):
 
 
 def _no_canvas(ledger_id, path):
-    """No canvas for that ledger id. A fact about the store, so exit 1."""
+    """No canvas for that ledger id. A fact about the store, so exit 1.
+
+    Unless the absence cannot be trusted. `os.path.isfile` answers False both
+    for a canvas that is not there and for one this process is not allowed to
+    look for, and those are opposite facts: the first is a request to re-decide
+    against, the second is a store that is fine and a process that cannot see
+    it. Told apart here rather than at the three call sites, because getting it
+    wrong sends a caller to `create` — which would refuse in turn, or worse,
+    succeed against a canvas it could not see.
+    """
+    directory = os.path.dirname(path) or "."
+    if os.path.isdir(directory) and not os.access(directory, os.R_OK | os.X_OK):
+        return ToolProblem(
+            "cannot tell whether there is a canvas for ledger id %s: %s is "
+            "there and this process cannot look in it" % (ledger_id, directory),
+            "make %s readable and traversable — `ls -ld %s` shows who owns it "
+            "and what its mode is, and `chmod u+rx %s` is usually the repair — "
+            "and re-run; nothing was read, written or committed, and whether "
+            "that canvas exists is still unknown"
+            % (directory, directory, directory),
+            about=[
+                "ledger id %s" % ledger_id,
+                "canvas %s" % path,
+                "directory %s" % directory,
+            ],
+        )
     return Refusal(
         "no canvas for ledger id %s: nothing at %s" % (ledger_id, path),
         "create it with `bin/canvas create %s --problem \"<the problem>\" "
