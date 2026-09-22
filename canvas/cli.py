@@ -53,6 +53,7 @@ action says what to do, and it is stated once, there.
 """
 
 import argparse
+import os
 import sys
 
 from canvas import refusal
@@ -660,6 +661,56 @@ def build_parser():
     return parser
 
 
+def _os_refusal(error, args):
+    """Any OS error at all, as a `ToolProblem` naming what the verb had in hand.
+
+    The last `except` in `main`, and the reason the class is closed rather than
+    enumerated. Every guard above this one asks the filesystem a question —
+    is the canvas there, is its directory readable — and then acts on the
+    answer, which means each of them is true of the paths somebody thought of.
+    One directory further up, a symlink, a path that changes between the check
+    and the open, and a raw `OSError` comes out of the guard's blind spot as a
+    traceback: Python's exit `1`, which `README.md` gives to "the request is
+    wrong against the store as it stands", and none of the four trailers.
+
+    `args` is what the parser produced, or `None` if it never got that far. The
+    ledger id and the node id are on it where the verb takes them, and they are
+    what makes the refusal name the thing the caller asked about rather than
+    the path alone.
+    """
+    nodes = []
+    about = []
+    for attribute, label in (("ledger_id", "ledger id"), ("base", "option --base")):
+        value = getattr(args, attribute, None)
+        if value:
+            about.append("%s %s" % (label, value))
+    for attribute in ("node_id", "after", "into"):
+        value = getattr(args, attribute, None)
+        # `--into root` names the canvas itself and not a node, and the root is
+        # kept out of `Canvas-Node:` everywhere else in this tool.
+        if value and value != "root":
+            nodes.append(value)
+    verb = getattr(args, "verb", None)
+    if verb:
+        about.append("verb %s" % verb)
+    return refusal.from_os_error(
+        store.ToolProblem,
+        error,
+        nodes=nodes,
+        about=about or ["command canvas"],
+        # This guard is outside every function that knows what it had done, so
+        # it cannot say nothing was written and must not pretend to. What it
+        # can do is name the command that answers the question.
+        aftermath=(
+            "this is the tool's outermost guard, so whether anything was "
+            "written before the error is not something it can see — "
+            "`bin/canvas read <ledger-id>` prints what the canvas holds now, "
+            "and `git -C $OPENCLAW_WORKSPACE/state/canvas log` what was "
+            "committed"
+        ),
+    )
+
+
 def main(argv):
     """Exit 0 if it worked, 1 if the request is wrong against the store as it
     stands, 2 if the tool or its environment is wrong.
@@ -667,11 +718,23 @@ def main(argv):
     One try block for all three kinds of refusal — the argument parser's, the
     store's request refusals and the store's tool problems — because they now
     print the same shape and differ only in the code they exit with.
+
+    And under those three, one more: `OSError`. The three above are refusals
+    this tool decided to make, and each of them is a condition somebody wrote
+    down. `OSError` is every condition nobody did — `PermissionError`,
+    `FileNotFoundError`, `IsADirectoryError`, `NotADirectoryError`,
+    `BrokenPipeError` and whatever the next one turns out to be — and catching
+    the base class here is what makes "no input to this command produces a
+    traceback or an unexplained exit code" a property of the structure instead
+    of a claim about a list. It is the floor and not a replacement: every guard
+    above it says something more specific, and a specific message is worth
+    more than the generic one.
     """
     parser = build_parser()
     # What `_invocation_problem` reads to name the nodes that were on the
     # command line. argparse gives `error()` a sentence and nothing else.
     parser.invocation = list(argv)
+    args = None
     try:
         args = parser.parse_args(argv)
         if getattr(args, "handler", None) is None:
@@ -689,4 +752,18 @@ def main(argv):
         return 1
     except store.ToolProblem as problem:
         _refuse(problem, 2)
+        return 2
+    except OSError as error:
+        if isinstance(error, BrokenPipeError):
+            # The consumer of stdout is gone. Python would otherwise try to
+            # flush the same dead pipe again while shutting down and print
+            # `Exception ignored in: <_io.BufferedWriter name='<stdout>'>` —
+            # which is a traceback by another name, after the refusal, on the
+            # stream a caller reads the refusal from. Point stdout at
+            # /dev/null so the refusal below is the whole of what is printed.
+            try:
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            except OSError:
+                pass
+        _refuse(_os_refusal(error, args), 2)
         return 2

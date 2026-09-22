@@ -12,6 +12,7 @@ addressed. The verdict is always xmllint's, never this module's.
 
 import os
 import re
+import stat
 import subprocess
 import sys
 from xml.parsers import expat
@@ -288,6 +289,13 @@ def main(argv):
     already the best node-naming in the tool — element, `id` and `v`, or the
     element path where there is no `id` — and what they were missing is the
     line that says what to do about it.
+
+    Under the `EnvironmentProblem`s this module raises deliberately there is
+    one more `except`, for `OSError` itself. That is the structural half: an
+    ordinary filesystem condition nobody anticipated comes out of it as a
+    refusal in this shape at exit 2, rather than as a traceback at Python's
+    exit 1 — which `README.md` gives to "the document is wrong, not the
+    validator", the opposite of what happened.
     """
     if not argv:
         _refuse(
@@ -306,15 +314,46 @@ def main(argv):
 
     invalid = []
     diagnostics = []
-    for path in argv:
-        try:
+    # Named before the loop so the guard below has it even if the very first
+    # file is the one that fails.
+    path = argv[0]
+    try:
+        for path in argv:
             problems = validate_file(path)
-        except EnvironmentProblem as error:
-            _refuse(error, 2)
-            return 2
-        diagnostics.extend(problems)
-        if problems:
-            invalid.append(path)
+            diagnostics.extend(problems)
+            if problems:
+                invalid.append(path)
+    except EnvironmentProblem as error:
+        _refuse(error, 2)
+        return 2
+    except OSError as error:
+        # The floor, with the whole of this command's work inside it. Every
+        # guard in `validate_file` asks the filesystem a question and then acts
+        # on the answer, so each of them is true of the conditions somebody
+        # wrote down; `OSError` is the ones nobody did, at whatever depth and
+        # from whatever cause, and catching the base class here is what makes
+        # "no file produces a traceback or an unexplained exit code" a property
+        # of the structure rather than a claim about a list. Exit `2` for all
+        # of them, which is the code `README.md` and `validate_file`'s own
+        # docstring already give to a validator that could not run.
+        # `canvas/refusal.py` picks the next action by errno, because `chmod`
+        # is not the repair for a path that is not a directory.
+        _refuse(
+            refusal.from_os_error(
+                EnvironmentProblem,
+                error,
+                about=["file %s" % path],
+                # True here without a qualification the guard cannot make
+                # good on: this command reads, and nothing it calls writes a
+                # byte on any path.
+                aftermath=(
+                    "nothing was written, and %s was not examined, so nothing "
+                    "is known about whether it is a valid canvas" % path
+                ),
+            ),
+            2,
+        )
+        return 2
 
     if not invalid:
         return 0
