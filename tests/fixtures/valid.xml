@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Every node type, both nesting levels, and the empty containers that are
+     legal intermediate states because one edit is one node. -->
+<canvas ledger="bc-10326884396-deliver-the-first-priority-canvas-todo-d" schema="1">
+  <text id="q4rt" v="1">The problem this canvas holds.</text>
+  <text id="jc5v" v="4">The expected value, edited three times since.</text>
+  <question id="k3xq" v="1">Does --why earn anything after fifty reasons?</question>
+  <link id="m2ph" v="1" href="https://app.basecamp.com/3934852/buckets/48039419/todos/10326884396">the todo</link>
+  <figure id="n8dz" v="2">insert -&gt; validate -&gt; commit</figure>
+  <list id="p6ws" v="1">
+    <item id="r9tk" v="1">a bullet</item>
+    <item id="s3bv" v="3">another, twice edited</item>
+  </list>
+  <list id="t7gm" v="1"/>
+  <table id="u4nc" v="1">
+    <row id="v2dh" v="1">
+      <cell id="w5kq" v="1">option</cell>
+      <cell id="x3mz" v="1">cost</cell>
+    </row>
+    <row id="y6pb" v="1"/>
+  </table>
+  <table id="z9sf" v="1"/>
+  <section id="a2jk" v="1" title="An outer section">
+    <text id="b4hd" v="1">A leaf inside it.</text>
+    <section id="c7vq" v="1" title="An inner section, one level deeper">
+      <text id="d3nm" v="1">A leaf at the deepest legal level.</text>
+      <question id="e8zs" v="1">Still open down here.</question>
+    </section>
+    <section id="f5bt" v="1" title="An empty inner section"/>
+  </section>
+  <section id="g2wp" v="1" title="An empty outer section"/>
+</canvas>
