@@ -569,6 +569,16 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   `xmllint` is missing, a `--base` that is not a sha. Each names the thing it
   *is* about on `Canvas-About:` instead: the ledger id, the variable, the
   binary, the value that was rejected. Never an empty list of nodes.
+- **A refusal names every node it has, and an `insert` that missed its position
+  has none.** Every id the refusal is genuinely holding goes on a
+  `Canvas-Node:` line: a `move` to a position that does not exist names the node
+  being moved as well as the position it missed, because both are nodes of this
+  canvas and a caller has to act on both. An `insert` that missed is the one
+  placement refusal with nothing to name there — its node was minted moments
+  earlier and has never been in the canvas, so no commit names it,
+  `bin/canvas read` cannot show it, and the next attempt mints a different one.
+  Printing that draw under `Canvas-Node:` would hand back an id a caller can
+  neither look up nor reuse, so it names the ledger id and the position instead.
 - **`Canvas-Exit:` is why no refusal exits with an unexplained code.** The
   meaning is this document's table's own words, printed beside the number,
   because a caller reading stderr cannot see a table in a Markdown file. The
