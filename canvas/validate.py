@@ -180,25 +180,52 @@ def validate_file(path):
     canvas".
     """
     if not os.path.isfile(path):
-        # `os.path.isfile` answers False both for a file that is not there and
-        # for one in a directory this process may not look in. Those are
-        # opposite facts and only the first is "name a file that is there".
-        directory = os.path.dirname(path) or "."
-        if os.path.isdir(directory) and not os.access(directory, os.R_OK | os.X_OK):
+        # `os.path.isfile` answers False for a file that is not there, for one
+        # in a directory this process may not look in, and for a directory or
+        # a symlink loop at that path — and only the first of those is "name a
+        # file that is there". So the question goes to the filesystem instead
+        # of being inferred from a second `os.path` call: `os.stat` answers
+        # with the thing itself or with an errno, and `ENOENT` is the only
+        # errno that means absent.
+        #
+        # This used to test `os.path.dirname(path)` — one level, guarded by
+        # `os.path.isdir(directory)`, which is itself False when a directory
+        # further up is untraversable, so the guard never fired and the tool
+        # reported "no such file" about a file it had no way to know anything
+        # about. A test at a fixed depth can always be defeated by one more
+        # directory.
+        try:
+            found = os.stat(path)
+        except FileNotFoundError:
             raise EnvironmentProblem(
-                "cannot tell whether %s is there: %s is there and this "
-                "process cannot look in it" % (path, directory),
-                "make %s readable and traversable — `ls -ld %s` shows who owns "
-                "it and what its mode is, and `chmod u+rx %s` is usually the "
-                "repair — and re-run; nothing was examined"
-                % (directory, directory, directory),
-                about=["file %s" % path, "directory %s" % directory],
+                "no such file: %s" % path,
+                "name a file that is there and re-run `bin/canvas-validate "
+                "<file>`; a canvas the store holds is at "
+                "$OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml",
+                about=["file %s" % path],
+            )
+        except OSError as error:
+            raise EnvironmentProblem(
+                "cannot tell whether %s is there: looking at it was refused: "
+                "%s" % (path, refusal.os_condition(error)),
+                refusal.os_next_action(
+                    error,
+                    aftermath=(
+                        "nothing was examined, and whether %s is there at all "
+                        "is still unknown" % path
+                    ),
+                ),
+                about=["file %s" % path]
+                + refusal.os_about(error, unless=["file %s" % path]),
             )
         raise EnvironmentProblem(
-            "no such file: %s" % path,
-            "name a file that is there and re-run `bin/canvas-validate "
-            "<file>`; a canvas the store holds is at "
-            "$OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml",
+            "not a file: %s is %s"
+            % (path, "a directory" if stat.S_ISDIR(found.st_mode)
+               else "there and is not a regular file"),
+            "name a regular file and re-run `bin/canvas-validate <file>`; "
+            "`ls -ld %s` shows what is there now, and a canvas the store holds "
+            "is a file at $OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml"
+            % path,
             about=["file %s" % path],
         )
     if not os.path.isfile(SCHEMA_PATH):

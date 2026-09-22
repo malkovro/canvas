@@ -62,6 +62,7 @@ import collections
 import os
 import re
 import secrets
+import stat
 import subprocess
 
 from canvas import document
@@ -174,38 +175,100 @@ def canvas_path(canvas_dir, ledger_id):
 # next action to be added to two of.
 
 
+#: What `os.stat` found where a canvas belongs, for a refusal to name. Not an
+#: exhaustive taxonomy of st_mode: what a caller needs is enough to recognise
+#: the thing and move it out of the way. No symlink entry, because `os.stat`
+#: follows them — a link to a directory reads as a directory, and a link to
+#: nothing raises ENOENT, which is the right answer for it: a write renames
+#: over the link and succeeds.
+_NOT_A_FILE = (
+    (stat.S_ISDIR, "a directory"),
+    (stat.S_ISFIFO, "a named pipe"),
+    (stat.S_ISSOCK, "a socket"),
+    (stat.S_ISBLK, "a block device"),
+    (stat.S_ISCHR, "a character device"),
+)
+
+
+def _what_is_there(mode):
+    for predicate, name in _NOT_A_FILE:
+        if predicate(mode):
+            return name
+    return "not a regular file"
+
+
 def _no_canvas(ledger_id, path):
     """No canvas for that ledger id. A fact about the store, so exit 1.
 
-    Unless the absence cannot be trusted. `os.path.isfile` answers False both
-    for a canvas that is not there and for one this process is not allowed to
-    look for, and those are opposite facts: the first is a request to re-decide
-    against, the second is a store that is fine and a process that cannot see
-    it. Told apart here rather than at the three call sites, because getting it
-    wrong sends a caller to `create` — which would refuse in turn, or worse,
-    succeed against a canvas it could not see.
+    Unless it is not a fact. `os.path.isfile` answers False for a canvas that
+    is not there, for one this process is not allowed to look for, and for a
+    directory or a symlink loop sitting where the canvas belongs — four
+    different states flattened into one bit, and "no canvas for that ledger id"
+    is true of exactly one of them. The others make it a false statement whose
+    next action, `create` it, provably does not succeed: `create` refuses in
+    turn, at a different exit code, saying something different again.
+
+    So the question is put to the filesystem rather than inferred from it.
+    `os.stat` answers with the thing itself or with an errno, and `ENOENT` is
+    the only errno that means absent — every other one means this process could
+    not find out, which is a different refusal at a different exit code.
+
+    This used to test `os.path.dirname(path)`: one level, with
+    `os.path.isdir(directory) and not os.access(directory, R_OK | X_OK)`. That
+    is right for the canvas's own directory and wrong for everything above it,
+    because an unreadable *grandparent* makes `os.path.isdir` itself answer
+    False, the guard never fires, and the tool reports a canvas absent that it
+    has no way of knowing anything about. A test at a fixed depth can always be
+    defeated by one more directory; asking the filesystem cannot.
     """
-    directory = os.path.dirname(path) or "."
-    if os.path.isdir(directory) and not os.access(directory, os.R_OK | os.X_OK):
-        return ToolProblem(
-            "cannot tell whether there is a canvas for ledger id %s: %s is "
-            "there and this process cannot look in it" % (ledger_id, directory),
-            "make %s readable and traversable — `ls -ld %s` shows who owns it "
-            "and what its mode is, and `chmod u+rx %s` is usually the repair — "
-            "and re-run; nothing was read, written or committed, and whether "
-            "that canvas exists is still unknown"
-            % (directory, directory, directory),
-            about=[
-                "ledger id %s" % ledger_id,
-                "canvas %s" % path,
-                "directory %s" % directory,
-            ],
+    try:
+        found = os.stat(path)
+    except FileNotFoundError:
+        # The one errno that means what this refusal is about to say.
+        return Refusal(
+            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path),
+            "create it with `bin/canvas create %s --problem \"<the problem>\" "
+            "--expected-value \"<the expected value>\"`, or re-run with the ledger "
+            "id whose canvas you meant" % ledger_id,
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
         )
-    return Refusal(
-        "no canvas for ledger id %s: nothing at %s" % (ledger_id, path),
-        "create it with `bin/canvas create %s --problem \"<the problem>\" "
-        "--expected-value \"<the expected value>\"`, or re-run with the ledger "
-        "id whose canvas you meant" % ledger_id,
+    except OSError as error:
+        return ToolProblem(
+            "cannot tell whether there is a canvas for ledger id %s: looking "
+            "at %s was refused: %s"
+            % (ledger_id, path, refusal.os_condition(error)),
+            refusal.os_next_action(
+                error,
+                aftermath=(
+                    "nothing was read, written or committed, and whether that "
+                    "canvas exists is still unknown"
+                ),
+            ),
+            about=["ledger id %s" % ledger_id, "canvas %s" % path]
+            + refusal.os_about(error, unless=["canvas %s" % path]),
+        )
+    if stat.S_ISREG(found.st_mode):
+        # `os.path.isfile` said no and `os.stat` says yes, so the store changed
+        # in between. Not a request to re-decide: the same request may well
+        # work now.
+        return ToolProblem(
+            "the canvas for ledger id %s appeared at %s between the check for "
+            "it and the look at it" % (ledger_id, path),
+            "re-run the same command; the canvas is there now, and this "
+            "refusal is the tool declining to act on a store that changed "
+            "under it rather than guess which state it meant",
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        )
+    # Something is there. "Nothing at <path>" would be false, and `create`,
+    # which is what a caller told there is nothing would reach for, refuses
+    # this with a different message again.
+    return ToolProblem(
+        "there is no canvas for ledger id %s at %s, but there is something "
+        "there: %s" % (ledger_id, path, _what_is_there(found.st_mode)),
+        "move %s out of the way — `ls -ld %s` shows what it is — and then "
+        "`bin/canvas create %s --problem \"<the problem>\" --expected-value "
+        "\"<the expected value>\"`; a canvas is a regular file and this store "
+        "will not write over whatever that is" % (path, path, ledger_id),
         about=["ledger id %s" % ledger_id, "canvas %s" % path],
     )
 
