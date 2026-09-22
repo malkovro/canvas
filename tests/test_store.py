@@ -2018,6 +2018,8 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
         "collections", "os", "re", "secrets", "subprocess", "document",
         "validate_file",
         "EnvironmentProblem",
+        # The shape every refusal takes, and the one place it is rendered.
+        "refusal",
     }
 
     def store(self):
@@ -2619,6 +2621,425 @@ class EveryAppliedEditCommitCarriesAllThreeTrailers(VerbTestCase):
             "Canvas-Author: %s\n" % self.trailers(self.bodies()[-1])["Canvas-Author"],
             printed,
         )
+
+
+class EveryRefusalNamesTheNodesAndTheNextAction(VerbTestCase):
+    """The todo's done condition, verbatim: every refusal path in the tool
+    prints the node ids involved and a concrete next action, and no refusal
+    exits with an unexplained non-zero code.
+
+    `engineering-spec.md` section *What to copy* takes IWE's error surface
+    unconditionally — "a refusal names every node it matched and how to narrow,
+    because an agent can act on that and cannot act on the word 'refused'" —
+    and these are that sentence held to.
+
+    These assert behaviour and not wording, like everything else here: that the
+    ids that were on the command line are on `Canvas-Node:` lines, that there
+    is a `Canvas-Next:` line and what it points at, that `Canvas-Exit:` carries
+    the code the process actually exited with, and that the store did not move.
+    """
+
+    TRAILERS = ("Canvas-Node", "Canvas-About", "Canvas-Next", "Canvas-Exit")
+
+    def surface(self, stderr):
+        """The trailer block a refusal ends with, as a map of name -> values."""
+        found = dict((name, []) for name in self.TRAILERS)
+        for line in stderr.splitlines():
+            for name in self.TRAILERS:
+                if line.startswith("%s: " % name):
+                    found[name].append(line.split(": ", 1)[1])
+        return found
+
+    def assertSurface(self, expected_code, code, stderr, msg=None, nodes=(),
+                      about=(), next_action=()):
+        """Everything the done condition asks of one refusal."""
+        self.assertEqual(expected_code, code, "%s\n%s" % (msg, stderr))
+        trailers = self.surface(stderr)
+        # A concrete next action, exactly one, and not an empty one.
+        self.assertEqual(1, len(trailers["Canvas-Next"]), "%s\n%s" % (msg, stderr))
+        self.assertTrue(trailers["Canvas-Next"][0].strip(), msg)
+        # The code, and what the code means, in band.
+        self.assertEqual(1, len(trailers["Canvas-Exit"]), "%s\n%s" % (msg, stderr))
+        self.assertTrue(
+            trailers["Canvas-Exit"][0].startswith("%d " % code),
+            "%s\n%s" % (msg, stderr),
+        )
+        self.assertIn("—", trailers["Canvas-Exit"][0], msg)
+        # A refusal with no node names what it is about instead. Never neither.
+        self.assertTrue(
+            trailers["Canvas-Node"] or trailers["Canvas-About"],
+            "%s\n%s" % (msg, stderr),
+        )
+        for node in nodes:
+            self.assertIn(node, trailers["Canvas-Node"], "%s\n%s" % (msg, stderr))
+        for thing in about:
+            self.assertTrue(
+                any(thing in each for each in trailers["Canvas-About"]),
+                "%s\n%s" % (msg, stderr),
+            )
+        for phrase in next_action:
+            self.assertIn(phrase, trailers["Canvas-Next"][0], "%s\n%s" % (msg, stderr))
+        return trailers
+
+    def section_with_children(self):
+        section = self.inserted(
+            "--into", "root", "--type", "section", "--title", "S",
+            "--why", "a section to hold the options",
+        )
+        first = self.inserted("--into", section, "--text", "one", "--why", "one")
+        second = self.inserted("--into", section, "--text", "two", "--why", "two")
+        return section, first, second
+
+    # -- the five families the todo names -------------------------------
+
+    def test_an_absent_why_names_the_node_the_edit_was_for(self):
+        # The family the todo names first, and argparse's own exit 2: the node
+        # id was on the command line and the message never carried it.
+        other = self.value_id
+        for edit in (
+            ("replace", self.problem_id, "--text", "restated"),
+            ("remove", self.problem_id),
+            ("move", self.problem_id, "--after", other),
+            ("insert", "--into", "root", "--text", "a node"),
+        ):
+            before = self.state()
+            code, stdout, stderr = self.verb(*edit)
+            named = [each for each in edit[1:] if NODE_ID.match(each)]
+            self.assertSurface(
+                2, code, stderr, msg=edit, nodes=named,
+                about=["ledger id a-ledger-row", "option --why"],
+                next_action=["--why"],
+            )
+            self.assertEqual(b"", stdout, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_an_empty_why_names_the_node_the_edit_was_for(self):
+        # The store's half of the same family. One family, one surface.
+        for why in ("", "   ", "\t\n"):
+            before = self.state()
+            code, stdout, stderr = self.verb(
+                "replace", self.problem_id, "--text", "restated", "--why", why
+            )
+            self.assertSurface(
+                2, code, stderr, msg=why, nodes=[self.problem_id],
+                about=["ledger id a-ledger-row", "option --why"],
+                next_action=["--why"],
+            )
+            self.assertEqual(b"", stdout, why)
+            self.assertEqual(before, self.state(), why)
+
+    def test_a_schema_violation_names_the_node_and_points_at_the_schema(self):
+        # The vocabulary is closed and is written in schema/canvas.rng alone,
+        # so the next action points at the schema and does not restate it.
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "insert", "--into", "root", "--type", "decision",
+            "--text", "We chose A.", "--why", "settle it",
+        )
+        trailers = self.assertSurface(
+            1, code, stderr, msg="decision",
+            about=["state/canvas"],
+            next_action=["schema/canvas.rng"],
+        )
+        # The node the refused write would have written, named as a node —
+        # not only buried in the validator's diagnostic.
+        self.assertEqual(1, len(trailers["Canvas-Node"]), stderr)
+        minted = trailers["Canvas-Node"][0]
+        self.assertTrue(NODE_ID.match(minted), minted)
+        self.assertIn('id="%s"' % minted, stderr)
+        self.assertEqual(b"", stdout)
+        self.assertEqual(before, self.state())
+
+    def test_a_two_node_edit_names_the_container_and_every_child(self):
+        section, first, second = self.section_with_children()
+        for edit in (
+            ("replace", section, "--type", "text", "--text", "We chose A."),
+            ("replace", section, "--text", "We chose A."),
+            ("remove", section),
+        ):
+            before = self.state()
+            code, stdout, stderr = self.verb(*(edit + ("--why", "settle it")))
+            self.assertSurface(
+                1, code, stderr, msg=edit,
+                nodes=[section, first, second],
+                about=["ledger id a-ledger-row"],
+                next_action=["--why"],
+            )
+            self.assertEqual(b"", stdout, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_an_unknown_node_id_says_which_command_prints_the_real_ones(self):
+        # "nothing was changed" is a fact about the past. The next action is
+        # the command that hands back the ids that do exist.
+        for edit in (
+            ("replace", "zz99", "--text", "x", "--why", "w"),
+            ("remove", "zz99", "--why", "w"),
+            ("move", "zz99", "--after", self.value_id, "--why", "w"),
+            ("move", self.problem_id, "--after", "zz99", "--why", "w"),
+            ("insert", "--after", "zz99", "--text", "x", "--why", "w"),
+            ("insert", "--into", "zz99", "--text", "x", "--why", "w"),
+        ):
+            before = self.state()
+            code, stdout, stderr = self.verb(*edit)
+            self.assertSurface(
+                1, code, stderr, msg=edit, nodes=["zz99"],
+                about=["ledger id a-ledger-row"],
+                next_action=["bin/canvas read a-ledger-row"],
+            )
+            self.assertEqual(b"", stdout, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_history_of_an_unknown_node_says_which_command_prints_the_real_ones(self):
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", "zz99")
+        self.assertSurface(
+            1, code, stderr, msg="history", nodes=["zz99"],
+            about=["ledger id a-ledger-row"],
+            next_action=["bin/canvas read a-ledger-row"],
+        )
+        self.assertEqual(b"", stdout)
+
+    def test_a_move_that_misses_names_the_node_being_moved_as_well(self):
+        # Two nodes are involved and the refusal used to name only one of them.
+        code, _, stderr = self.verb(
+            "move", self.problem_id, "--after", "zz99", "--why", "w"
+        )
+        self.assertSurface(
+            1, code, stderr, nodes=[self.problem_id, "zz99"],
+            about=["ledger id a-ledger-row"],
+        )
+
+    def test_the_stale_base_branch_names_the_node_the_ledger_and_both_shas(self):
+        base = self.read_sha()
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "theirs", "--why", "they revised it"
+        )
+        self.assertEqual(0, code, stderr)
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "mine", "--why", "mine",
+            "--base", base,
+        )
+        self.assertSurface(
+            1, code, stderr, nodes=[self.problem_id],
+            about=[
+                "ledger id a-ledger-row",
+                "option --base %s" % base,
+                "the head",
+            ],
+            next_action=["bin/canvas read a-ledger-row", "--base"],
+        )
+        # The diff is still handed back: the branch's whole point.
+        self.assertIn("diff --git", stderr)
+        self.assertEqual(b"", stdout)
+        self.assertEqual(before, self.state())
+
+    def test_a_base_that_is_not_an_ancestor_names_the_node_and_the_two_shas(self):
+        # The third of the three ways a --base can be unusable, and the one
+        # that needs a commit nothing here descends from to reach at all.
+        tree = self.git("rev-parse", "HEAD^{tree}").strip()
+        orphan = self.git(
+            "-c", "user.name=test", "-c", "user.email=test@localhost",
+            "commit-tree", "-m", "an orphan", tree,
+        ).strip()
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "x", "--why", "w",
+            "--base", orphan,
+        )
+        self.assertSurface(
+            1, code, stderr, nodes=[self.problem_id],
+            about=["ledger id a-ledger-row", "option --base %s" % orphan,
+                   "the head"],
+            next_action=["bin/canvas read a-ledger-row"],
+        )
+        self.assertEqual(b"", stdout)
+        self.assertEqual(before, self.state())
+
+    def read_sha(self):
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(0, code, stderr)
+        return stdout.decode("utf-8").splitlines()[0].split(": ", 1)[1]
+
+    # -- and every other refusal the command line can reach --------------
+
+    def test_every_refusal_the_command_line_reaches_prints_the_whole_shape(self):
+        """The done condition applied to the whole inventory, not five of it.
+
+        Each of these is a refusal a caller can reach without tampering with
+        the repository. Every one has to exit with the code its kind exits
+        with, name something, say what to do, and say what its code means.
+        """
+        section, first, _ = self.section_with_children()
+        for expected, args in (
+            # argparse's own eight.
+            (2, ()),
+            (2, ("frobnicate", "a-ledger-row")),
+            (2, ("read",)),
+            (2, ("history", "a-ledger-row")),
+            (2, ("read", "a-ledger-row", "--nope")),
+            (2, ("create", "b-row", "--expected-value", "V")),
+            (2, ("insert", "a-ledger-row", "--after", first, "--into", "root",
+                 "--why", "w")),
+            (2, ("insert", "a-ledger-row", "--why", "w", "--text", "x")),
+            # The store's, exit 2: the invocation or the environment.
+            (2, ("read", "../../../etc/passwd")),
+            (2, ("read", ".hidden")),
+            (2, ("replace", "a-ledger-row", first, "--text", "x", "--why", "w",
+                 "--base", "not-a-sha")),
+            # The store's, exit 1: true statements about the store.
+            (1, ("create", "a-ledger-row", "--problem", "P",
+                 "--expected-value", "V")),
+            (1, ("read", "no-such-row")),
+            (1, ("history", "no-such-row", "zz99")),
+            (1, ("history", "a-ledger-row", "zz99")),
+            (1, ("replace", "a-ledger-row", "root", "--text", "x", "--why", "w")),
+            (1, ("remove", "a-ledger-row", "root", "--why", "w")),
+            (1, ("replace", "a-ledger-row", "zz99", "--text", "x", "--why", "w")),
+            (1, ("insert", "a-ledger-row", "--into", "zz99", "--text", "x",
+                 "--why", "w")),
+            (1, ("insert", "a-ledger-row", "--after", "zz99", "--text", "x",
+                 "--why", "w")),
+            (1, ("insert", "a-ledger-row", "--into", "root", "--type", "decision",
+                 "--text", "x", "--why", "w")),
+            (1, ("replace", "a-ledger-row", section, "--type", "text",
+                 "--text", "x", "--why", "w")),
+            (1, ("remove", "a-ledger-row", section, "--why", "w")),
+            (1, ("move", "a-ledger-row", section, "--into", first, "--why", "w")),
+            (1, ("move", "a-ledger-row", section, "--after", "zz99", "--why", "w")),
+            (1, ("replace", "a-ledger-row", first, "--text", "x", "--why", "w",
+                 "--base", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")),
+            (1, ("insert", "a-ledger-row", "--after", "root", "--text", "x",
+                 "--why", "w")),
+        ):
+            before = self.state()
+            code, stdout, stderr = self.run_canvas(*args)
+            self.assertSurface(expected, code, stderr, msg=args)
+            self.assertEqual(b"", stdout, args)
+            self.assertEqual(before, self.state(), args)
+
+    def test_a_read_of_an_invalid_stored_document_explains_its_own_exit(self):
+        # The one non-zero exit that is not an exception, and the easiest to
+        # miss: the document is printed and the exit code is 1 all the same.
+        path = self.canvas_file()
+        with open(path, "r", encoding="utf-8") as handle:
+            body = handle.read()
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(body.replace("<text", "<decision", 1).replace(
+                "</text>", "</decision>", 1
+            ))
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
+        self.assertSurface(
+            1, code, stderr, about=["ledger id a-ledger-row"],
+            next_action=["schema/canvas.rng"],
+        )
+        # The document is still handed back: a caller cannot repair what it
+        # cannot see.
+        self.assertIn(b"<canvas", stdout)
+
+    # -- the refusals that have no node, and must still name something ---
+
+    def test_the_environment_refusals_name_the_thing_they_are_about(self):
+        code, _, stderr = self.run_canvas(
+            "read", "a-ledger-row", workspace=None
+        )
+        self.assertSurface(
+            2, code, stderr, about=["OPENCLAW_WORKSPACE"],
+            next_action=["OPENCLAW_WORKSPACE"],
+        )
+        not_a_directory = os.path.join(self.workspace, "a-file")
+        with open(not_a_directory, "w", encoding="utf-8") as handle:
+            handle.write("not a workspace\n")
+        code, _, stderr = self.run_canvas(
+            "read", "a-ledger-row", workspace=not_a_directory
+        )
+        self.assertSurface(
+            2, code, stderr, about=["OPENCLAW_WORKSPACE", not_a_directory],
+            next_action=["OPENCLAW_WORKSPACE"],
+        )
+
+    def without(self, missing, *args, **kwargs):
+        """Run bin/canvas with `missing` and nothing else off PATH.
+
+        Only the one binary goes missing: with both gone, whichever the verb
+        reaches first is the one that refuses, and the test would not be
+        about the one it names.
+        """
+        empty = tempfile.mkdtemp(prefix="canvas-store-test-no-%s-" % missing)
+        self.addCleanup(shutil.rmtree, empty, True)
+        for tool in ("git", "xmllint"):
+            if tool != missing:
+                os.symlink(shutil.which(tool), os.path.join(empty, tool))
+        environment = dict(
+            os.environ,
+            OPENCLAW_WORKSPACE=kwargs.pop("workspace", self.workspace),
+            PATH=empty,
+        )
+        result = subprocess.run(
+            [sys.executable, CANVAS] + list(args),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        return result.returncode, result.stderr.decode("utf-8", "replace")
+
+    def test_a_missing_git_names_git_and_says_what_to_do_on_every_verb(self):
+        # `create` used to run `git init` outside the path that catches a
+        # missing git, so it came out as a traceback and Python's exit 1 —
+        # where README's table says a missing git is exit 2. An agent
+        # following the documented contract would have re-read and re-decided
+        # forever over a tool that is simply not installed.
+        # A workspace with no canvas repository at all, so that `create`
+        # really reaches `git init` rather than finding a repository already
+        # there and never running it.
+        fresh = tempfile.mkdtemp(prefix="canvas-store-test-fresh-")
+        self.addCleanup(shutil.rmtree, fresh, True)
+        for workspace, args in (
+            (self.workspace, ("history", "a-ledger-row", self.problem_id)),
+            (self.workspace, ("read", "a-ledger-row")),
+            (self.workspace, ("replace", "a-ledger-row", self.problem_id,
+                              "--text", "x", "--why", "w")),
+            (fresh, ("create", "b-row", "--problem", "P",
+                     "--expected-value", "V")),
+        ):
+            code, stderr = self.without("git", *args, workspace=workspace)
+            self.assertNotIn("Traceback", stderr, args)
+            self.assertSurface(
+                2, code, stderr, msg=args, about=["command git"],
+                next_action=["git"],
+            )
+
+    def test_a_missing_xmllint_names_the_validator_and_says_what_to_do(self):
+        code, stderr = self.without(
+            "xmllint", "replace", "a-ledger-row", self.problem_id,
+            "--text", "x", "--why", "w",
+        )
+        self.assertNotIn("Traceback", stderr)
+        self.assertSurface(
+            2, code, stderr, about=["command xmllint"], next_action=["xmllint"],
+        )
+
+    # -- and the rule itself, which the interpreter now keeps -------------
+
+    def test_a_refusal_cannot_be_built_without_saying_what_to_do(self):
+        from canvas import store
+
+        for kind in (store.Refusal, store.ToolProblem):
+            with self.assertRaises(TypeError):
+                kind("something is wrong")
+            with self.assertRaises(ValueError):
+                kind("something is wrong", "", about=["ledger id a-ledger-row"])
+
+    def test_a_refusal_cannot_be_built_without_naming_something(self):
+        from canvas import store
+
+        # A refusal with no node is not an exemption: it names what it is
+        # about instead, and "neither" is not a state it can be built in.
+        for kind in (store.Refusal, store.ToolProblem):
+            with self.assertRaises(ValueError):
+                kind("something is wrong", "do this instead")
+            kind("something is wrong", "do this instead", nodes=["ab2c"])
+            kind("something is wrong", "do this instead", about=["ledger id x"])
+
 
 if __name__ == "__main__":
     unittest.main()
