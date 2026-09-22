@@ -16,6 +16,8 @@ import subprocess
 import sys
 from xml.parsers import expat
 
+from canvas import refusal
+
 SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "schema",
@@ -33,8 +35,30 @@ _DIAGNOSTIC = re.compile(
 )
 
 
-class EnvironmentProblem(Exception):
-    """The tool or its invocation is wrong, as opposed to the document."""
+class EnvironmentProblem(refusal.Refused):
+    """The tool or its invocation is wrong, as opposed to the document.
+
+    A `refusal.Refused`, so it carries the thing it is about and the next
+    action like every other refusal in the tool. None of these has a node to
+    name — a validator that cannot run never read a document — so each names
+    what it does have instead: the file, the schema, the binary.
+    """
+
+
+#: What this command's exit codes mean, as `README.md` section *Validating a
+#: file by hand* states them and as `bin/canvas-validate` restates them. Printed
+#: on the refusal itself, because a caller reading stderr cannot see a table in
+#: a Markdown file.
+EXIT_MEANING = {
+    1: (
+        "the document is wrong, not the validator; repair the node each "
+        "diagnostic names"
+    ),
+    2: (
+        "the tool or its invocation is wrong; the document was not examined, "
+        "so do not touch the canvas"
+    ),
+}
 
 
 def _scan(path):
@@ -124,9 +148,21 @@ def validate_file(path):
     canvas".
     """
     if not os.path.isfile(path):
-        raise EnvironmentProblem("no such file: %s" % path)
+        raise EnvironmentProblem(
+            "no such file: %s" % path,
+            "name a file that is there and re-run `bin/canvas-validate "
+            "<file>`; a canvas the store holds is at "
+            "$OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml",
+            about=["file %s" % path],
+        )
     if not os.path.isfile(SCHEMA_PATH):
-        raise EnvironmentProblem("schema not found: %s" % SCHEMA_PATH)
+        raise EnvironmentProblem(
+            "schema not found: %s" % SCHEMA_PATH,
+            "restore schema/canvas.rng in this checkout; what a canvas node "
+            "may be is written there and nowhere else, so there is nothing to "
+            "validate against until it is back",
+            about=["schema %s" % SCHEMA_PATH],
+        )
 
     not_well_formed = _wellformedness_problem(path)
     if not_well_formed is not None:
@@ -139,14 +175,28 @@ def validate_file(path):
             stderr=subprocess.PIPE,
         )
     except OSError as error:
-        raise EnvironmentProblem("cannot run xmllint: %s" % error)
+        raise EnvironmentProblem(
+            "cannot run xmllint: %s" % error,
+            "put xmllint on PATH — it ships with libxml2, as `brew install "
+            "libxml2` or `apt install libxml2-utils` — and re-run; until it is "
+            "there no canvas can be validated, read or written",
+            about=["command xmllint"],
+        )
 
     if result.returncode == 0:
         return []
     if result.returncode not in _XMLLINT_DOCUMENT_PROBLEM:
         raise EnvironmentProblem(
             "xmllint exited %d validating %s against %s:\n%s"
-            % (result.returncode, path, SCHEMA_PATH, result.stderr.decode("utf-8", "replace").strip())
+            % (result.returncode, path, SCHEMA_PATH, result.stderr.decode("utf-8", "replace").strip()),
+            "repair %s until xmllint can compile it — the lines above are "
+            "xmllint's own report of why it cannot — and re-run; %s was never "
+            "examined" % (SCHEMA_PATH, path),
+            about=[
+                "file %s" % path,
+                "schema %s" % SCHEMA_PATH,
+                "xmllint exit %d" % result.returncode,
+            ],
         )
 
     lines = _scan(path)
@@ -174,21 +224,66 @@ def validate_file(path):
     return problems
 
 
+def _refuse(refused, code):
+    """Print one refusal in the shape every refusal in the tool prints."""
+    for line in refusal.lines("canvas-validate", refused, code, EXIT_MEANING[code]):
+        sys.stderr.write("%s\n" % line)
+
+
 def main(argv):
     """Exit 0 if every file given is a valid canvas, 1 if one is not, 2 if the
-    validator itself cannot run."""
+    validator itself cannot run.
+
+    Both non-zero exits print the same shape: the message, the diagnostics, the
+    files the refusal is about, the next action, and the code with what it
+    means. A caller reading stderr cannot see `README.md`'s table, so the
+    meaning of the code travels with the refusal.
+
+    The diagnostics are `validate_file`'s and are printed unchanged. They are
+    already the best node-naming in the tool — element, `id` and `v`, or the
+    element path where there is no `id` — and what they were missing is the
+    line that says what to do about it.
+    """
     if not argv:
-        sys.stderr.write("usage: canvas-validate FILE [FILE ...]\n")
+        _refuse(
+            refusal.Refused(
+                "no file to validate: this command validates the files it is "
+                "given, and it was given none",
+                "name at least one file: `bin/canvas-validate <file> [<file> "
+                "...]`; a canvas the store holds is at "
+                "$OPENCLAW_WORKSPACE/state/canvas/<ledger-id>.xml",
+                about=["argument FILE"],
+                details=["usage: canvas-validate FILE [FILE ...]"],
+            ),
+            2,
+        )
         return 2
-    invalid = False
+
+    invalid = []
+    diagnostics = []
     for path in argv:
         try:
             problems = validate_file(path)
         except EnvironmentProblem as error:
-            sys.stderr.write("canvas-validate: %s\n" % error)
+            _refuse(error, 2)
             return 2
-        for problem in problems:
-            sys.stderr.write("%s\n" % problem)
+        diagnostics.extend(problems)
         if problems:
-            invalid = True
-    return 1 if invalid else 0
+            invalid.append(path)
+
+    if not invalid:
+        return 0
+    _refuse(
+        refusal.Refused(
+            "not a valid canvas: %s" % ", ".join(invalid),
+            "repair the file at the line each diagnostic above names, then "
+            "re-run `bin/canvas-validate %s`; what a canvas node may be is "
+            "written in %s and nowhere else, and `xmllint --noout --relaxng "
+            "<that schema> <file>` asks it directly"
+            % (" ".join(invalid), SCHEMA_PATH),
+            about=["file %s" % path for path in invalid],
+            details=diagnostics,
+        ),
+        1,
+    )
+    return 1
