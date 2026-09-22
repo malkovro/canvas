@@ -20,6 +20,7 @@ impossible rather than merely unlikely.
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -3305,6 +3306,322 @@ class AnUnreadableCanvasIsARefusalAndNotATraceback(RefusalSurface, VerbTestCase)
             store._one_node_only(path, root, self.problem_id)
         self.assertEqual([self.problem_id], caught.exception.nodes)
         self.assertTrue(caught.exception.next_action.strip())
+
+
+class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase):
+    """The class, not the instances: no OS condition at any depth.
+
+    Three rounds of this work each closed the conditions they were handed and
+    each were shown a new one — the canvas file's own mode, then its
+    directory's, then its *grand*parent's. The reason is that a guard which
+    asks the filesystem a question and acts on the answer is an enumeration,
+    and an enumeration can always be extended by one directory. So these tests
+    do not enumerate either: `test_every_verb_survives_every_ancestor` walks
+    the whole chain from the canvas file to the workspace and asserts the
+    surface holds at every one of them, which is a claim a later change can
+    re-run rather than take on trust.
+
+    Every test restores the modes it set in a `finally`, so a failing
+    assertion cannot leave an unreadable directory behind and break the tests
+    that run after it — or defeat `shutil.rmtree` in the fixture's cleanup.
+    """
+
+    #: The canvas file, then every directory above it up to the workspace. The
+    #: order is deepest first, which is the order the three earlier rounds of
+    #: this work discovered them in.
+    def chain(self):
+        return [
+            self.canvas_file(),
+            self.canvas_dir,
+            os.path.join(self.workspace, "state"),
+            self.workspace,
+        ]
+
+    def at_mode(self, path, mode):
+        """Set a mode for the duration of a `with` block, and put it back."""
+        original = stat.S_IMODE(os.stat(path).st_mode)
+        os.chmod(path, mode)
+        return original
+
+    def validate(self, *paths):
+        """Run bin/canvas-validate. Returns (exit code, stderr text)."""
+        result = subprocess.run(
+            [sys.executable, VALIDATE] + list(paths),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return result.returncode, result.stderr.decode("utf-8", "replace")
+
+    def invocations(self):
+        """Every verb of bin/canvas, with arguments that reach the store."""
+        return [
+            ("read", "a-ledger-row"),
+            ("history", "a-ledger-row", self.problem_id),
+            ("replace", "a-ledger-row", self.problem_id, "--text", "x",
+             "--why", "w"),
+            ("insert", "a-ledger-row", "--after", self.problem_id,
+             "--text", "x", "--why", "w"),
+            ("remove", "a-ledger-row", self.problem_id, "--why", "w"),
+            ("move", "a-ledger-row", self.problem_id, "--into", "root",
+             "--why", "w"),
+            ("create", "b-row", "--problem", "P", "--expected-value", "V"),
+        ]
+
+    def assertConforms(self, code, stderr, msg):
+        """Non-zero, no traceback, and the two lines a caller acts on."""
+        self.assertNotIn("Traceback (most recent call last)", stderr, msg)
+        self.assertNotEqual(0, code, "%s\n%s" % (msg, stderr))
+        trailers = self.surface(stderr)
+        self.assertEqual(1, len(trailers["Canvas-Next"]), "%s\n%s" % (msg, stderr))
+        self.assertTrue(trailers["Canvas-Next"][0].strip(), msg)
+        self.assertEqual(1, len(trailers["Canvas-Exit"]), "%s\n%s" % (msg, stderr))
+        self.assertTrue(
+            trailers["Canvas-Exit"][0].startswith("%d " % code),
+            "%s\n%s" % (msg, stderr),
+        )
+        self.assertTrue(
+            trailers["Canvas-Node"] or trailers["Canvas-About"],
+            "%s\n%s" % (msg, stderr),
+        )
+        return trailers
+
+    # -- the adversarial one: every verb against every ancestor ------------
+
+    def walk(self, mode):
+        """Every verb, and canvas-validate, against every ancestor at `mode`.
+
+        Nothing here may traceback, whatever it exits, and everything that
+        refuses must refuse in the shape. A command that *succeeds* is not a
+        failure of this test and must not be asserted into one: `history`
+        reads the git log and not the canvas file, so it answers correctly
+        with that file at mode `000`, and demanding a non-zero exit there
+        would be demanding a bug. What is demanded instead is that `read`,
+        which cannot avoid the file, refuses at every position — that is the
+        tooth in this test, and it is what stops the whole thing passing
+        vacuously if the tool started exiting 0 everywhere.
+        """
+        for blocked in self.chain():
+            original = self.at_mode(blocked, mode)
+            try:
+                for args in self.invocations():
+                    code, _, stderr = self.run_canvas(*args)
+                    self.assertNotIn(
+                        "Traceback (most recent call last)", stderr,
+                        (blocked, args),
+                    )
+                    if code != 0:
+                        self.assertConforms(code, stderr, (blocked, args))
+                code, stderr = self.validate(self.canvas_file())
+                self.assertNotIn(
+                    "Traceback (most recent call last)", stderr,
+                    (blocked, "canvas-validate"),
+                )
+                if code != 0:
+                    self.assertConforms(code, stderr, (blocked, "validate"))
+            finally:
+                os.chmod(blocked, original)
+
+    def test_every_verb_survives_every_ancestor(self):
+        """The canvas file and every directory above it, mode 000 in turn.
+
+        Twenty-eight commands of `bin/canvas` and four of
+        `bin/canvas-validate`, and not one of them a traceback or an
+        unexplained exit code.
+        """
+        self.walk(0o000)
+
+    def test_every_verb_survives_every_ancestor_unwritable(self):
+        """The same chain, readable but not writable."""
+        self.walk(0o555)
+
+    def test_a_read_refuses_at_every_blocked_ancestor(self):
+        """The tooth in `walk`: `read` has to open the canvas, so an
+        unreachable file or an unreachable directory anywhere above it is a
+        refusal — never a success, and never exit 1, which would tell a caller
+        the request was wrong when the store was fine and the process could
+        not see it."""
+        for blocked in self.chain():
+            original = self.at_mode(blocked, 0o000)
+            try:
+                code, _, stderr = self.verb("read")
+                self.assertEqual(2, code, "%s\n%s" % (blocked, stderr))
+                self.assertConforms(code, stderr, blocked)
+                code, stderr = self.validate(self.canvas_file())
+                self.assertEqual(2, code, "%s\n%s" % (blocked, stderr))
+                self.assertConforms(code, stderr, blocked)
+            finally:
+                os.chmod(blocked, original)
+
+    # -- the lie the last round of this was caught by ----------------------
+
+    def test_an_unreadable_grandparent_is_not_reported_as_no_canvas(self):
+        # The canvas is there and unchanged. `os.path.isdir` answers False for
+        # `state/canvas` when `state` is unreadable, which is what made the
+        # one-level guard miss this and report the canvas absent at exit 1.
+        state = os.path.join(self.workspace, "state")
+        original = self.at_mode(state, 0o000)
+        try:
+            for args in (("read",), ("history", self.problem_id),
+                         ("replace", self.problem_id, "--text", "x", "--why", "w")):
+                code, _, stderr = self.verb(*args)
+                self.assertConforms(code, stderr, args)
+                self.assertEqual(2, code, "%s\n%s" % (args, stderr))
+                self.assertNotIn("no canvas for ledger id", stderr)
+                self.assertIn("cannot tell", stderr)
+                # The errno, so a caller can tell a mode from a missing file.
+                self.assertIn("errno 13 EACCES", stderr)
+        finally:
+            os.chmod(state, original)
+
+    def test_the_next_action_names_the_directory_that_actually_refuses(self):
+        # The heart of it: `chmod u+rx <the canvas file>` is not a command a
+        # caller can run when the mode that refuses it is two levels up, so
+        # the refusal names the shallowest ancestor instead — and running that
+        # repair makes the very same command succeed.
+        state = os.path.join(self.workspace, "state")
+        original = self.at_mode(state, 0o000)
+        try:
+            code, _, stderr = self.verb("read")
+            next_action = self.surface(stderr)["Canvas-Next"][0]
+            self.assertIn("chmod u+rx %s" % state, next_action)
+            self.assertNotIn("chmod u+rx %s" % self.canvas_file(), next_action)
+        finally:
+            os.chmod(state, original)
+        # The repair the refusal named, carried out.
+        code, stdout, stderr = self.verb("read")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"<canvas", stdout)
+
+    def test_canvas_validate_tells_absent_from_cannot_look_at_any_depth(self):
+        state = os.path.join(self.workspace, "state")
+        original = self.at_mode(state, 0o000)
+        try:
+            code, stderr = self.validate(self.canvas_file())
+            self.assertConforms(code, stderr, "validate under a blocked state/")
+            self.assertEqual(2, code, stderr)
+            self.assertNotIn("no such file", stderr)
+            self.assertIn("cannot tell", stderr)
+        finally:
+            os.chmod(state, original)
+
+    # -- something is there, and it is not a canvas ------------------------
+
+    def test_a_directory_where_a_canvas_belongs_is_not_reported_as_absent(self):
+        # "nothing at <path>" is false, and its next action — create it —
+        # refuses in turn with a different message at a different code.
+        os.mkdir(self.canvas_file("d-row"))
+        code, _, stderr = self.run_canvas("read", "d-row")
+        self.assertConforms(code, stderr, "read of a directory")
+        self.assertEqual(2, code, stderr)
+        self.assertNotIn("nothing at", stderr)
+        self.assertIn("a directory", stderr)
+
+    def test_canvas_validate_of_a_directory_says_so(self):
+        os.mkdir(self.canvas_file("d-row"))
+        code, stderr = self.validate(self.canvas_file("d-row"))
+        self.assertConforms(code, stderr, "validate of a directory")
+        self.assertEqual(2, code, stderr)
+        self.assertNotIn("no such file", stderr)
+
+    def test_a_canvas_directory_that_is_a_file_is_not_reported_as_absent(self):
+        # ENOTDIR, which no `chmod` repairs — so the next action must not be
+        # the permission one.
+        workspace = tempfile.mkdtemp(prefix="canvas-store-test-")
+        self.addCleanup(shutil.rmtree, workspace, True)
+        os.mkdir(os.path.join(workspace, "state"))
+        with open(os.path.join(workspace, "state", "canvas"), "w") as handle:
+            handle.write("not a directory\n")
+        code, _, stderr = self.run_canvas(
+            "read", "a-ledger-row", workspace=workspace
+        )
+        self.assertConforms(code, stderr, "state/canvas is a file")
+        self.assertIn("errno 20 ENOTDIR", stderr)
+        self.assertIn("is not a directory", self.surface(stderr)["Canvas-Next"][0])
+
+    def test_canvas_validate_through_a_path_that_is_not_a_directory(self):
+        inside = os.path.join(self.canvas_file(), "inner.xml")
+        code, stderr = self.validate(inside)
+        self.assertConforms(code, stderr, "validate through a file")
+        self.assertEqual(2, code, stderr)
+        self.assertIn("errno 20 ENOTDIR", stderr)
+
+    # -- a broken pipe, which is an OSError like any other -----------------
+
+    def test_a_reader_that_closes_early_is_a_refusal_and_not_a_traceback(self):
+        # `bin/canvas read <id> | head -1` on a canvas that fits in the pipe
+        # buffer exits 0 and always has. On one that does not, the write to
+        # stdout raised BrokenPipeError out of `_read` — a traceback, and
+        # Python's exit 1, which README gives to "the request is wrong against
+        # the store as it stands".
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "x" * 300000, "--why", "big"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertGreater(os.path.getsize(self.canvas_file()), 128 * 1024)
+        producer = subprocess.Popen(
+            [sys.executable, CANVAS, "read", "a-ledger-row"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=dict(os.environ, OPENCLAW_WORKSPACE=self.workspace),
+        )
+        reader = subprocess.Popen(
+            ["head", "-1"], stdin=producer.stdout, stdout=subprocess.DEVNULL
+        )
+        producer.stdout.close()
+        reader.wait()
+        stderr = producer.stderr.read().decode("utf-8", "replace")
+        producer.stderr.close()
+        producer.wait()
+        self.assertConforms(producer.returncode, stderr, "read | head -1")
+        self.assertIn("errno 32 EPIPE", stderr)
+        # And no `Exception ignored in: <_io.BufferedWriter ...>` after it,
+        # which would be a traceback by another name below the refusal.
+        self.assertNotIn("Exception ignored", stderr)
+
+    # -- the boundary itself, as a unit ------------------------------------
+
+    def test_every_errno_produces_a_next_action_that_names_the_path(self):
+        from canvas import refusal
+
+        # Including one this tool has never met: the guarantee is that there
+        # is no errno without a conforming refusal, not that somebody listed
+        # them all.
+        unknown = 7654
+        for number in list(refusal._OS_NEXT_ACTION) + [unknown, None]:
+            error = OSError(number, "some condition", self.canvas_file())
+            built = refusal.from_os_error(
+                refusal.Refused, error, about=["ledger id a-ledger-row"]
+            )
+            self.assertTrue(built.next_action.strip(), number)
+            self.assertTrue(built.about, number)
+            # The errno travels, because it is the only thing that tells a
+            # permission problem from a missing one.
+            self.assertTrue(
+                any(each.startswith("errno ") for each in built.about), number
+            )
+
+    def test_an_os_error_carrying_two_paths_names_both(self):
+        from canvas import refusal
+
+        # `rename` and `link` fail on a pair, and naming only the first sends
+        # a caller to look at the wrong end of it.
+        error = OSError(18, "Cross-device link", "/one", None, "/two")
+        built = refusal.from_os_error(refusal.Refused, error)
+        self.assertIn("path /one", built.about)
+        self.assertIn("path /two", built.about)
+
+    def test_the_blocking_ancestor_is_the_shallowest_one(self):
+        from canvas import refusal
+
+        state = os.path.join(self.workspace, "state")
+        original = self.at_mode(state, 0o000)
+        try:
+            # `state/canvas` is fine; `state` is not, and it is `state` that
+            # has to be repaired before anything below it can be looked at.
+            self.assertEqual(state, refusal.blocking_ancestor(self.canvas_file()))
+        finally:
+            os.chmod(state, original)
+        self.assertIsNone(refusal.blocking_ancestor(self.canvas_file()))
 
 
 if __name__ == "__main__":
