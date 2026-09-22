@@ -5,10 +5,10 @@ Seven subcommands, and no more:
     canvas create  <ledger_id> --problem TEXT --expected-value TEXT
     canvas read    <ledger_id>
     canvas history <ledger_id> <node-id>
-    canvas replace <ledger_id> <node-id> --why TEXT
-    canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT
-    canvas remove  <ledger_id> <node-id> --why TEXT
-    canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT
+    canvas replace <ledger_id> <node-id> --why TEXT [--base SHA]
+    canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
+    canvas remove  <ledger_id> <node-id> --why TEXT [--base SHA]
+    canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
 
 Four editing verbs, and three reads: `create` is the only one of the other
 three that writes. `history` reads the log the four verbs write, and `read`
@@ -26,9 +26,15 @@ is argparse's own refusal and an empty or whitespace-only one is
 in `canvas/store.py`, not here, because it is a property of the write path and
 not of this command line.
 
-The read hands out the current sha; nothing here enforces `--base` and no verb
-accepts one. That is a separate task, and building it here would mean building
-the thing that task exists to change.
+The read hands out the current sha and all four verbs take it back as
+`--base`: the sha the edit was decided against. It is optional, and an omitted
+one asks for no staleness check rather than standing for the current head. What
+a declared one buys is the two branches — a refusal carrying that node's diff
+when the node named here moved since, and the diff of everything else when it
+did not — and the rule itself lives in `canvas/store.py`, not here, for the
+same reason `--why` does: it is a property of the write path. What is here is
+the flag, and the soft branch's news printed after the two lines that report
+success, because the todo asks for it in the same output.
 
 This is the only module that decides an exit code.
 """
@@ -90,19 +96,32 @@ def _history(args):
     return 0
 
 
-def _edited(args, node_id, sha):
+def _edited(args, node_id, sha, news=None):
     """What every editing verb prints: the node it changed and the new sha.
 
     The node id first, because `insert` mints one the caller did not know, and
     then the sha under the same name a read hands it out under and the commit
     records it under. One name for one thing.
+
+    Then, when a declared `--base` turned out to be behind the head and the node
+    this write named had not moved, the soft branch's news: what changed in
+    between, on stdout, in the same output that reports success. The writer is
+    told what it did not know in the same breath as being told it succeeded,
+    which is the branch's whole point and is why it is not on stderr.
+
+    "Succeeds silently" is the case where there is no news — the two lines
+    above and nothing else. It is not no output at all: those two lines are the
+    verb's ordinary success output, and the sha on the second is what the next
+    write bases on.
     """
-    sys.stdout.write("Canvas-Node: %s\nCanvas-Base: %s\n" % (node_id, sha))
+    lines = ["Canvas-Node: %s\n" % node_id, "Canvas-Base: %s\n" % sha]
+    lines.extend("%s\n" % line for line in news or ())
+    sys.stdout.write("".join(lines))
     return 0
 
 
 def _replace(args):
-    sha = store.replace(
+    sha, news = store.replace(
         args.ledger_id,
         args.node_id,
         args.why,
@@ -111,12 +130,13 @@ def _replace(args):
         title=args.title,
         href=args.href,
         author=args.author,
+        base=args.base,
     )
-    return _edited(args, args.node_id, sha)
+    return _edited(args, args.node_id, sha, news)
 
 
 def _insert(args):
-    node_id, sha = store.insert(
+    node_id, sha, news = store.insert(
         args.ledger_id,
         args.why,
         after=args.after,
@@ -126,25 +146,33 @@ def _insert(args):
         title=args.title,
         href=args.href,
         author=args.author,
+        base=args.base,
     )
-    return _edited(args, node_id, sha)
+    return _edited(args, node_id, sha, news)
 
 
 def _remove(args):
-    sha = store.remove(args.ledger_id, args.node_id, args.why, author=args.author)
-    return _edited(args, args.node_id, sha)
+    sha, news = store.remove(
+        args.ledger_id,
+        args.node_id,
+        args.why,
+        author=args.author,
+        base=args.base,
+    )
+    return _edited(args, args.node_id, sha, news)
 
 
 def _move(args):
-    sha = store.move(
+    sha, news = store.move(
         args.ledger_id,
         args.node_id,
         args.why,
         after=args.after,
         into=args.into,
         author=args.author,
+        base=args.base,
     )
-    return _edited(args, args.node_id, sha)
+    return _edited(args, args.node_id, sha, news)
 
 
 def _add_why(parser):
@@ -160,6 +188,32 @@ def _add_why(parser):
         required=True,
         metavar="TEXT",
         help="why this edit is being made; required, with no default",
+    )
+
+
+def _add_base(parser):
+    """`--base`, optional, on every one of the four verbs.
+
+    The sha this edit was decided against, as a `read` printed it. Optional,
+    and an omitted one is **not** a base of "now": it is the absence of the
+    question, so nothing is compared and the verb behaves as it did before the
+    staleness rule existed. That is not `--why`'s shape and deliberately not —
+    `--why` has no value the tool could correctly compute, so an absent one is a
+    malformed invocation, while an absent `--base` asks for no check and there
+    is no silently wrong answer hiding in it.
+
+    `create` does not get one. The birth of a canvas has no prior state it
+    could have been decided against, which is also why its root commit writes
+    no `Canvas-Base:` trailer.
+    """
+    parser.add_argument(
+        "--base",
+        metavar="SHA",
+        help=(
+            "the commit sha this edit was decided against, as read printed "
+            "it; refused with that node's diff if the node named here moved "
+            "since, and told what else changed if anything else did"
+        ),
     )
 
 
@@ -294,6 +348,7 @@ def build_parser():
     replace.add_argument("node_id", metavar="node-id", help="the node to replace")
     _add_payload(replace, None)
     _add_why(replace)
+    _add_base(replace)
     _add_author(replace)
     replace.set_defaults(handler=_replace)
 
@@ -309,6 +364,7 @@ def build_parser():
     _add_position(insert)
     _add_payload(insert, "text")
     _add_why(insert)
+    _add_base(insert)
     _add_author(insert)
     insert.set_defaults(handler=_insert)
 
@@ -324,6 +380,7 @@ def build_parser():
     remove.add_argument("ledger_id", help="the ledger row this canvas belongs to")
     remove.add_argument("node_id", metavar="node-id", help="the node to remove")
     _add_why(remove)
+    _add_base(remove)
     _add_author(remove)
     remove.set_defaults(handler=_remove)
 
@@ -339,6 +396,7 @@ def build_parser():
     move.add_argument("node_id", metavar="node-id", help="the node to move")
     _add_position(move)
     _add_why(move)
+    _add_base(move)
     _add_author(move)
     move.set_defaults(handler=_move)
 
