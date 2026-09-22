@@ -1466,8 +1466,16 @@ def _addressed(root, node_id, ledger_id):
     return node
 
 
-def _one_position(after, into, ledger_id=None):
-    """A position is named by exactly one of `--after` and `--into`."""
+def _one_position(after, into, ledger_id=None, moving=None):
+    """A position is named by exactly one of `--after` and `--into`.
+
+    `moving` is the node being placed, on the same terms as `_place`'s: the id
+    `move` already holds, and nothing for `insert`, which has not minted one
+    yet. `bin/canvas` puts the two flags in a required mutually-exclusive group
+    and intercepts both-given and neither-given before this runs, naming the
+    node off the raw argv as it goes — so this is the library API's copy of the
+    same refusal, and it names the same nodes the command line's copy does.
+    """
     if (after is None) == (into is None):
         given = [
             "option --after %s" % after if after is not None else None,
@@ -1481,7 +1489,11 @@ def _one_position(after, into, ledger_id=None):
             "immediately after that node, and --into <container-id> puts it "
             "last among that container's children, where 'root' names the "
             "canvas itself. Nothing was written",
-            nodes=[each for each in (after, into) if each is not None],
+            nodes=[
+                each
+                for each in (moving, after, into)
+                if each is not None and each != document.ROOT
+            ],
             about=(
                 [each for each in given if each]
                 + (["ledger id %s" % ledger_id] if ledger_id else [])
@@ -1490,12 +1502,27 @@ def _one_position(after, into, ledger_id=None):
         )
 
 
-def _place(root, node, after, into, ledger_id):
-    """Put the node at the named position, or refuse naming the id that missed.
+def _place(root, node, after, into, ledger_id, moving=None):
+    """Put the node at the named position, or refuse naming every node in hand.
 
     `canvas/document.py` composes the problem and has never heard of a ledger
     id, so it says "this canvas" and cannot say which. The ledger id is added
     here, where it is known, rather than taught to the document module.
+
+    `moving` is the id of the node being placed **when that node is already a
+    node of this canvas**. `move` has one and passes it, because the refusal is
+    holding the element it was asked to move and a refusal that names only the
+    position it missed leaves out half of what the caller has to act on. The
+    same verb one flag apart already names both.
+
+    **`insert` passes none, deliberately.** Its node was minted moments earlier
+    and has never been in the canvas: no commit names it, `bin/canvas read`
+    cannot show it, `bin/canvas history` has nothing for it, and the next
+    attempt mints a different one. `Canvas-Node:` means "a node of this canvas"
+    everywhere else in the tool, and printing a discarded draw under it would
+    hand an agent an id it can neither look up nor reuse. That refusal names
+    the ledger id and the position instead, which are the two things about it
+    that are true.
     """
     try:
         if after is not None:
@@ -1509,7 +1536,11 @@ def _place(root, node, after, into, ledger_id):
             "`bin/canvas read %s` prints the canvas and every id in it; re-run "
             "naming --after <node-id> or --into <container-id> from those, "
             "where 'root' names the canvas itself" % ledger_id,
-            nodes=[named] if named != document.ROOT else [],
+            nodes=[
+                each
+                for each in (moving, named)
+                if each is not None and each != document.ROOT
+            ],
             about=["ledger id %s" % ledger_id, "position %s" % named],
         )
 
@@ -1759,7 +1790,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
         nodes=[each for each in (node_id, after, into) if each is not None],
         about=["ledger id %s" % ledger_id],
     )
-    _one_position(after, into, ledger_id)
+    _one_position(after, into, ledger_id, moving=node_id)
     canvas_dir, path, root, head = _open_canvas(ledger_id)
     news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
@@ -1799,7 +1830,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
 
     node.set("v", next_version(canvas_dir, node_id))
     document.detach(root, node_id)
-    _place(root, node, after, into, ledger_id)
+    _place(root, node, after, into, ledger_id, moving=node_id)
 
     sha = _write_and_commit(
         canvas_dir,

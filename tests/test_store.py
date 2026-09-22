@@ -2808,6 +2808,89 @@ class EveryRefusalNamesTheNodesAndTheNextAction(VerbTestCase):
             about=["ledger id a-ledger-row"],
         )
 
+    def test_a_move_to_the_root_position_still_names_the_node_being_moved(self):
+        # `--after root` is the one position that is not a node, so the
+        # position side of this refusal has nothing to name and the whole
+        # `Canvas-Node:` block used to be empty. The node being moved is in
+        # hand all the same — `_addressed` matched it and `document.detach`
+        # had already taken it out of the tree before `_place` refused — and
+        # it is the thing the caller has to act on.
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "move", self.problem_id, "--after", "root", "--why", "put it first"
+        )
+        trailers = self.assertSurface(
+            1, code, stderr, nodes=[self.problem_id],
+            about=["ledger id a-ledger-row", "position root"],
+            next_action=["bin/canvas read a-ledger-row"],
+        )
+        # The moved node, and only it: root is a position and not a node, so
+        # it stays on Canvas-About: where the rest of the tool puts it. An
+        # equality and not an assertIn, because the failure this guards
+        # against is the id going missing again.
+        self.assertEqual([self.problem_id], trailers["Canvas-Node"], stderr)
+        self.assertEqual(b"", stdout)
+        self.assertEqual(before, self.state())
+
+    def test_a_move_into_the_root_is_not_the_position_that_is_refused(self):
+        # The other half of the pair, and why the refusal above is about the
+        # position and not about the root: `--into root` is a real position
+        # and it works. The next action the refusal prints is a true one.
+        code, _, stderr = self.verb(
+            "move", self.problem_id, "--into", "root", "--why", "put it last"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(
+            [self.value_id, self.problem_id],
+            [child.get("id") for child in self.tree()],
+        )
+
+    def test_an_insert_that_misses_names_the_position_and_not_a_minted_id(self):
+        # The deliberate other half of the same decision, pinned so that a
+        # later change cannot make it by accident. `insert`'s node is minted
+        # moments before `_place` and has never been in the canvas: no commit
+        # names it, `bin/canvas read` cannot show it, `bin/canvas history` has
+        # nothing for it, and the next attempt mints a different one. It is
+        # not printed under `Canvas-Node:`, which means "a node of this
+        # canvas" everywhere else in the tool. The refusal names the ledger id
+        # and the position instead — never nothing.
+        for edit, named in (
+            (("insert", "--after", "root", "--text", "x"), []),
+            (("insert", "--after", "zz99", "--text", "x"), ["zz99"]),
+            (("insert", "--into", "zz99", "--text", "x"), ["zz99"]),
+        ):
+            before = self.state()
+            code, stdout, stderr = self.verb(*(edit + ("--why", "w")))
+            trailers = self.assertSurface(
+                1, code, stderr, msg=edit, nodes=named,
+                about=["ledger id a-ledger-row", "position"],
+                next_action=["bin/canvas read a-ledger-row"],
+            )
+            self.assertEqual(named, trailers["Canvas-Node"], stderr)
+            self.assertEqual(b"", stdout, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_the_library_copy_of_the_position_refusal_names_the_same_nodes(self):
+        # `_one_position` is `bin/canvas`'s required mutually-exclusive group
+        # written again for `from canvas import store`, and it had the same
+        # omission one call earlier: `move` holds the node id and did not hand
+        # it over. argparse intercepts both routes before the store sees them,
+        # so this is reachable through the import path alone — and the import
+        # path is a supported surface, so its refusal names what the command
+        # line's names.
+        from canvas import store
+
+        before = self.state()
+        for after, into in ((None, None), (self.value_id, "root")):
+            with self.assertRaises(store.ToolProblem) as caught:
+                store.move(
+                    "a-ledger-row", self.problem_id, "w", after=after, into=into
+                )
+            self.assertIn(self.problem_id, caught.exception.nodes)
+            self.assertNotIn("root", caught.exception.nodes)
+            self.assertIn("ledger id a-ledger-row", caught.exception.about)
+        self.assertEqual(before, self.state())
+
     def test_the_stale_base_branch_names_the_node_the_ledger_and_both_shas(self):
         base = self.read_sha()
         code, _, stderr = self.verb(
