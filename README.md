@@ -46,13 +46,22 @@ are valid.
 
 The `1` / `2` split is the point: an agent has to be able to tell "your canvas
 is invalid, fix the node I named" from "the validator is broken, do not touch
-the canvas".
+the canvas". The refusal says which of the two it is in band — see
+[what a refusal prints](#what-a-refusal-prints) — so a caller reading stderr
+does not have to have read this table.
 
 A diagnostic names the offending node — its element name, and its `id` where it
-has one, or its path where it does not:
+has one, or its path where it does not — and the refusal that carries it says
+what to do about it:
 
+    $ bin/canvas-validate bad.xml
+    canvas-validate: not a valid canvas: bad.xml
     bad.xml:4: <decision> (id="jc5v", v="1"): Did not expect element decision there
     bad.xml:3: <text> (no id attribute, v="1", at /canvas[1]/text[1]): Element text failed to validate attributes
+    bad.xml fails to validate
+    Canvas-About: file bad.xml
+    Canvas-Next: repair the file at the line each diagnostic above names, then re-run `bin/canvas-validate bad.xml`; what a canvas node may be is written in /…/schema/canvas.rng and nowhere else, and `xmllint --noout --relaxng <that schema> <file>` asks it directly
+    Canvas-Exit: 1 — the document is wrong, not the validator; repair the node each diagnostic names
 
 The schema also stands on its own, with no Python involved at all:
 
@@ -302,7 +311,20 @@ trade, and it is what `create` and `read` already do.
 one is refused by the argument parser; an empty or whitespace-only one is
 refused by the store. Both exit `2` — an unexplained edit is a malformed
 invocation, not a request that is wrong against the store — and both write
-nothing, commit nothing and mint nothing.
+nothing, commit nothing and mint nothing. Both name the node the edit was for,
+too, and say what to type:
+
+    $ bin/canvas replace a-row bn3x --text "We chose A."
+    usage: canvas replace [-h] [--type NAME] [--text TEXT] [--title TITLE]
+                          [--href HREF] --why TEXT [--base SHA] [--author AUTHOR]
+                          ledger_id node-id
+    canvas: replace: the following arguments are required: --why
+    Canvas-Node: bn3x
+    Canvas-About: command canvas replace
+    Canvas-About: ledger id a-row
+    Canvas-About: option --why
+    Canvas-Next: re-run the same command with --why TEXT (why this edit is being made; required, with no default). There is no default and no fallback: a reason a tool invented is a sentence in the history that reads like somebody decided something. Nothing was written
+    Canvas-Exit: 2 — the tool or its invocation is wrong; nothing was written, so do not touch the canvas
 
 The rule lives in `canvas/store.py` and not in the command line above it.
 `_write_and_commit` is the only function that puts a canvas on its real path,
@@ -362,8 +384,10 @@ the store does, verb by verb:
   one node at a time, each with its own reason.
 
 Every refusal exits `1`, writes nothing — not the file, not a commit, not a
-temporary — and names the container, every child it would have touched, and
-what to do instead.
+temporary — and names the container and every child it would have touched, each
+on its own `Canvas-Node:` line, with what to do instead on `Canvas-Next:`. That
+is [the shape every refusal takes](#what-a-refusal-prints), and these are where
+it came from.
 
 A `replace` payload cannot express a child at all: `--type`, `--text`,
 `--title` and `--href` are four scalars, and there is no `--children`, no
@@ -506,6 +530,12 @@ that the verbs inherit an answer instead of improvising one.
 | `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, or the document is invalid. Re-read and re-decide |
 | `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
 
+Both non-zero codes arrive with that sentence attached, on the refusal's own
+`Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A
+caller reading stderr cannot see this table, and "no refusal exits with an
+unexplained non-zero code" means the caller can tell which kind it hit from the
+output, not that there are more codes. There are two, and there is no third.
+
 This is `bin/canvas-validate`'s `1` / `2` split with its purpose preserved, and
 it differs from it in one deliberate place. `canvas-validate` maps a missing
 file to `2`, because there the caller supplied the path and a missing file means
@@ -518,6 +548,45 @@ not to stop touching the canvas. It maps to `1`. A *malformed* ledger id stays
 A ledger id has to be a filename: one or more of `[A-Za-z0-9._-]`, not starting
 with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
 `state/canvas/`.
+
+### What a refusal prints
+
+Every refusal in the tool prints the same five things, in this order, on
+stderr, and both commands print them:
+
+    canvas: <what is wrong, and why it cannot work>
+    <whatever came with it — the validator's diagnostics, a commit and its patch>
+    Canvas-Node: <one line per node the refusal involves>
+    Canvas-About: <one line per thing it names where it has no node>
+    Canvas-Next: <the one concrete thing to do that would succeed>
+    Canvas-Exit: <the code, and what the code means>
+
+`engineering-spec.md` section *What to copy* takes IWE's error surface
+unconditionally: "a refusal names every node it matched and how to narrow,
+because an agent can act on that and cannot act on the word 'refused'". These
+lines are that, in the `Canvas-…:` trailer idiom the commits and the success
+output already use — `Canvas-Node:` is the name a node id is printed under
+everywhere else in the tool, so a refusal naming one uses the same word.
+
+- **The message says what is wrong. `Canvas-Next:` says what to do**, and it is
+  stated once, there. "Nothing was changed" is a fact about the past and an
+  agent cannot act on it; the command that would succeed is on `Canvas-Next:`.
+- **A refusal with no node is not an exemption.** Some genuinely have none —
+  there is no canvas for this ledger id, `$OPENCLAW_WORKSPACE` is unset,
+  `xmllint` is missing, a `--base` that is not a sha. Each names the thing it
+  *is* about on `Canvas-About:` instead: the ledger id, the variable, the
+  binary, the value that was rejected. Never an empty list of nodes.
+- **`Canvas-Exit:` is why no refusal exits with an unexplained code.** The
+  meaning is the one in this document's table, printed beside the number,
+  because a caller reading stderr cannot see a table in a Markdown file. The
+  codes themselves are unchanged and there are still two.
+- **The argument parser's refusals are in it too.** `canvas/cli.py` subclasses
+  `ArgumentParser` so that `error()` raises rather than exiting, which is what
+  lets an absent `--why` name the node the edit was for. It still exits `2`.
+- **`canvas/refusal.py` is where the shape lives**, and it is a structure and
+  not a convention: the next action is a constructor argument with no default,
+  and a refusal that names neither a node nor anything else cannot be built.
+  That is the same move `_write_and_commit` already makes for `--why`.
 
 ### What the store deliberately does not do
 

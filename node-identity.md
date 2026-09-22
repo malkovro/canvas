@@ -370,6 +370,11 @@ node at a time. Every one of them exits non-zero and writes nothing: not the
 file, not a commit, not a temporary. An agent can act on that. It cannot act on
 the word "refused".
 
+This section described the container refusals, and it is now the tool's general
+contract: every refusal anywhere in it names the nodes it involves, or the thing
+it is about where it has none, and states the next action that would succeed.
+README section *What a refusal prints* gives the shape.
+
 **What this costs, stated honestly.** Restructuring is tedious. Reorganising a
 section of eight nodes is eight commands and eight reasons, not one. That is the
 intended trade and it is the same trade the four verbs already make everywhere

@@ -9,6 +9,11 @@ here knows anything about either.
 
 Exit 0 if every file is a valid canvas, 1 if one is not (each problem on
 stderr, naming the offending node), 2 if the validator itself cannot run.
+
+Both non-zero exits print the same shape `bin/canvas` prints: the message, the
+diagnostics, then `Canvas-About:` for what the refusal names, `Canvas-Next:`
+for what to do about it, and `Canvas-Exit:` for the code and what the code
+means here. See README section *What a refusal prints*.
 """
 
 import os
