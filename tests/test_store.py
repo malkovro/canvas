@@ -1600,11 +1600,13 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
         # The supported write surface, and all of it.
         "create", "insert", "replace", "remove", "move",
         # Reads, lookups and pure functions.
-        "read", "canvas_directory", "canvas_path", "is_repository",
-        "ensure_repository", "head_sha", "is_free", "mint", "require_reason",
-        "history_length", "next_version", "default_author", "preflight",
+        "read", "history", "Edit", "canvas_directory", "canvas_path",
+        "is_repository", "ensure_repository", "head_sha", "is_free", "mint",
+        "require_reason", "history_length", "next_version", "default_author",
+        "preflight",
         # Imported modules, not API.
-        "os", "re", "secrets", "subprocess", "document", "validate_file",
+        "collections", "os", "re", "secrets", "subprocess", "document",
+        "validate_file",
         "EnvironmentProblem",
     }
 
@@ -1818,6 +1820,395 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
             self.assertEqual(0, code, (edit, stderr))
         self.assertEqual(before + 4, len(self.git("log", "--format=%H").split()))
 
+
+class OneCommandReturnsANodesReasonHistory(VerbTestCase):
+    """The done condition's second clause: one command returns the full reason
+    history of a single node id, including edits made before a `move`."""
+
+    def blocks(self, node_id, ledger_id="a-ledger-row"):
+        """Run `history` and return its blocks as (sha, author, verb, reason)."""
+        code, stdout, stderr = self.run_canvas("history", ledger_id, node_id)
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("", stderr)
+        paragraphs = stdout.decode("utf-8").split("\n\n")
+        self.assertEqual("Canvas-Node: %s\n" % node_id, paragraphs[0] + "\n")
+        edits = []
+        for paragraph in paragraphs[1:]:
+            sha, author, subject = paragraph.strip("\n").split("\n")
+            self.assertTrue(sha.startswith("Canvas-Commit: "), sha)
+            self.assertTrue(author.startswith("Canvas-Author: "), author)
+            verb, reason = subject.split(": ", 1)
+            edits.append(
+                (
+                    sha.split(": ", 1)[1],
+                    author.split(": ", 1)[1],
+                    verb,
+                    reason,
+                )
+            )
+        return edits
+
+    def test_a_node_born_by_insert_has_the_reason_it_was_born_for(self):
+        node_id = self.inserted(
+            "--into", "root", "--text", "A note.", "--why", "the argument needs it"
+        )
+        self.assertEqual(
+            [("insert", "the argument needs it")],
+            [(verb, reason) for _, _, verb, reason in self.blocks(node_id)],
+        )
+
+    def test_the_history_carries_the_edits_made_before_a_move(self):
+        # The clause the todo singles out: insert, replace, then move into
+        # another container, and the history after the move still has the
+        # insert and the replace, in order. `move` keeps the node's id, so the
+        # query that finds the move finds everything the id ever did.
+        section_id = self.inserted(
+            "--into", "root", "--type", "section", "--title", "A heading",
+            "--why", "somewhere to file things",
+        )
+        node_id = self.inserted(
+            "--into", "root", "--text", "Draft.", "--why", "the first draft"
+        )
+        self.verb("replace", node_id, "--text", "Sharper.", "--why", "sharpen it")
+        code, _, stderr = self.verb(
+            "move", node_id, "--into", section_id, "--why", "file it under the heading"
+        )
+        self.assertEqual(0, code, stderr)
+
+        self.assertEqual(
+            [
+                ("insert", "the first draft"),
+                ("replace", "sharpen it"),
+                ("move", "file it under the heading"),
+            ],
+            [(verb, reason) for _, _, verb, reason in self.blocks(node_id)],
+        )
+        # And the node really did move: the history spans the move rather than
+        # restarting at it.
+        self.assertEqual(
+            [node_id], [child.get("id") for child in self.node(section_id)]
+        )
+
+    def test_the_history_is_oldest_first_and_ends_at_the_current_text(self):
+        node_id = self.inserted(
+            "--into", "root", "--text", "One.", "--why", "first"
+        )
+        self.verb("replace", node_id, "--text", "Two.", "--why", "second")
+        self.verb("replace", node_id, "--text", "Three.", "--why", "third")
+        reasons = [reason for _, _, _, reason in self.blocks(node_id)]
+        self.assertEqual(["first", "second", "third"], reasons)
+        self.assertEqual("Three.", self.node(node_id).text)
+
+    def test_every_block_names_the_commit_and_the_author(self):
+        author = "leo | step:implement | run:ship-the-flag-3"
+        node_id = self.inserted(
+            "--into", "root", "--text", "x", "--why", "one", "--author", author
+        )
+        self.verb(
+            "replace", node_id, "--text", "y", "--why", "two", "--author", author
+        )
+        shas = [sha for sha, _, _, _ in self.blocks(node_id)]
+        self.assertEqual(2, len(shas))
+        for sha in shas:
+            self.assertTrue(SHA.match(sha), sha)
+        # Oldest first, which is the reverse of git log's own order.
+        self.assertEqual(
+            shas,
+            [
+                sha
+                for sha in self.git("log", "--reverse", "--format=%H").split()
+                if sha in shas
+            ],
+        )
+        self.assertEqual(
+            [author, author], [name for _, name, _, _ in self.blocks(node_id)]
+        )
+
+    def test_a_removed_node_still_has_its_whole_history(self):
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "born")
+        self.verb("remove", node_id, "--why", "it was wrong")
+        self.assertIsNone(self.node(node_id))
+        self.assertEqual(
+            [("insert", "born"), ("remove", "it was wrong")],
+            [(verb, reason) for _, _, verb, reason in self.blocks(node_id)],
+        )
+
+    def test_the_first_nodes_of_a_canvas_have_the_reason_create_gave_them(self):
+        self.assertEqual(
+            [("insert", "the problem the ledger row states")],
+            [(verb, reason) for _, _, verb, reason in self.blocks(self.problem_id)],
+        )
+        self.assertEqual(
+            [("insert", "the expected value the ledger row states")],
+            [(verb, reason) for _, _, verb, reason in self.blocks(self.value_id)],
+        )
+
+
+class TheHistoryCommandMatchesTheTrailerAndNotASubstring(VerbTestCase):
+    """`git log --grep='Canvas-Node: b7'` matches anywhere in the message, and
+    ids are four characters, so it answers for `b7pk` when it was asked about
+    `b7`. This command matches the trailer's value, for equality."""
+
+    def documented_grep(self, pattern):
+        """The raw command README.md used to document, for contrast."""
+        return self.git(
+            "log", "--grep=Canvas-Node: %s" % pattern, "--format=%H"
+        ).split()
+
+    def test_a_prefix_of_a_real_id_is_not_that_node(self):
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "born")
+        self.verb("replace", node_id, "--text", "y", "--why", "reworded")
+        prefix = node_id[:2]
+
+        # The collision is reachable, not hypothetical: the documented grep
+        # returns this node's whole life for two characters of its id.
+        self.assertEqual(
+            sorted(self.documented_grep(node_id)),
+            sorted(self.documented_grep(prefix)),
+        )
+        # The command does not.
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", prefix)
+        self.assertEqual(1, code, stderr)
+        self.assertEqual(b"", stdout)
+        self.assertIn(prefix, stderr)
+
+    def test_a_reason_that_quotes_the_trailer_is_not_an_edit_to_that_node(self):
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "born")
+        self.inserted(
+            "--into", "root", "--text", "y",
+            "--why", "restates what Canvas-Node: %s already said" % node_id,
+        )
+        # The documented grep counts the quoting commit as an edit to the node
+        # it merely mentions; the command reports only the commit that named it.
+        self.assertEqual(2, len(self.documented_grep(node_id)))
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", node_id)
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(
+            1, stdout.decode("utf-8").count("Canvas-Commit: "), stdout
+        )
+
+    def test_a_quoted_trailer_does_not_bump_the_quoted_nodes_v(self):
+        # The same equality, on the other side of it: `v` is the number of
+        # commits naming the node, counted through the same matcher, so a
+        # commit that merely mentions an id cannot move that node's version.
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "born")
+        self.inserted(
+            "--into", "root", "--text", "y",
+            "--why", "restates what Canvas-Node: %s already said" % node_id,
+        )
+        self.verb("replace", node_id, "--text", "z", "--why", "reworded")
+        self.assertEqual("2", self.node(node_id).get("v"))
+
+    def test_a_node_of_another_canvas_is_not_a_node_of_this_one(self):
+        code, _, stderr = self.run_canvas(
+            "create", "another-row", "--problem", "P", "--expected-value", "E"
+        )
+        self.assertEqual(0, code, stderr)
+        code, stdout, stderr = self.run_canvas(
+            "history", "another-row", self.problem_id
+        )
+        self.assertEqual(1, code, stderr)
+        self.assertEqual(b"", stdout)
+        self.assertIn(self.problem_id, stderr)
+
+    def test_an_id_that_is_not_an_id_at_all_is_refused_and_not_run_as_a_pattern(self):
+        # A node id typed at the command line need not be a real one. A regex
+        # metacharacter in it names no node, which is the answer it gets — not
+        # a crash, and not every node in the canvas.
+        for pattern in (".*", "^", "[", "%s|%s" % (self.problem_id, self.value_id)):
+            code, stdout, stderr = self.run_canvas(
+                "history", "a-ledger-row", pattern
+            )
+            self.assertEqual(1, code, (pattern, stderr))
+            self.assertEqual(b"", stdout)
+
+
+class TheHistoryCommandRefusesWhatIsNotThere(VerbTestCase):
+    """The exit-code contract: 1 when the request is wrong against the store as
+    it stands, 2 when the tool or its environment is, and stderr saying which of
+    the two `1`s it was."""
+
+    def test_no_canvas_for_that_ledger_id_exits_one_and_says_so(self):
+        code, stdout, stderr = self.run_canvas(
+            "history", "no-such-row", self.problem_id
+        )
+        self.assertEqual(1, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn("no canvas for ledger id no-such-row", stderr)
+
+    def test_no_such_node_exits_one_and_says_something_different(self):
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", "zzzz")
+        self.assertEqual(1, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn("no node with id zzzz", stderr)
+        # The two are told apart: a missing canvas and a missing node are
+        # different repairs, and the message is where the caller learns which.
+        self.assertNotIn("no canvas for ledger id", stderr)
+
+    def test_a_malformed_ledger_id_exits_two(self):
+        code, _, stderr = self.run_canvas(
+            "history", "../../etc/passwd", self.problem_id
+        )
+        self.assertEqual(2, code)
+        self.assertIn("not a usable ledger id", stderr)
+
+    def test_an_unset_workspace_exits_two(self):
+        code, _, stderr = self.run_canvas(
+            "history", "a-ledger-row", self.problem_id, workspace=None
+        )
+        self.assertEqual(2, code)
+        self.assertIn("OPENCLAW_WORKSPACE", stderr)
+
+    def test_a_workspace_that_is_not_a_directory_exits_two(self):
+        not_a_directory = os.path.join(self.workspace, "a-file")
+        with open(not_a_directory, "w", encoding="utf-8") as handle:
+            handle.write("not a workspace\n")
+        code, _, stderr = self.run_canvas(
+            "history", "a-ledger-row", self.problem_id, workspace=not_a_directory
+        )
+        self.assertEqual(2, code)
+        self.assertIn("not a directory", stderr)
+
+    def test_git_missing_from_the_environment_exits_two(self):
+        # The tool is wrong, not the request: exit 2, and nothing said about
+        # the node.
+        empty = tempfile.mkdtemp(prefix="canvas-store-test-no-git-")
+        self.addCleanup(shutil.rmtree, empty, True)
+        environment = dict(os.environ, OPENCLAW_WORKSPACE=self.workspace, PATH=empty)
+        result = subprocess.run(
+            [sys.executable, CANVAS, "history", "a-ledger-row", self.problem_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        self.assertEqual(2, result.returncode, result.stderr)
+        self.assertIn("git", result.stderr.decode("utf-8", "replace"))
+
+
+class TheHistoryCommandOnlyReads(VerbTestCase):
+    """A read is a read: it writes no file, makes no commit, and does not
+    initialise a repository — the same contract `read` already has."""
+
+    def test_it_changes_nothing_about_the_canvas_or_the_repository(self):
+        before = self.state()
+        code, _, stderr = self.run_canvas(
+            "history", "a-ledger-row", self.problem_id
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_it_does_not_initialise_a_repository_in_a_clean_workspace(self):
+        clean = tempfile.mkdtemp(prefix="canvas-store-test-")
+        self.addCleanup(shutil.rmtree, clean, True)
+        code, _, stderr = self.run_canvas(
+            "history", "a-ledger-row", self.problem_id, workspace=clean
+        )
+        self.assertEqual(1, code, stderr)
+        # Nothing was created to say there was nothing there.
+        self.assertEqual([], os.listdir(clean))
+
+    def test_it_goes_through_the_pinned_git_invocation(self):
+        # Every git call in the store names --git-dir and --work-tree, so a
+        # canvas repository nested inside another one is still the repository
+        # that answers. An outer repository here has a commit of its own, and
+        # none of it reaches the history of a canvas node.
+        outer = subprocess.run(
+            ["git", "init", "-b", "main", "-q", "--", self.workspace],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        self.assertEqual(0, outer.returncode, outer.stderr)
+        self.addCleanup(
+            shutil.rmtree, os.path.join(self.workspace, ".git"), True
+        )
+        code, stdout, stderr = self.run_canvas(
+            "history", "a-ledger-row", self.problem_id
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"the problem the ledger row states", stdout)
+
+
+class EveryAppliedEditCommitCarriesAllThreeTrailers(VerbTestCase):
+    """The done condition's first clause, asserted over a canvas that has had
+    every verb applied to it: one commit per edit, carrying `Canvas-Node`,
+    `Canvas-Author` and `Canvas-Base` — with the root commit's two documented
+    exemptions handled by name rather than by being left out."""
+
+    def trailers(self, body):
+        return dict(
+            line.split(": ", 1)
+            for line in body.strip().splitlines()
+            if line.startswith("Canvas-")
+        )
+
+    def test_every_commit_an_edit_produced_carries_all_three(self):
+        section_id = self.inserted(
+            "--into", "root", "--type", "section", "--title", "A heading",
+            "--why", "a container",
+        )
+        node_id = self.inserted(
+            "--into", "root", "--text", "x", "--why", "a node"
+        )
+        for edit in (
+            ("replace", node_id, "--text", "y", "--why", "reworded"),
+            ("move", node_id, "--into", section_id, "--why", "filed"),
+            ("remove", node_id, "--why", "no longer needed"),
+        ):
+            code, _, stderr = self.verb(*edit)
+            self.assertEqual(0, code, (edit, stderr))
+
+        bodies = self.bodies()
+        subjects = self.subjects()
+        # One commit per applied edit: create's root plus its two inserts, plus
+        # the five edits above.
+        self.assertEqual(8, len(bodies))
+
+        root_commits = [
+            index
+            for index, subject in enumerate(subjects)
+            if not self.trailers(bodies[index]).get("Canvas-Node")
+        ]
+        # Exactly one commit in the whole log names no node, and it is the
+        # birth of the canvas: README.md's two documented exemptions, which
+        # apply to that commit and to no other.
+        self.assertEqual([0], root_commits)
+        birth = self.trailers(bodies[0])
+        self.assertTrue(subjects[0].startswith("create a-ledger-row: "), subjects[0])
+        # <canvas> is not a node, so there is no node for a Canvas-Node: to
+        # name; and there was no prior state for a Canvas-Base: to record.
+        self.assertNotIn("Canvas-Node", birth)
+        self.assertNotIn("Canvas-Base", birth)
+        self.assertIn("Canvas-Author", birth)
+
+        for index, body in list(enumerate(bodies))[1:]:
+            trailers = self.trailers(body)
+            self.assertIn("Canvas-Node", trailers, subjects[index])
+            self.assertIn("Canvas-Author", trailers, subjects[index])
+            self.assertIn("Canvas-Base", trailers, subjects[index])
+            self.assertEqual(1, body.count("Canvas-Node:"), body)
+            # The subject names the verb, the node and the reason.
+            self.assertTrue(
+                subjects[index].startswith(
+                    "%s %s: "
+                    % (subjects[index].split(" ", 1)[0], trailers["Canvas-Node"])
+                ),
+                subjects[index],
+            )
+            self.assertTrue(subjects[index].split(": ", 1)[1].strip(), subjects[index])
+
+    def test_the_history_command_shows_the_same_three_facts_it_reads(self):
+        # The trailers are what the command reads, so what it prints has to be
+        # what the commits carry: the sha, the author, and the node's own id.
+        node_id = self.inserted("--into", "root", "--text", "x", "--why", "a node")
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", node_id)
+        self.assertEqual(0, code, stderr)
+        printed = stdout.decode("utf-8")
+        head = self.git("rev-parse", "HEAD").strip()
+        self.assertIn("Canvas-Node: %s\n" % node_id, printed)
+        self.assertIn("Canvas-Commit: %s\n" % head, printed)
+        self.assertIn(
+            "Canvas-Author: %s\n" % self.trailers(self.bodies()[-1])["Canvas-Author"],
+            printed,
+        )
 
 if __name__ == "__main__":
     unittest.main()
