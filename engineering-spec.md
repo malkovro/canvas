@@ -134,6 +134,33 @@ twelfth case that fits none of them.
 is the mechanical form of "do not rewrite the document": the tool cannot express
 a full rewrite, so no amount of drift produces one.
 
+**Where that is enforced, and what it binds.** Not in the argument parser. The
+store compares the document it is about to write against the document already on
+disk and refuses unless exactly the node named in the commit's `Canvas-Node:`
+trailer is the one that differs — same type, same attributes, same character
+data, same parent and the same sibling order for every other node. The rule is
+therefore a property of the write path and not of a command line, in the same
+place and for the same reason as the required reason: a caller that never goes
+near the CLI is bound by it exactly as hard.
+
+**The supported write surface is five functions**, and `create`, `insert`,
+`replace`, `remove` and `move` are all of them. Each takes a ledger id, a
+reason, and at most one node id. **None of them takes a document.** That is the
+load-bearing absence: a function that accepts a whole tree is a whole-document
+rewrite whatever it is called, so the parameter is not offered, the one private
+function that has it is guarded anyway, and there is no file-level route, no
+stdin, no patch and no import path that reaches around either. The single write
+that names no node is the birth of a canvas, and the only document it may
+produce is the root alone.
+
+**The node that has children is the case that decides this**, and
+[node identity](node-identity.md) section 5 settles it in full: what `replace`,
+`remove`, `move` and `insert` each do to a container and its subtree, which of
+them are refused while the container has children, and why a container that
+travels with its subtree is still one node's edit while a payload that rewrote
+that subtree is not. A reader can predict the tool's behaviour from that section
+without opening the code, which is the point of writing it there.
+
 **On IWE's `expect` guard.** IWE is the only shipped tool that makes "touch one
 thing" enforceable: every operation declares how many nodes it should match, and
 a mismatch fails with the count, every node that matched, and what to narrow.
@@ -398,8 +425,8 @@ them to.
   somebody will want to renumber; en-quire shipped without solving it and its
   history silently attaches to the wrong text the first time a heading is
   renamed. Minting, preservation under each of the four verbs, `v` bumping, and
-  what happens to a section's children when the section is replaced are now
-  settled in [node identity](node-identity.md). What remains open is **merge and
+  what happens to a container's children when the container is replaced,
+  removed or moved are now settled in [node identity](node-identity.md). What remains open is **merge and
   split**: a restructure made of moves, renames and one-node replaces costs no
   history under that rule, but splitting one node into two or merging two into
   one strands the lineage of one side, and nothing yet records an ancestor id.

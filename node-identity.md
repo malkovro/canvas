@@ -149,6 +149,11 @@ rather than by selector. If position were any part of identity, then addressing
 by id would be a lie — the id would be a cached lookup of a position and would
 have to be invalidated when the position changed.
 
+**A node's children travel with it, and the move is still one node's edit.**
+Section 5 settles that case with the rest of the container rule: position is a
+property of the child, so moving a container changes where the container sits
+and changes nothing any child's own record says.
+
 **The rejected alternative — re-minting on move — would make restructure
 maximally destructive**, which is the exact opposite of what the hardest open
 item needs. A restructure is mostly moves. Under a re-minting rule, reordering
@@ -216,49 +221,154 @@ makes the grep trustworthy:
 
 Nothing happens to a node that its own history does not record.
 
-## 5. What happens to a section's children when the `<section>` is replaced
+## 5. What "one node" means when the node has children
 
-**Nothing. `replace` on a `<section>` replaces that section node and nothing
-else: its `title` and its own attributes. Its children keep their ids, their
-`v`, their content and their order.**
+**Nothing happens to the children.** `replace` on a node that has children
+replaces that node and nothing else: its type, and its own attributes — a
+`<section>`'s `title`. Its children keep their ids, their `v`, their content
+and their order.
 
-A `<section>` is the only container in the vocabulary, and its own content is
-its title. Its children are separate nodes with separate ids, edited by separate
-commands. So `canvas replace <section-id>` renames the section — it does not and
-cannot re-express what is inside it.
+**The rule is about containers and not about `<section>`.** This section was
+first written for the section, because the section was the container under
+discussion at the time. It is not the subject. Every container the vocabulary
+has is covered by it, on one argument: `<section>` holds sections and leaves,
+`<list>` holds `<item>`, `<table>` holds `<row>`, `<row>` holds `<cell>`, and
+`<canvas>` holds everything — and in each of them the children are separate
+nodes with separate ids, edited by separate commands. So `canvas replace
+<container-id>` renames a container; it does not and cannot re-express what is
+inside it. Where this section says *a container*, it means any of those, and
+`<section>` is only the example.
 
-**Two commands are therefore refused, and the refusals are the load-bearing part
-of this rule.**
+The whole of it, verb by verb:
 
-**A `replace` payload for a `<section>` that contains child nodes is refused.**
-Not merged, not flattened, not applied to the section and silently dropped for
-the children — refused, non-zero, nothing written. Accepting it would be a
-single commit rewriting N nodes under one `Canvas-Node:` trailer, which breaks
-one-edit-is-one-node and one-edit-is-one-commit in the same stroke, and leaves
-N−1 nodes changed by a commit their own history never sees. It is also,
-precisely, the whole-document rewrite verb that three funded 2026 projects
-shipped next to a correct base-version check, arriving here in the one place the
-vocabulary makes it look reasonable. A root-level section replace being a
-whole-file rewrite is already recorded in the survey as en-quire's third defect.
+| verb, applied to a container | what happens to the subtree | what happens to the container |
+|---|---|---|
+| `replace` keeping the type | untouched: every child keeps its id, its `v`, its content and its order | its own attributes are replaced, its `v` bumps |
+| `replace` changing the type | — | **refused while it has children** |
+| `replace` supplying character data | — | **refused while it has children** |
+| `remove` | — | **refused while it has children** |
+| `move` | travels with the container, untouched: no child's id, `v`, content or order changes, and no child's history records the move | its position changes, its `v` bumps |
+| `move` into its own subtree | — | **refused** |
+| `insert` | there is none: a node is born childless | born at `v="1"` |
 
-**`replace` on a `<section>` that would change its type is refused while it has
-children**, because a `<text>` has nowhere to put them. Move the children out
-first, then replace the empty section. The children keep their ids throughout,
-which is the entire benefit.
+### `replace` on a container: what is permitted and what is refused
 
-**`remove` on a non-empty `<section>` is refused**, for the same reason in the
-other direction. A cascading delete either names N nodes in one trailer or names
-one and lets N−1 nodes vanish in a commit no grep on them will ever return — so
-a reader asking a dead id for its history would be shown a node that, by its own
-record, is still alive and was last edited cheerfully. Empty the section first.
-Each child's removal is its own commit with its own `--why`, which is a
-requirement and not an inconvenience: "we deleted this section" is not a reason
-for deleting any particular thing that was in it.
+The distinction is between **the payload** and **the node it is applied to**,
+and getting it the wrong way round produces a different tool. Stated plainly so
+that it cannot be read two ways:
+
+- **Replacing a container that has children is permitted**, and renames it. A
+  `<section>` of eight nodes can be retitled with one command, and the eight
+  nodes are not touched, not re-expressed, and not mentioned in the commit.
+  This is the ordinary case and it is the headline of this section.
+- **What is refused is a payload that would reach into the subtree.** There is
+  no flag that expresses a child — `--type`, `--text`, `--title` and `--href`
+  are four scalars and there is no `--children`, no `--file` and no document
+  body — so "a `replace` payload that rewrites N children" is **inexpressible**
+  here rather than merely refused. Nothing has to check for it because nothing
+  can say it.
+
+Two things a payload of four scalars *can* still say reach the subtree
+indirectly, and those two are the refusals:
+
+**`replace` that would change a container's type is refused while it has
+children**, because the new type has nowhere to put them. A `<text>` holds
+character data and no elements; a `<list>` holds `<item>` and not `<cell>`.
+Move the children out first, then replace the empty node. They keep their ids
+throughout, which is the entire benefit.
+
+**`replace` that would give a container character data is refused while it has
+children**, because no node in this vocabulary holds children and text at once.
+The text would be silently dropped by the serialiser, which is the failure this
+whole document is designed against: a write that reports success and did not do
+what it said.
+
+Accepting either would be a single commit rewriting N nodes under one
+`Canvas-Node:` trailer, which breaks one-edit-is-one-node and
+one-edit-is-one-commit in the same stroke, and leaves N−1 nodes changed by a
+commit their own history never sees. It is also, precisely, the whole-document
+rewrite verb that three funded 2026 projects shipped next to a correct
+base-version check, arriving here in the one place the vocabulary makes it look
+reasonable. A root-level section replace being a whole-file rewrite is already
+recorded in the survey as en-quire's third defect.
+
+### `remove` on a container
+
+**`remove` on a container that still has children is refused**, for the same
+reason in the other direction. A cascading delete either names N nodes in one
+trailer or names one and lets N−1 nodes vanish in a commit no grep on them will
+ever return — so a reader asking a dead id for its history would be shown a
+node that, by its own record, is still alive and was last edited cheerfully.
+Empty the container first. Each child's removal is its own commit with its own
+`--why`, which is a requirement and not an inconvenience: "we deleted this
+section" is not a reason for deleting any particular thing that was in it.
+
+### `move` on a container, which carries its subtree and is still one node
+
+**A `move` takes the container's whole subtree with it, and that is one node's
+edit.** N+1 nodes change where they sit in the document, one node is named, and
+one node's `v` bumps: the container's.
+
+That is consistent rather than an exception, and the reason is worth stating
+because it is the same reason section 4 gives for a container's `v` not bumping
+when its children change. **Position is a property of the child.** A node's own
+record says whose child it is; it does not say which children it has. Move a
+`<table>` into a `<section>` and every `<row>` in it is still a child of that
+same `<table>`, in the same order, with the same content and the same `v`. Not
+one child's record has changed, so not one child's history is missing anything,
+and the invariant holds exactly: nothing happened to those nodes that their own
+histories do not record, because nothing happened to those nodes.
+
+The alternative — refusing to move a populated container, or bumping every
+descendant's `v` — is the one this rule was chosen over. Refusing would make
+restructure, which is mostly moves, cost the whole subtree; bumping every
+descendant would report N nodes as edited by a commit that names one, which is
+the same lie as the cascading delete with a friendlier face.
+
+**`move` of a container into its own subtree is refused.** It is the one
+position that is not a position: the container and everything under it would
+leave the document altogether, and the commit would name one node while N
+disappeared.
+
+### `insert` on a container, and what an `insert` may bring with it
+
+**An `insert` brings exactly one node, and the node it brings is childless.**
+`insert --type section` creates an empty section; `insert --type table` creates
+an empty table. There is no payload that fills one, for the same reason
+`replace` has none: a flag that carried children would be a multi-node write
+wearing a single verb's name.
+
+So a populated section is built the way it is emptied — one node at a time,
+each with its own reason. `schema/canvas.rng` makes every container
+`zeroOrMore` and never `oneOrMore` precisely so that the empty container each
+of those sequences passes through is a legal document and not a state the tool
+has to hide.
+
+### Where this is enforced
+
+Not in the command line, and not only in the four verbs. `canvas/store.py`
+compares the document it is about to write against the document already on
+disk, and refuses unless exactly the node named in the commit's `Canvas-Node:`
+trailer is the one that differs — same types, same attributes, same character
+data, same parent and the same order for every other node. The comparison is
+this section's rule expressed as data, which is why a container travelling with
+its subtree passes it and a payload that rewrote that subtree does not.
+
+The write path is private and there is no public function anywhere in the tool
+that takes a document. A whole-document rewrite is therefore not a verb someone
+declined to add to the command line: it is a write no code path in the tool will
+perform, for any caller, from any import path. The one write that names no node
+is the birth of a canvas, and the only document it may produce is the root
+alone, which is section 4's rule checked by the same guard.
+
+### The refusals name what they refused
 
 **The refusals follow IWE's error surface**, as *What to copy* requires: a
-refusal names the section, names every child id the rejected payload would have
-touched, and says to edit them one at a time. An agent can act on that. It
-cannot act on the word "refused".
+refusal names the container, names every child id the rejected write would have
+touched, and says what to do instead — each child, with its own `--why`, one
+node at a time. Every one of them exits non-zero and writes nothing: not the
+file, not a commit, not a temporary. An agent can act on that. It cannot act on
+the word "refused".
 
 **What this costs, stated honestly.** Restructuring is tedious. Reorganising a
 section of eight nodes is eight commands and eight reasons, not one. That is the

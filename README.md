@@ -255,10 +255,10 @@ invocation, not a request that is wrong against the store — and both write
 nothing, commit nothing and mint nothing.
 
 The rule lives in `canvas/store.py` and not in the command line above it.
-`write_and_commit` is the only function that puts a canvas on its real path, it
-takes the reason as a positional argument and it calls `require_reason` before
-it opens a file. **There is no code path that writes to a canvas without a
-reason** — including from Python, including for `create`, whose three commits
+`_write_and_commit` is the only function that puts a canvas on its real path,
+it takes the reason as a positional argument and it calls `require_reason`
+before it opens a file. **There is no code path that writes to a canvas without
+a reason** — including from Python, including for `create`, whose three commits
 carry their reasons the same way.
 
 #### How new content is supplied
@@ -281,25 +281,67 @@ and the validator refuses to let it reach the canvas's path.
 
 #### One edit is still one node
 
-`node-identity.md` §5 decided these in writing before any verb existed, so they
-ship with the verbs rather than after them:
+`node-identity.md` §5 settles what "one node" means when the node has children,
+and it settles it for **every container the vocabulary has** — `<section>`,
+`<list>`, `<table>`, `<row>` and the root — and not for `<section>` alone. What
+the store does, verb by verb:
 
-- **`remove` on a node that still has children is refused**, naming the node
-  and every child id. A cascading delete either names N nodes in one trailer or
-  lets N−1 vanish in a commit no grep on them will ever return.
+- **`replace` on a container that has children renames it**, and that is
+  permitted and ordinary. The children keep their ids, their `v`, their content
+  and their order; the container's own attributes are replaced and its `v`
+  bumps. A `<section>` of eight nodes is retitled by one command and the eight
+  nodes are not mentioned in the commit.
 - **`replace` that would change the type of a node that has children is
   refused**, because the new type has nowhere to put them. Move them out first;
   they keep their ids throughout, which is the entire benefit.
 - **`replace` that would give a node with children character data is refused**,
   because a node holds children or text and never both, so the text would be
   dropped silently.
-- **`move` of a node into itself is refused.** The subtree would leave the
-  document and the commit would name one node while N disappeared.
+- **`remove` on a node that still has children is refused**, naming the node
+  and every child id. A cascading delete either names N nodes in one trailer or
+  lets N−1 vanish in a commit no grep on them will ever return. Empty it first.
+- **`move` of a container carries its whole subtree, and is still one node's
+  edit.** Position is a property of the child: every child is a child of the
+  same container before and after, in the same order, with the same content and
+  the same `v`, so not one child's record changed and not one child's history is
+  missing anything. Only the moved node is named and only its `v` bumps.
+- **`move` of a node into its own subtree is refused.** The subtree would leave
+  the document and the commit would name one node while N disappeared.
+- **`insert` brings exactly one node, and it arrives childless.** There is no
+  payload that fills a container, so a subtree is built the way it is emptied —
+  one node at a time, each with its own reason.
 
-A `replace` payload cannot express children at all, so "one commit rewriting N
-children" is inexpressible here rather than merely refused. Replacing a
-`<section>` that has children renames it: the children keep their ids, their
-`v`, their content and their order.
+Every refusal exits `1`, writes nothing — not the file, not a commit, not a
+temporary — and names the container, every child it would have touched, and
+what to do instead.
+
+A `replace` payload cannot express a child at all: `--type`, `--text`,
+`--title` and `--href` are four scalars, and there is no `--children`, no
+`--file`, no document body and no stdin. "One commit rewriting N children" is
+**inexpressible** here rather than merely refused.
+
+#### There is no code path that writes more than one node
+
+The twin of the `--why` rule above, in the same place and for the same reason.
+`_write_and_commit` compares the document it is about to write against the
+document already on disk, and refuses unless exactly the node named in the
+commit's `Canvas-Node:` trailer is the one that differs — same type, same
+attributes, same character data, same parent, and the same sibling order for
+every other node.
+
+**The supported write surface is five functions**: `create`, `insert`,
+`replace`, `remove` and `move`. Each takes a ledger id, a reason and at most one
+node id, and **none of them takes a document**. That absence is the design:
+a function that accepts a whole tree is a whole-document rewrite whatever it is
+called, so the parameter is not offered and the one private function that has it
+refuses the write anyway. `from canvas import store` reaches no further than
+`bin/canvas` does, and `canvas.document` writes to no file at all.
+
+**There is no code path that writes more than one node** — not a command, not a
+flag, not a combination of flags, not a file-level route and not an import path.
+The single write that names no node is the birth of a canvas, and the only
+document it may produce is the root alone, which is why `create` is three
+commits and not one.
 
 ### Naming a position
 
@@ -338,7 +380,10 @@ with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
   the truthful record of the head it was applied to, compared against nothing.
 - **It does not report a node's history.** `git log --grep='Canvas-Node: b7'`
   is the documented command and there is no verb wrapping it.
-- **It does not batch.** Nothing in it can touch two nodes in one commit.
+- **It does not batch, and cannot be made to.** Nothing in it can touch two
+  nodes in one commit, and the one function that puts a canvas on its path
+  refuses a write worth more than the one node the commit names. There is no
+  transaction, no multi-node payload and no whole-document verb to add one to.
 - **It does not wire the ledger's `open` transition.** `create` is driven by hand.
 - **It does not shell out to `xmllint` and does not restate the vocabulary.**
   Every write goes through `canvas.validate.validate_file` at a temporary path
