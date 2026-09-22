@@ -25,13 +25,29 @@ Every write is validated through `canvas.validate.validate_file` at a temporary
 path and only then renamed into place, so an invalid canvas is never reachable
 at the canvas's own path, let alone committed.
 
-**No canvas is ever written without a reason.** `write_and_commit` is the only
-function that puts a canvas on its real path, and it takes the reason as an
-argument and calls `require_reason` before it writes a byte. The rule is a
+**No canvas is ever written without a reason.** `_write_and_commit` is the
+only function that puts a canvas on its real path, and it takes the reason as
+an argument and calls `require_reason` before it writes a byte. The rule is a
 property of the write path itself, not of the command line above it: a future
 caller that never goes near `canvas/cli.py` cannot write an unexplained edit,
 because there is no function here that will do it. `create`'s three commits
 carry their reasons the same way the four verbs carry `--why`.
+
+**No canvas is ever written more than one node at a time**, and this is the
+same claim in the same place. `_write_and_commit` compares the document it is
+about to write against the document on disk and refuses unless exactly the node
+its `Canvas-Node:` trailer names is the one that differs. A whole-document
+rewrite is not a verb that was left out of `canvas/cli.py`; it is a write this
+function will not perform, for any caller, from any import path.
+
+**The supported write surface of this module is five functions**: `create`,
+`insert`, `replace`, `remove` and `move`. Each of them takes a ledger id, a
+reason and at most one node id, and each of them produces exactly one commit
+per node it changes. There is deliberately no public function that takes a
+document: a caller that hands in a whole tree is expressing a whole-document
+rewrite, and the way to make that inexpressible is not to offer the parameter.
+`_write_and_commit` is private for that reason and guarded anyway, because a
+leading underscore is a convention and the guard is a refusal.
 """
 
 import os
@@ -353,7 +369,181 @@ def preflight(path, ledger_id, contents):
         raise Refusal("refusing to create an invalid canvas at %s" % path, problems)
 
 
-def write_and_commit(
+# --------------------------------------------------------------------------
+# One write is one node
+# --------------------------------------------------------------------------
+#
+# `node-identity.md` section 5 decides what "one node" means when the node has
+# children, and section 4 states the invariant the whole rule protects: a
+# node's entire life is exactly the set of commits that name it. The three
+# functions below are that invariant made checkable, and they run on the only
+# path that puts a canvas on its own path — so the rule binds a Python caller
+# exactly as hard as it binds a command line.
+
+
+def _shape(root):
+    """What a one-node comparison sees: every node's record, and the order.
+
+    Two maps, keyed by node id, with the root under `document.ROOT`:
+
+    - **records** — `(tag, attributes, character data, the id of the parent)`.
+      Whose child a node is belongs to the *child's* record and not to the
+      container's, which is section 4's invariant restated as data: "a
+      container's `v` does not bump when its children change". That is also
+      what makes moving a populated container one node's edit — every child's
+      parent is the moved node before the move and the moved node after it, so
+      not one of their records has changed.
+    - **order** — each container's children, in order. A rewrite that shuffles
+      two siblings changes no record at all, so this is the second half of the
+      comparison rather than a decoration.
+
+    A node with no `id`, and a document that uses one id twice, both raise: a
+    guard that cannot name a node cannot vouch for it.
+    """
+    records = {}
+    order = {}
+    stack = [(root, None)]
+    while stack:
+        element, parent_id = stack.pop()
+        node_id = document.ROOT if element is root else element.get("id")
+        if node_id is None:
+            raise Refusal(
+                "refusing to write a <%s> with no id: every node in a canvas "
+                "carries one, and a node the store cannot name is a node no "
+                "history can record" % element.tag
+            )
+        if node_id in records:
+            raise Refusal(
+                "refusing to write a canvas that uses the id %s twice: an id "
+                "names one node, and two nodes sharing one would share one "
+                "history" % node_id
+            )
+        records[node_id] = (
+            element.tag,
+            tuple(sorted(element.items())),
+            element.text,
+            parent_id,
+        )
+        children = list(element)
+        if children:
+            order[node_id] = tuple(child.get("id") for child in children)
+        stack.extend((child, node_id) for child in children)
+    return records, order
+
+
+def _without(sequence, node_id):
+    return tuple(each for each in sequence if each != node_id)
+
+
+def _one_node_only(path, root, node_id):
+    """Refuse unless this write changes exactly the node the commit names.
+
+    The document on disk and the document about to replace it are compared node
+    by node. Everything except the subject has to come through identical: same
+    type, same attributes — `v` included — same character data, same parent,
+    and the same siblings in the same order once the subject is taken out of
+    both sequences, which is what lets the subject be inserted, moved or
+    removed without every node around it counting as changed.
+
+    The subject may therefore be born, edited, reparented, reordered or taken
+    out; and nothing else may happen in the same commit. A container that
+    travels with its subtree passes, because no child's record mentions where
+    its container sits. A payload that rewrites that subtree does not.
+    """
+    if not os.path.isfile(path):
+        raise Refusal(
+            "refusing to write %s in a commit naming %s: there is no canvas "
+            "there for that node to be one edit of. A canvas is created by "
+            "`create`, and only its birth commit names no node" % (path, node_id)
+        )
+    try:
+        stored = document.parse(path)
+    except document.NotWellFormed as error:
+        raise Refusal("%s" % error)
+
+    before, before_order = _shape(stored)
+    after, after_order = _shape(root)
+
+    changed = sorted(
+        key
+        for key in set(before) | set(after)
+        if key != node_id and before.get(key) != after.get(key)
+    )
+    reordered = sorted(
+        key
+        for key in set(before_order) | set(after_order)
+        if _without(before_order.get(key, ()), node_id)
+        != _without(after_order.get(key, ()), node_id)
+    )
+    if not changed and not reordered:
+        return
+
+    # IWE's error surface, as `engineering-spec.md`'s *What to copy* requires:
+    # name every node the rejected write would have touched, and say what to do
+    # instead. An agent can act on that; it cannot act on the word "refused".
+    also = []
+    if changed:
+        also.append(
+            "changes %d other node(s) (%s)" % (len(changed), ", ".join(changed))
+        )
+    if reordered:
+        also.append(
+            "reorders the children of %s"
+            % ", ".join(
+                "the root" if key == document.ROOT else key for key in reordered
+            )
+        )
+    raise Refusal(
+        "refusing to write a commit naming %s that also %s: one edit is one "
+        "node. Make each of those its own edit with its own reason, using "
+        "insert, replace, remove or move, one node at a time"
+        % (node_id, " and ".join(also))
+    )
+
+
+def _a_canvas_is_being_born(path, root):
+    """The one write that names no node: `create`'s first commit, root only.
+
+    `node-identity.md` section 4: "The canvas's creation commit creates the root
+    only." A commit with no `Canvas-Node:` trailer changes no node's history, so
+    the only document it may write is one with no nodes in it — and only where
+    there is no canvas there yet, because a nameless write over an existing
+    canvas is exactly the whole-document rewrite this store does not have.
+    """
+    if os.path.exists(path):
+        raise Refusal(
+            "refusing to write %s in a commit that names no node: a canvas "
+            "already exists there, and a write that names no node is the birth "
+            "of one. Use insert, replace, remove or move, one node at a time"
+            % path
+        )
+    nodes = list(root.iter())[1:]
+    if nodes:
+        raise Refusal(
+            "refusing to create %s with %d node(s) already in it (%s): a canvas "
+            "is born as its root alone, and each of its first nodes arrives as "
+            "its own insert with its own reason"
+            % (path, len(nodes), _child_ids(nodes))
+        )
+
+
+def _inside_the_store(canvas_dir, path):
+    """A canvas is written at its own path in the canvas repository, or not at all.
+
+    `canvas_path` already keeps a ledger id from escaping `state/canvas`; this
+    keeps a hand-supplied path from doing it, so that the file a write produces
+    is always one `git add` can stage and always one `read` can find again.
+    """
+    home = os.path.realpath(canvas_dir)
+    where = os.path.realpath(os.path.dirname(os.path.abspath(path)))
+    if where != home or not os.path.basename(path).endswith(".xml"):
+        raise ToolProblem(
+            "refusing to write %s: a canvas is written as <ledger-id>.xml "
+            "inside %s and nowhere else" % (path, canvas_dir)
+        )
+
+
+def _write_and_commit(
     canvas_dir, path, root, verb, subject_name, why, author, node_id=None, base=None
 ):
     """Validate the document, put it at `path`, commit it. Return the new sha.
@@ -375,8 +565,26 @@ def write_and_commit(
     that composed its own subject could compose one with no reason in it. The
     shape is `<verb> <subject> : <reason>`, which is what `create` already
     wrote and what `engineering-spec.md` shows for `replace`.
+
+    **This is also where "one edit is one node" is enforced**, and it is here
+    for exactly the same argument. `node_id` is no longer a label used only to
+    compose a trailer: it is the claim this write makes about itself, and
+    `_one_node_only` holds the write to it against the document already on
+    disk. A caller handing in a whole rewritten tree gets a refusal naming
+    every node it would have changed, whether it came through `canvas/cli.py`
+    or through `from canvas import store`. The single write that names no node
+    is the birth of a canvas, and `_a_canvas_is_being_born` is the whole of
+    what it is allowed to be.
+
+    All three checks run before the temporary file is opened, so a refused
+    write leaves nothing behind — not even a rejected temporary.
     """
     why = require_reason(why)
+    _inside_the_store(canvas_dir, path)
+    if node_id is None:
+        _a_canvas_is_being_born(path, root)
+    else:
+        _one_node_only(path, root, node_id)
     subject = "%s %s: %s" % (verb, subject_name, why)
     text = document.serialise(root)
     temporary = "%s.tmp-%d" % (path, os.getpid())
@@ -481,7 +689,7 @@ def create(ledger_id, problem, expected_value, author=None):
     preflight(path, ledger_id, (problem, expected_value))
 
     root = document.new_canvas(ledger_id)
-    sha = write_and_commit(
+    sha = _write_and_commit(
         canvas_dir,
         path,
         root,
@@ -498,7 +706,7 @@ def create(ledger_id, problem, expected_value, author=None):
     for content, reason in first_nodes:
         node_id = mint(canvas_dir)
         document.place_into(root, document.ROOT, document.new_text(node_id, content))
-        sha = write_and_commit(
+        sha = _write_and_commit(
             canvas_dir,
             path,
             root,
@@ -556,7 +764,7 @@ def read(ledger_id):
 # can be anything, and not in a verb name, where they can only be what somebody
 # thought of in advance.
 #
-# Each of them is exactly one commit, because `write_and_commit` writes and
+# Each of them is exactly one commit, because `_write_and_commit` writes and
 # commits in one call and there is no other way to put a canvas on its path.
 # Each names exactly one node in a `Canvas-Node:` trailer, which is what makes
 # `git log --grep='Canvas-Node: b7'` that node's whole life.
@@ -690,7 +898,7 @@ def insert(
     )
     _place(root, node, after, into)
 
-    sha = write_and_commit(
+    sha = _write_and_commit(
         canvas_dir,
         path,
         root,
@@ -724,8 +932,10 @@ def replace(
     type the node already has, so renaming a section or rewriting a paragraph
     does not have to restate what it already is.
 
-    Two refusals, both of them `node-identity.md` section 5's, which decided
-    them in writing before any verb existed:
+    Replacing a container that has children is permitted and renames it: the
+    children keep their ids, their `v`, their content and their order. Two
+    refusals, both of them `node-identity.md` section 5's — which decides the
+    whole container case, for every container and not for `<section>` alone:
 
     - A type change while the node has children, because the new type has
       nowhere to put them. Move them out first; they keep their ids throughout,
@@ -755,7 +965,8 @@ def replace(
         raise Refusal(
             "refusing to give <%s> %s character data while it has %d child "
             "node(s) (%s): a node holds children or text, never both, so the "
-            "text would be dropped. Edit the children one at a time"
+            "text would be dropped. Replace each child with its own --why "
+            "instead, one node at a time"
             % (node.tag, node_id, len(children), _child_ids(children))
         )
 
@@ -772,7 +983,7 @@ def replace(
     replacement.extend(children)
     document.replace_node(root, node_id, replacement)
 
-    return write_and_commit(
+    return _write_and_commit(
         canvas_dir,
         path,
         root,
@@ -792,12 +1003,13 @@ def remove(ledger_id, node_id, why, author=None):
     in its history, and `is_free` greps that history, so the id can never be
     handed to a different node later.
 
-    A node with children is refused — `node-identity.md` section 5 for the
-    `<section>` case, and the same argument holds for every container. A
-    cascading delete either names N nodes in one trailer or lets N−1 nodes
-    vanish in a commit no grep on them will ever return, so a reader asking a
-    dead id for its history would be shown a node that, by its own record, is
-    still alive. Empty it first, each removal with its own reason.
+    A node with children is refused, for every container and not just the
+    `<section>` — `node-identity.md` section 5 states it that way, so this is a
+    pointer at the specification and not a second copy of it. A cascading delete
+    either names N nodes in one trailer or lets N−1 nodes vanish in a commit no
+    grep on them will ever return, so a reader asking a dead id for its history
+    would be shown a node that, by its own record, is still alive. Empty it
+    first, each removal with its own reason.
     """
     why = require_reason(why)
     canvas_dir, path, root, base = _open_canvas(ledger_id)
@@ -816,7 +1028,7 @@ def remove(ledger_id, node_id, why, author=None):
         author = default_author(canvas_dir)
     document.detach(root, node_id)
 
-    return write_and_commit(
+    return _write_and_commit(
         canvas_dir,
         path,
         root,
@@ -873,7 +1085,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None):
     document.detach(root, node_id)
     _place(root, node, after, into)
 
-    return write_and_commit(
+    return _write_and_commit(
         canvas_dir,
         path,
         root,
