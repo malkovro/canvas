@@ -392,12 +392,18 @@ them to.
 
 ## Open
 
-- **What happens to a node's `id` when a section is restructured wholesale.**
-  The survey promoted this from a footnote to the hardest open item. Ids have to
+- **How a node's `id` survives a restructure — decided, with a remainder.**
+  The survey promoted this from a footnote to the hardest open item: ids have to
   be stable for history to mean anything, and a restructure is exactly when
   somebody will want to renumber; en-quire shipped without solving it and its
   history silently attaches to the wrong text the first time a heading is
-  renamed.
+  renamed. Minting, preservation under each of the four verbs, `v` bumping, and
+  what happens to a section's children when the section is replaced are now
+  settled in [node identity](node-identity.md). What remains open is **merge and
+  split**: a restructure made of moves, renames and one-node replaces costs no
+  history under that rule, but splitting one node into two or merging two into
+  one strands the lineage of one side, and nothing yet records an ancestor id.
+  See that document's closing section for the precise remainder.
 - **Whether a model writes a useful `--why`.** Untested by anyone, because
   nobody ships a mandatory reason field. See step 1 of *The path*.
 - Whether a step that writes to the canvas should have to, or whether an empty
