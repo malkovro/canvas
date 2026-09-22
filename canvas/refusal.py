@@ -35,6 +35,20 @@ decides that, and passes in what its own code means, because `bin/canvas` and
 """
 
 
+def _once(values):
+    """The values, in the order given, each of them once.
+
+    A refusal composes its nodes from what the caller named and what it found,
+    and the two overlap — a `move` whose target is the node being moved, two
+    nodes sharing one container. One line per thing is what an agent reads.
+    """
+    seen = []
+    for value in values:
+        if value not in seen:
+            seen.append(value)
+    return seen
+
+
 class Refused(Exception):
     """A refusal, with everything a caller needs to act on it.
 
@@ -47,8 +61,8 @@ class Refused(Exception):
     def __init__(self, message, next_action, nodes=(), about=(), details=()):
         Exception.__init__(self, message)
         self.next_action = next_action
-        self.nodes = list(nodes)
-        self.about = list(about)
+        self.nodes = _once(nodes)
+        self.about = _once(about)
         self.details = list(details)
         if not self.next_action or not self.next_action.strip():
             raise ValueError(

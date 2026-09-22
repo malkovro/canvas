@@ -111,15 +111,21 @@ def _read(args):
     # document is still printed, because a caller cannot repair what it cannot
     # see. It is a refusal all the same — the read did not give a usable answer
     # — so it prints the same shape as every other one, diagnostics included.
+    # The path is re-derived rather than returned, because both calls have
+    # already succeeded by the time there is anything to say: the read found
+    # the file there.
+    path = store.canvas_path(store.canvas_directory(), args.ledger_id)
     _refuse(
         refusal.Refused(
             "the canvas for %s is invalid: it is printed above, and the "
             "diagnostics below say where" % args.ledger_id,
-            "repair each node the diagnostics name — `bin/canvas replace %s "
-            "<node-id> --why \"<why>\"` is how, one node at a time — and read "
-            "again; what a canvas node may be is written in schema/canvas.rng "
-            "and nowhere else. Nothing was written" % args.ledger_id,
-            about=["ledger id %s" % args.ledger_id],
+            "repair %s: each diagnostic above names the line, and the node "
+            "where the document parses at all. A node the schema refuses is "
+            "corrected with `bin/canvas replace %s <node-id> --why \"<why>\"`, "
+            "one node at a time; XML that will not parse has to be repaired in "
+            "the file itself. What a canvas node may be is written in "
+            "schema/canvas.rng and nowhere else" % (path, args.ledger_id),
+            about=["ledger id %s" % args.ledger_id, "canvas %s" % path],
             details=problems,
         ),
         1,
@@ -397,14 +403,19 @@ def _invocation_problem(parser, message):
     """
     top = getattr(parser, "top", parser)
     verb, positionals, options = _supplied(top, getattr(top, "invocation", []))
-    nodes = [
+    addressed = [
         value
         for key, value in list(positionals.items()) + list(options.items())
         if key in ("node_id", "node-id", "--after", "--into") and value
     ]
+    # `root` names the canvas element, which carries no id and no v and is not
+    # a node. It is a position, and the store's own refusals say so.
+    nodes = [each for each in addressed if each != "root"]
     about = ["command %s" % parser.prog]
     if positionals.get("ledger_id"):
         about.append("ledger id %s" % positionals["ledger_id"])
+    if "root" in addressed:
+        about.append("position root, the <canvas> element")
 
     missing = _after(message, "the following arguments are required: ")
     unrecognised = _after(message, "unrecognized arguments: ")
