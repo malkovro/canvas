@@ -551,6 +551,19 @@ exactly the same way. The two are told apart rather than guessed at: where
 `state/canvas` cannot be looked in at all, the tool says it cannot tell whether
 that canvas exists, because it cannot.
 
+**Which of the two a refusal is, the errno decides — not the guard it landed
+in.** The existence check and the `open` after it are separate syscalls, so a
+canvas removed in between reaches the "cannot read it" path carrying `ENOENT`:
+the filesystem has answered that it is gone, and that is the `1` above however
+late the answer arrived. Exit `2` there would have the tool assert the canvas
+is present one line under the errno saying it is absent, and name a `chmod`
+against a file that is not there — a next action that cannot be run. So the
+repair a refusal names and whatever it claims about the store are both chosen
+by the errno, including for an errno this tool has never met: that one gets the
+same trailers, the same documented code and a next action naming the path and
+the condition, rather than inheriting the sentence written for the errno
+somebody happened to meet first.
+
 **No failed look is reported as a finding.** That rule holds for the repository
 and the workspace as well as for the canvas file, and each of the three used to
 break it in the same way — a call that can fail for two reasons was read as
