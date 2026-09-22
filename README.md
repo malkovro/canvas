@@ -521,7 +521,7 @@ that the verbs inherit an answer instead of improvising one.
 |---|---|
 | `0` | it worked |
 | `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, or any other condition the operating system refuses the command with**. Do not touch the canvas |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
 `Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A
@@ -550,6 +550,31 @@ would tell a caller to re-read and re-decide, and the re-read would fail in
 exactly the same way. The two are told apart rather than guessed at: where
 `state/canvas` cannot be looked in at all, the tool says it cannot tell whether
 that canvas exists, because it cannot.
+
+**No failed look is reported as a finding.** That rule holds for the repository
+and the workspace as well as for the canvas file, and each of the three used to
+break it in the same way — a call that can fail for two reasons was read as
+though it could only fail for one:
+
+- `git rev-parse HEAD` exits `128` on a repository with no commits *and* on a
+  `.git` this process may not read. Reading that as "no commits" made `read`
+  announce that a repository holding three commits had none, and made `history`
+  answer that a node those commits name "was never a node of this canvas". The
+  question is asked as `rev-parse --verify --quiet` instead, which answers `1`
+  in silence for a ref that is genuinely not there and `128` with a reason for a
+  repository it could not open, and the repository is confirmed readable before
+  the emptiness is believed.
+- `os.path.isdir` answers False for a workspace that is absent, for one under a
+  directory this process may not traverse, and for a regular file. Reading that
+  as "not a directory" made the tool say so of a path `ls -ld` showed as
+  `drwxr-xr-x`, and the repair it named — point `$OPENCLAW_WORKSPACE` somewhere
+  that exists — could not work, because the variable was already right.
+
+In every one of these the refusal was in the right shape, with a `Canvas-Next:`
+and a `Canvas-Exit:` and no traceback. Shape is not enough: a refusal has to be
+*true*, and its next action has to be one that succeeds. What the tool says
+now, where it cannot look, is that it cannot tell — with the errno, and with
+`chmod` against the shallowest directory that is actually refusing it.
 
 ### What a refusal prints
 
