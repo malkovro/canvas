@@ -3921,5 +3921,428 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
         self.assertIsNone(refusal.blocking_ancestor(self.canvas_file()))
 
 
+class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
+    """The todo's done condition as an invariant the repository re-runs.
+
+    Four rounds of this work each closed a refusal and each were shown one
+    more, because the guarantee was being checked by somebody imagining a
+    counterexample and the checking stopped when the imagining did. "Every
+    refusal path" is a universal claim and cannot be discharged that way. So it
+    is written here instead, against the refusal families `README.md` and the
+    todo description both name, as assertions a later change has to keep
+    passing rather than an opinion somebody formed once.
+
+    For each refusal it covers:
+
+    - the process exits non-zero with one of the two codes `README.md` section
+      *Exit codes* documents — it says plainly there are two and no third, so
+      a `3` is a defect however good its message is;
+    - stderr carries `Canvas-Next:` and `Canvas-Exit:` and no traceback;
+    - the node ids are named where nodes are involved;
+    - **every fact it asserts about the store is true**, and **every repair it
+      names actually succeeds when run**.
+
+    The last two are the part shape-checking cannot see: a refusal that says
+    "the canvas is there and unchanged" over an errno meaning it is gone, and
+    tells the caller to `chmod` a file that does not exist, has a
+    `Canvas-Next:`, a `Canvas-Exit:` and no traceback exactly like a true one.
+    """
+
+    # ------------------------------------------------------------------
+    # The bar
+    # ------------------------------------------------------------------
+
+    #: The whole documented set. `README.md`: "There are two, and there is no
+    #: third." A refusal outside it is unexplained by construction, because the
+    #: table a caller reads has no row for it.
+    DOCUMENTED_EXITS = (1, 2)
+
+    #: A repair, as a refusal writes one. `chmod` is the only command in the
+    #: surface that a caller runs *to make the refused command work* — `ls` and
+    #: `df` are there to show what state produced it — so it is the one whose
+    #: success is the refusal's own claim rather than a diagnostic.
+    CHMOD = re.compile(r"`chmod (\S+) ([^`]+)`")
+
+    #: Sentences that assert the canvas is still where the tool left it, and
+    #: the `Canvas-About:` kinds that name the path they are asserting it of.
+    PRESENCE_CLAIMS = ("the canvas is there", "the file is there")
+
+    #: Sentences that assert the opposite. `\S+` runs to the end of the line
+    #: because a path is the last thing on it.
+    ABSENCE_CLAIMS = (
+        re.compile(r"nothing at (\S+)"),
+        re.compile(r"there is no canvas at (\S+)"),
+    )
+
+    def named_paths(self, trailers):
+        """The paths a refusal named, by what it called them."""
+        found = {}
+        for thing in trailers["Canvas-About"]:
+            kind, _, value = thing.partition(" ")
+            found.setdefault(kind, []).append(value)
+        return found
+
+    def assertClaimsAreTrue(self, stderr, trailers, msg):
+        """Whatever it said about the store, the store has to agree.
+
+        Only the claims a refusal actually makes are checked: this asks the
+        filesystem about the sentence that is printed, so a refusal that says
+        nothing about presence has nothing here to fail.
+        """
+        paths = self.named_paths(trailers)
+        subjects = paths.get("canvas", []) + paths.get("file", [])
+        for claim in self.PRESENCE_CLAIMS:
+            if claim in stderr:
+                for path in subjects:
+                    self.assertTrue(
+                        os.path.exists(path),
+                        "%s: said %r about %s, which is not there\n%s"
+                        % (msg, claim, path, stderr),
+                    )
+        for pattern in self.ABSENCE_CLAIMS:
+            for path in pattern.findall(stderr):
+                self.assertFalse(
+                    os.path.exists(path),
+                    "%s: said nothing is at %s, and something is\n%s"
+                    % (msg, path, stderr),
+                )
+        if "no canvas for ledger id" in stderr:
+            for path in paths.get("canvas", []):
+                self.assertFalse(
+                    os.path.exists(path),
+                    "%s: said there is no canvas, and %s is there\n%s"
+                    % (msg, path, stderr),
+                )
+
+    def assertRepairsRun(self, trailers, msg):
+        """Every `chmod` the next action names has to exit 0 when run.
+
+        This is what `chmod u+r <a canvas that was removed>` fails: it exits
+        `1`, so the caller told to run it is told to run something that cannot
+        work, and the re-run it is supposed to enable never happens.
+
+        The mode is put back afterwards, so a test that sets one up to be
+        refused is not quietly repaired by the assertion that checks it.
+        """
+        for mode, path in self.CHMOD.findall(trailers["Canvas-Next"][0]):
+            self.assertTrue(
+                os.path.exists(path),
+                "%s: named `chmod %s %s`, and %s is not there"
+                % (msg, mode, path, path),
+            )
+            # Safety, asserted rather than assumed: nothing outside a
+            # temporary directory this test made ever has its mode changed.
+            self.assertTrue(
+                path.startswith(tempfile.gettempdir())
+                or path.startswith(self.workspace),
+                "%s: refusing to chmod %s, which is not under a tempdir"
+                % (msg, path),
+            )
+            original = stat.S_IMODE(os.stat(path).st_mode)
+            result = subprocess.run(
+                ["chmod", mode, path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                self.assertEqual(
+                    0, result.returncode,
+                    "%s: `chmod %s %s` exited %d: %s"
+                    % (msg, mode, path, result.returncode,
+                       result.stderr.decode("utf-8", "replace")),
+                )
+            finally:
+                os.chmod(path, original)
+
+    def assertActionable(self, code, stderr, msg, nodes=()):
+        """The done condition, for one refusal."""
+        self.assertNotIn("Traceback (most recent call last)", stderr, msg)
+        self.assertNotEqual(0, code, "%s\n%s" % (msg, stderr))
+        self.assertIn(
+            code, self.DOCUMENTED_EXITS,
+            "%s: exited %d, and README documents only %s\n%s"
+            % (msg, code, ", ".join(str(each) for each in self.DOCUMENTED_EXITS),
+               stderr),
+        )
+        trailers = self.surface(stderr)
+        self.assertEqual(1, len(trailers["Canvas-Next"]), "%s\n%s" % (msg, stderr))
+        self.assertTrue(trailers["Canvas-Next"][0].strip(), msg)
+        self.assertEqual(1, len(trailers["Canvas-Exit"]), "%s\n%s" % (msg, stderr))
+        self.assertTrue(
+            trailers["Canvas-Exit"][0].startswith("%d " % code),
+            "%s\n%s" % (msg, stderr),
+        )
+        self.assertIn("—", trailers["Canvas-Exit"][0], msg)
+        self.assertTrue(
+            trailers["Canvas-Node"] or trailers["Canvas-About"],
+            "%s\n%s" % (msg, stderr),
+        )
+        for node in nodes:
+            self.assertIn(node, trailers["Canvas-Node"], "%s\n%s" % (msg, stderr))
+        self.assertClaimsAreTrue(stderr, trailers, msg)
+        self.assertRepairsRun(trailers, msg)
+        return trailers
+
+    def validate(self, *paths):
+        """Run bin/canvas-validate. Returns (exit code, stderr text)."""
+        result = subprocess.run(
+            [sys.executable, VALIDATE] + list(paths),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return result.returncode, result.stderr.decode("utf-8", "replace")
+
+    # ------------------------------------------------------------------
+    # The six families the todo description names
+    # ------------------------------------------------------------------
+
+    def test_the_schema_violation(self):
+        code, stderr = self.validate(
+            os.path.join(ROOT, "tests", "fixtures", "unknown-node.xml")
+        )
+        self.assertEqual(1, code, stderr)
+        self.assertActionable(code, stderr, "a document the schema rejects")
+        # The offending node is named in band, which is what an agent narrows
+        # with. `unknown-node.xml` carries one, and the diagnostic quotes it.
+        self.assertIn('id="jc5v"', stderr)
+
+    def test_the_missing_why(self):
+        for args in (
+            ("replace", self.problem_id, "--text", "x"),
+            ("remove", self.problem_id),
+            ("insert", "--after", self.problem_id, "--text", "x"),
+            ("move", self.problem_id, "--into", "root"),
+        ):
+            code, _, stderr = self.verb(*args)
+            self.assertActionable(code, stderr, ("no --why", args))
+
+    def test_the_two_node_edit(self):
+        """Both shapes: two ids in one invocation, and one edit that would
+        reach a second node — a container turned into a leaf, or removed,
+        while it has children. `node-identity.md` §5 is what refuses the
+        second, and it has to name every child it would have touched."""
+        section = self.inserted(
+            "--into", "root", "--type", "section", "--title", "Options",
+            "--why", "the options",
+        )
+        first = self.inserted("--into", section, "--text", "A", "--why", "a")
+        second = self.inserted("--into", section, "--text", "B", "--why", "b")
+        for edit, named, mentioned in (
+            (("replace", first, second, "--text", "both"), [first], [second]),
+            (("remove", first, second), [first], [second]),
+            (("move", first, second, "--into", "root"), [first], [second]),
+            (("replace", section, "--type", "text", "--text", "A."),
+             [section, first, second], []),
+            (("remove", section), [section, first, second], []),
+        ):
+            code, _, stderr = self.verb(*(edit + ("--why", "settle them")))
+            self.assertActionable(
+                code, stderr, ("two nodes", edit), nodes=named
+            )
+            # The second id is the argument that was rejected rather than a
+            # node of the edit, so it is named in the message and the next
+            # action — "drop <it> and re-run" — and not on a `Canvas-Node:`.
+            for node in mentioned:
+                self.assertIn(node, stderr, ("two nodes", edit))
+
+    def test_the_unknown_node_id(self):
+        for args in (
+            ("replace", "zz99", "--text", "x", "--why", "w"),
+            ("remove", "zz99", "--why", "w"),
+            ("move", "zz99", "--into", "root", "--why", "w"),
+            ("insert", "--after", "zz99", "--text", "x", "--why", "w"),
+            ("history", "zz99"),
+        ):
+            code, _, stderr = self.verb(*args)
+            self.assertActionable(code, stderr, ("no such node", args), nodes=["zz99"])
+
+    def test_the_stale_base(self):
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(0, code, stderr)
+        base = stdout.decode("utf-8").splitlines()[0].split(": ", 1)[1]
+        # Somebody else moves the node this write declared a base for.
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Theirs.", "--why", "theirs"
+        )
+        self.assertEqual(0, code, stderr)
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Ours.", "--why", "ours",
+            "--base", base,
+        )
+        self.assertActionable(
+            code, stderr, "a --base the node moved since", nodes=[self.problem_id]
+        )
+
+    def test_the_os_conditions(self):
+        """A mode on the canvas, and a mode on the directory it is written in.
+
+        The repair each names is run by `assertRepairsRun`, which is the whole
+        point of holding these to the same bar as the rest: `chmod` is the
+        refusal's own claim about what would make the command work.
+        """
+        for blocked, args in (
+            (self.canvas_file(), ("read",)),
+            (self.canvas_file(), ("replace", self.problem_id, "--text", "x",
+                                  "--why", "w")),
+            (self.canvas_dir, ("replace", self.problem_id, "--text", "x",
+                               "--why", "w")),
+        ):
+            original = stat.S_IMODE(os.stat(blocked).st_mode)
+            os.chmod(blocked, 0o500 if blocked == self.canvas_dir else 0o000)
+            try:
+                code, _, stderr = self.verb(*args)
+                self.assertActionable(code, stderr, (blocked, args))
+                self.assertEqual(2, code, "%s %s\n%s" % (blocked, args, stderr))
+            finally:
+                os.chmod(blocked, original)
+
+    # ------------------------------------------------------------------
+    # The race: the canvas removed between the check and the open
+    # ------------------------------------------------------------------
+    #
+    # `os.path.isfile` answers, and the `open` or the `parse` that follows it
+    # is a separate syscall — so a canvas removed in between raises `ENOENT`
+    # where the guard above already decided the canvas was there. That errno
+    # used to reach `_cannot_read`, which asserted "the canvas is there and
+    # unchanged" and named `chmod u+r <it>`: the tool exited 2 claiming
+    # presence one line under the errno that says absence, and the repair it
+    # named exited 1. `README.md` maps `ENOENT` to exit 1 and to "there is
+    # genuinely no canvas for that ledger id"; this is that, held to.
+
+    RACE = (
+        "import os, sys\n"
+        "sys.path.insert(0, %(root)r)\n"
+        "target = os.path.abspath(%(target)r)\n"
+        "seen = [0]\n"
+        "asked = os.path.isfile\n"
+        "def vanishing(path):\n"
+        "    answer = asked(path)\n"
+        "    if answer and os.path.abspath(path) == target:\n"
+        "        seen[0] += 1\n"
+        "        if seen[0] == %(nth)d:\n"
+        "            os.unlink(target)\n"
+        "    return answer\n"
+        "os.path.isfile = vanishing\n"
+        "from canvas.%(module)s import main\n"
+        "sys.exit(main(%(args)r))\n"
+    )
+
+    def raced(self, args, nth=1, target=None, module="cli", workspace=None):
+        """Run an entry point with the canvas removed after the nth check.
+
+        `nth` is not a way of naming one call site: it is how every call site
+        is reached without this test having to know where they are. Whichever
+        guard answers first, the one after it is the one that meets the errno.
+        """
+        environment = dict(os.environ)
+        environment["OPENCLAW_WORKSPACE"] = workspace or self.workspace
+        script = self.RACE % {
+            "root": ROOT,
+            "target": target or self.canvas_file(),
+            "nth": nth,
+            "module": module,
+            "args": list(args),
+        }
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        return (
+            result.returncode,
+            result.stdout,
+            result.stderr.decode("utf-8", "replace"),
+        )
+
+    def test_a_canvas_removed_between_the_check_and_the_open_is_actionable(self):
+        """Every entry point, at every check the canvas could vanish after.
+
+        The canvas is put back between runs rather than recreated, because
+        `create` refuses a ledger id the repository already has a commit for —
+        and it is put back *after* the assertions, so the claims are checked
+        against the store as it was when the refusal was printed.
+        """
+        with open(self.canvas_file(), "rb") as handle:
+            intact = handle.read()
+        for nth in (1, 2, 3):
+            for args in (
+                ["read", "a-ledger-row"],
+                ["replace", "a-ledger-row", self.problem_id, "--text", "x",
+                 "--why", "w"],
+                ["remove", "a-ledger-row", self.problem_id, "--why", "w"],
+                ["history", "a-ledger-row", self.problem_id],
+            ):
+                code, _, stderr = self.raced(args, nth=nth)
+                try:
+                    if code == 0:
+                        # It never needed the file. Nothing was claimed, so
+                        # there is nothing here that can be false — `history`
+                        # reads the git log and not the canvas.
+                        continue
+                    self.assertActionable(code, stderr, (nth, args))
+                finally:
+                    if not os.path.exists(self.canvas_file()):
+                        with open(self.canvas_file(), "wb") as handle:
+                            handle.write(intact)
+
+    def test_the_race_is_the_documented_no_canvas_and_not_a_permission_lie(self):
+        """The case the last check reproduced, at the exit code README gives it.
+
+        Exit `1`, because `README.md` section *Exit codes* puts "there is
+        genuinely no canvas for that ledger id (the filesystem answered
+        `ENOENT`, not that it would not say)" there — and this is that errno,
+        arriving one syscall later than the check that would have caught it.
+        And the next action is run, literally, and has to work.
+        """
+        code, _, stderr = self.raced(["read", "a-ledger-row"])
+        self.assertEqual(1, code, stderr)
+        trailers = self.assertActionable(code, stderr, "the ENOENT race")
+        self.assertFalse(os.path.exists(self.canvas_file()))
+        self.assertNotIn("the canvas is there", stderr)
+        # The next action it names, run as it names it.
+        next_action = trailers["Canvas-Next"][0]
+        self.assertIn("bin/canvas create a-ledger-row", next_action)
+        code, _, stderr = self.run_canvas(
+            "create", "a-ledger-row", "--problem", "P", "--expected-value", "V"
+        )
+        self.assertEqual(0, code, stderr)
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"<canvas", stdout)
+
+    def test_the_same_race_under_the_validator_is_actionable(self):
+        code, _, stderr = self.raced(
+            [self.canvas_file()], module="validate"
+        )
+        self.assertActionable(code, stderr, "the ENOENT race, canvas-validate")
+        self.assertNotIn("the file is there", stderr)
+
+    # ------------------------------------------------------------------
+    # The errno nobody anticipated
+    # ------------------------------------------------------------------
+
+    def test_an_unclassified_errno_still_refuses_in_the_shape(self):
+        """The reason this class kept producing one more instance was that the
+        message was written beside the errno rather than derived from it, so an
+        errno nobody had met inherited whichever sentence somebody wrote for
+        the one they had. These are the two helpers asked directly, with an
+        errno the table has never heard of."""
+        from canvas import store
+
+        error = OSError(4093, "Some condition from the future")
+        error.filename = self.canvas_file()
+        for refused in (
+            store._cannot_read(self.canvas_file(), error, ledger_id="a-ledger-row"),
+            store._cannot_write(self.canvas_file(), error),
+        ):
+            self.assertTrue(refused.next_action.strip())
+            self.assertTrue(refused.nodes or refused.about)
+            # It states the condition rather than guessing at a repair for it.
+            self.assertIn("4093", "\n".join(refused.about))
+            self.assertNotIn("chmod", refused.next_action)
+            self.assertNotIn("the canvas is there", refused.next_action)
+
+
 if __name__ == "__main__":
     unittest.main()
