@@ -1579,6 +1579,19 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id):
     resolved = _git(
         canvas_dir, "rev-parse", "--verify", "--quiet", "%s^{commit}" % declared
     )
+    if resolved.returncode not in (0, 1):
+        # Exit 1 is git answering the question: no such revision. Anything else
+        # is git declining to answer it — an unreadable `.git`, a corrupt pack
+        # — and "this sha was never handed out here" is a statement about a
+        # repository that was successfully read. Saying it of one that was not
+        # is the same lie `head_sha` stopped telling, and at exit 1 it would
+        # send a caller to re-read a store the process still cannot see.
+        raise _cannot_read_repository(
+            canvas_dir,
+            "whether --base %s is a commit in" % declared,
+            _illegible(canvas_dir),
+            complaint=resolved.stderr.decode("utf-8", "replace").strip(),
+        )
     if resolved.returncode != 0:
         raise Refusal(
             "no commit %s in this canvas repository: --base names the sha a "
@@ -1591,6 +1604,17 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id):
     base = resolved.stdout.decode("utf-8", "replace").strip()
     if base != head:
         ancestry = _git(canvas_dir, "merge-base", "--is-ancestor", base, "HEAD")
+        if ancestry.returncode not in (0, 1):
+            # `--is-ancestor` documents exit 1 for "no" and reserves anything
+            # else for an error, so only 1 is an answer. The same distinction,
+            # for the same reason: "nothing that led here was decided against
+            # it" is a finding about a history this process read.
+            raise _cannot_read_repository(
+                canvas_dir,
+                "whether --base %s is an ancestor of the head of" % base,
+                _illegible(canvas_dir),
+                complaint=ancestry.stderr.decode("utf-8", "replace").strip(),
+            )
         if ancestry.returncode != 0:
             raise Refusal(
                 "--base %s is not an ancestor of %s, this canvas repository's "

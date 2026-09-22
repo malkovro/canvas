@@ -3486,6 +3486,31 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
 
     # -- the repository, which the round before this one did not walk ------
 
+    def test_a_base_is_not_called_unknown_by_a_repository_it_cannot_read(self):
+        # `rev-parse --verify --quiet <sha>` exits 1 for a revision that is not
+        # there and 128 for a repository it could not open, and "--base was
+        # never handed out here" is a finding about a history that was read.
+        # From a command line `head_sha` refuses first, so this is defence in
+        # depth for the library API, for the window where the repository stops
+        # being readable between the two calls, and for the next edit that
+        # changes the order and quietly re-opens the hole.
+        from canvas import store
+
+        base = self.git("rev-parse", "HEAD").strip()
+        git_dir = os.path.join(self.canvas_dir, ".git")
+        original = self.at_mode(git_dir, 0o000)
+        try:
+            with self.assertRaises(store.ToolProblem) as caught:
+                store._resolve_base(
+                    self.canvas_dir, base, base, "a-ledger-row", self.problem_id
+                )
+        finally:
+            os.chmod(git_dir, original)
+        message = caught.exception.args[0]
+        self.assertIn("cannot tell", message)
+        self.assertNotIn("never handed out here", message)
+        self.assertTrue(caught.exception.next_action.strip())
+
     def test_an_unreadable_repository_is_not_reported_as_having_no_commits(self):
         # `git rev-parse HEAD` exits 128 on an unborn branch and on a `.git`
         # it may not read, so `head_sha` used to answer None for both and
