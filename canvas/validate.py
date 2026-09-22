@@ -61,6 +61,27 @@ EXIT_MEANING = {
 }
 
 
+def _unreadable(path, error):
+    """The one refusal for a canvas file that is there and cannot be read.
+
+    `os.path.isfile` answers True for a file whose mode is `000`, so the "no
+    such file" guard above passes and the `open` below is where an ordinary
+    permission problem actually lands. It is the validator's environment that
+    is wrong and not the document — nothing was ever parsed, so there is no
+    node to name and no verdict to report — which is the `2` `README.md`
+    section *Validating a file by hand* and `validate_file`'s own docstring
+    both already promise for a file that is "missing or unreadable".
+    """
+    return EnvironmentProblem(
+        "cannot read %s: %s" % (path, error),
+        "make that file readable — `ls -l %s` shows who owns it and what its "
+        "mode is, and `chmod u+r %s` is usually the repair — and re-run; the "
+        "file was never examined, so nothing is known about whether it is a "
+        "valid canvas" % (path, path),
+        about=["file %s" % path],
+    )
+
+
 def _scan(path):
     """Map line number -> the start tags on that line, as (tag, attrs, path).
 
@@ -94,6 +115,8 @@ def _scan(path):
             parser.ParseFile(handle)
     except expat.ExpatError:
         pass
+    except OSError as error:
+        raise _unreadable(path, error)
     return lines
 
 
@@ -120,7 +143,13 @@ def _describe(tag, attrs, where):
 
 
 def _wellformedness_problem(path):
-    """Return a diagnostic if the file is not well-formed XML, else None."""
+    """Return a diagnostic if the file is not well-formed XML, else None.
+
+    Raises EnvironmentProblem when the file is there and cannot be read. That
+    is not a document that is not well-formed — nothing was read, so nothing is
+    known about its shape — and reporting it as one would tell a caller to
+    repair a file that may be perfectly valid.
+    """
     parser = expat.ParserCreate()
     try:
         with open(path, "rb") as handle:
@@ -131,6 +160,8 @@ def _wellformedness_problem(path):
             error.lineno,
             expat.ErrorString(error.code),
         )
+    except OSError as error:
+        raise _unreadable(path, error)
     return None
 
 
