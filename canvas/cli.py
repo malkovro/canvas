@@ -59,20 +59,19 @@ from canvas import refusal
 from canvas import store
 
 
-#: What this command's exit codes mean, as `README.md` section *Exit codes*
-#: states them and as `bin/canvas` restates them. Printed on every refusal,
-#: because a caller reading stderr cannot see a table in a Markdown file — and
-#: "no refusal exits with an unexplained non-zero code" is exactly the claim
-#: that a caller can tell which kind it hit without one.
+#: What this command's exit codes mean, in `README.md` section *Exit codes*'s
+#: own words. Printed on every refusal, because a caller reading stderr cannot
+#: see a table in a Markdown file — and "no refusal exits with an unexplained
+#: non-zero code" is exactly the claim that a caller can tell which kind it hit
+#: without one.
+#:
+#: What a refusal did or did not write belongs to the refusal and not to the
+#: code: every refusal here writes nothing and most of them say so, but
+#: `_write_and_commit`'s last check fires after the commit was made, and a line
+#: printed under every exit 2 cannot claim otherwise on its behalf.
 EXIT_MEANING = {
-    1: (
-        "the request is wrong against the store as it stands; nothing was "
-        "written, so re-read and re-decide"
-    ),
-    2: (
-        "the tool or its invocation is wrong; nothing was written, so do not "
-        "touch the canvas"
-    ),
+    1: "the request is wrong against the store as it stands; re-read and re-decide",
+    2: "the tool or its environment is wrong; do not touch the canvas",
 }
 
 

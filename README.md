@@ -577,9 +577,12 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   *is* about on `Canvas-About:` instead: the ledger id, the variable, the
   binary, the value that was rejected. Never an empty list of nodes.
 - **`Canvas-Exit:` is why no refusal exits with an unexplained code.** The
-  meaning is the one in this document's table, printed beside the number,
+  meaning is this document's table's own words, printed beside the number,
   because a caller reading stderr cannot see a table in a Markdown file. The
-  codes themselves are unchanged and there are still two.
+  codes themselves are unchanged and there are still two. What a refusal did or
+  did not write is the refusal's own to say, on `Canvas-Next:` — every refusal
+  writes nothing, and the one check that runs after the commit has been made
+  cannot have a line printed under every exit `2` claim otherwise for it.
 - **The argument parser's refusals are in it too.** `canvas/cli.py` subclasses
   `ArgumentParser` so that `error()` raises rather than exiting, which is what
   lets an absent `--why` name the node the edit was for. It still exits `2`.
