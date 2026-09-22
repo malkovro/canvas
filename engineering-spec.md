@@ -185,10 +185,28 @@ The canvas directory is a git repository, and **one edit is one commit**.
 
 This buys, for no new machinery: the full history, the diff of any edit, blame,
 revert, and — because a commit touches exactly one node and names it — the
-history of a single node is `git log --grep='Canvas-Node: b7'`. That last one is
-what makes the discipline usable in practice: before changing a node, an agent
-can ask what that node's current text was *for*, and either honour that reason
-or explicitly retire it.
+history of a single node. That last one is what makes the discipline usable in
+practice: before changing a node, an agent can ask what that node's current text
+was *for*, and either honour that reason or explicitly retire it. It is one
+command:
+
+    $ canvas history my-task b7
+    Canvas-Node: b7
+
+    Canvas-Commit: 31499cf2d88f070dcd9f3fc7914c1e801e17d209
+    Canvas-Author: leo | by-hand
+    insert: the options this decision is between
+
+    Canvas-Commit: e29e76568379c9720c8ef2f7af59774122612c10
+    Canvas-Author: leo | step:implement | run:ship-the-flag-3
+    replace: chose A over B: B needs a migration we are not paying for
+
+Oldest first, and spanning a `move`, because a move keeps the node's id. The
+obvious `git log --grep='Canvas-Node: b7'` is the same query written as a
+substring match, and it is wrong in two reachable ways: ids are short, so it
+also answers for `b7pk`, and a reason that quotes the trailer text is counted as
+an edit to a node it never touched. The command matches the trailer's value for
+equality instead.
 
 A superseded options table is not deleted from anywhere. It is out of the
 current document, in the history, and one command away. The canvas stays small

@@ -7,12 +7,14 @@ nothing here knows anything about any of them.
 
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT
     bin/canvas read    <ledger_id>
+    bin/canvas history <ledger_id> <node-id>
     bin/canvas replace <ledger_id> <node-id> --why TEXT
     bin/canvas insert  <ledger_id> (--after <node-id> | --into <id>) --why TEXT
     bin/canvas remove  <ledger_id> <node-id> --why TEXT
     bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <id>) --why TEXT
 
-`--why` is required by all four editing verbs and has no default.
+`--why` is required by all four editing verbs and has no default. `read` and
+`history` are reads: they write nothing, commit nothing and initialise nothing.
 
 Exit 0 if it worked, 1 if the request is wrong against the store as it stands,
 2 if the tool or its environment is wrong.

@@ -9,10 +9,9 @@ it is not chosen here.
 
 `state/canvas` is **one git repository** holding every ledger row's file.
 `node-identity.md` section 1 settles that: ids are unique across the whole
-repository, and the documented history command `git log --grep='Canvas-Node:
-b7'` is written with no path filter, so a repository per ledger id would
-path-scope the uniqueness check by accident and make the documented command
-wrong.
+repository, and the uniqueness check is the history itself with no path filter,
+so a repository per ledger id would path-scope that check by accident and hand
+out an id another canvas already used.
 
 Every git invocation is pinned with `--git-dir` and `--work-tree`, never a bare
 `git` relying on discovery from the working directory. If `state/canvas` ever
@@ -50,6 +49,7 @@ rewrite, and the way to make that inexpressible is not to offer the parameter.
 leading underscore is a convention and the guard is a refusal.
 """
 
+import collections
 import os
 import re
 import secrets
@@ -218,6 +218,103 @@ def _configured(canvas_dir, key, fallback):
 
 
 # --------------------------------------------------------------------------
+# Which commits name a node
+# --------------------------------------------------------------------------
+#
+# `node-identity.md` section 4: a node's entire life is exactly the set of
+# commits whose `Canvas-Node:` trailer names it. Everything below reads that
+# set — `history_length` counts it, `is_free` asks whether it is empty, and
+# `history` returns it — so it is read in one place and the three cannot
+# disagree about what a node's history is.
+#
+# **The match is on the trailer's value, for equality.** The documented
+# `git log --grep='Canvas-Node: b7'` is a substring match on the whole commit
+# message, and ids are four characters, so it answers for `b7pk` when it was
+# asked about `b7`, and it counts a commit whose reason merely quotes the
+# string `Canvas-Node: b7pk` as an edit to a node it never touched. Both are
+# reachable by following the documentation. `%(trailers:key=...)` reads the
+# trailer block git itself parses — the message's last paragraph — and the
+# value is then compared for equality here, so a prefix of an id, a longer id
+# that starts with it, and a reason quoting the trailer text are all excluded.
+# The anchored `--grep` below is a pre-filter on top of that and never the
+# authority: it narrows what the log prints, and the equality decides.
+
+#: A node id safe to interpolate into a POSIX extended regular expression. Ids
+#: are `[a-z][a-hj-km-np-z2-9]{3}`, so a real one always is; an id typed at the
+#: command line need not be, and one carrying regex metacharacters skips the
+#: pre-filter rather than being rejected. It names no node either way, and
+#: "there is no such node" is the answer it deserves.
+_SAFE_IN_A_PATTERN = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+#: One record per commit: sha, subject, the Canvas-Node values, the
+#: Canvas-Author values. `%x1f` between fields and `%x1e` between records, which
+#: is what `_FIELD` and `_RECORD` split on; `%x1d` between repeated values of
+#: one trailer. All three are control characters a commit message written by
+#: this store cannot contain, so a reason with colons, newlines or pipes in it
+#: cannot be mistaken for a field boundary.
+_FIELD = "\x1f"
+_RECORD = "\x1e"
+_LOG_FORMAT = (
+    "%H%x1f%s%x1f"
+    "%(trailers:key=Canvas-Node,valueonly,separator=%x1d)%x1f"
+    "%(trailers:key=Canvas-Author,valueonly,separator=%x1d)%x1e"
+)
+
+
+class Edit(collections.namedtuple("Edit", "sha verb reason author")):
+    """One commit that named a node: what it did, why, and who did it.
+
+    The reason is the commit subject's, because that is the only place a reason
+    is recorded — there is no `Canvas-Why:` trailer and no attribute on the
+    node. The subject's shape is `_write_and_commit`'s, `<verb> <subject>:
+    <reason>`, and it is taken apart here rather than anywhere else.
+    """
+
+
+def _edit_from(sha, subject, author):
+    verb, _, rest = subject.partition(" ")
+    reason = rest.partition(": ")[2] or rest
+    return Edit(sha, verb, reason, author)
+
+
+def _node_commits(canvas_dir, node_id, path=None):
+    """The commits whose `Canvas-Node:` trailer is exactly `node_id`, oldest first.
+
+    `path` scopes the answer to one canvas; without it the answer is the whole
+    repository, which is what the uniqueness check needs — `node-identity.md`
+    section 1 makes ids unique across `state/canvas` and not within one file,
+    so a path-scoped `is_free` would hand out an id another canvas already used.
+    """
+    arguments = ["log", "--reverse", "--format=%s" % _LOG_FORMAT]
+    if _SAFE_IN_A_PATTERN.match(node_id):
+        arguments += ["--extended-regexp", "--grep=^Canvas-Node: %s$" % node_id]
+    if path is not None:
+        arguments += ["--", path]
+
+    result = _git(canvas_dir, *arguments)
+    if result.returncode != 0:
+        if head_sha(canvas_dir) is None:
+            # No commits at all. git log exits non-zero on an unborn branch
+            # rather than printing nothing.
+            return []
+        raise ToolProblem(
+            "cannot search the canvas history for %s: %s"
+            % (node_id, result.stderr.decode("utf-8", "replace").strip())
+        )
+
+    edits = []
+    for record in result.stdout.decode("utf-8", "replace").split(_RECORD):
+        record = record.strip("\n")
+        if not record:
+            continue
+        sha, subject, named, authors = record.split(_FIELD)
+        if node_id not in named.split("\x1d"):
+            continue
+        edits.append(_edit_from(sha, subject, authors.replace("\x1d", ", ")))
+    return edits
+
+
+# --------------------------------------------------------------------------
 # Minting an id
 # --------------------------------------------------------------------------
 
@@ -230,6 +327,11 @@ def is_free(canvas_dir, candidate):
     is empty. No registry file, no allocator state." Across the whole
     repository, with no path filter, because ids are unique across it and not
     within one file.
+
+    Asked of `_node_commits` rather than of that `--grep` literally: a
+    substring match says an id is taken when a longer id merely starts with it,
+    which silently shrinks the space `mint` can draw from. The question the
+    section asks — has any commit named this id — is the one answered here.
     """
     return history_length(canvas_dir, candidate) == 0
 
@@ -286,20 +388,12 @@ def history_length(canvas_dir, node_id):
     rather than by adding one to the attribute in the file, so the number in
     the document cannot drift away from the invariant that defines it. The log
     is the record; the `v` attribute is a cache of it.
+
+    Counted with `_node_commits`, so the commits counted here are exactly the
+    commits `history` returns. A looser count would let a node's `v` claim a
+    life its own history does not show.
     """
-    result = _git(
-        canvas_dir, "log", "--grep=Canvas-Node: %s" % node_id, "--format=%H"
-    )
-    if result.returncode != 0:
-        if head_sha(canvas_dir) is None:
-            # No commits at all. git log exits non-zero on an unborn branch
-            # rather than printing nothing.
-            return 0
-        raise ToolProblem(
-            "cannot search the canvas history for %s: %s"
-            % (node_id, result.stderr.decode("utf-8", "replace").strip())
-        )
-    return len(result.stdout.split())
+    return len(_node_commits(canvas_dir, node_id))
 
 
 def next_version(canvas_dir, node_id):
@@ -755,6 +849,55 @@ def read(ledger_id):
     return sha, body, _validate(path, path)
 
 
+def history(ledger_id, node_id):
+    """Every edit that named this node, oldest first. Returns a list of `Edit`.
+
+    A read, like `read` and for the same reasons: it writes nothing, commits
+    nothing, and does not initialise a repository. A workspace with no canvas
+    repository has no history to report, and creating one to say so would be a
+    write.
+
+    **Oldest first**, because the question this answers is what the node's
+    current text is *for*, and that is a story: the reason it was born, then
+    every reason it was changed, ending at the reason it reads the way it does
+    now. `git log`'s own order is newest first, so this reverses it.
+
+    **Edits made before a `move` are included**, and not as a special case.
+    `node-identity.md` section 3 keeps a node's id across a move, so the move's
+    commit names the same node the earlier commits named and one query spans
+    it. That is the whole of what the id buys.
+
+    The search is scoped to this canvas's file. Ids are unique across the
+    repository, so the scope changes no answer that exists — but it is what
+    makes "no such node in this canvas" a true statement rather than a guess,
+    and the command names the canvas anyway.
+
+    Refuses when there is no canvas for that ledger id, and — separately, and
+    saying which — when no commit in that canvas names the node.
+    """
+    canvas_dir = canvas_directory()
+    path = canvas_path(canvas_dir, ledger_id)
+
+    if not os.path.isfile(path):
+        raise Refusal(
+            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path)
+        )
+    if not is_repository(canvas_dir):
+        raise ToolProblem(
+            "%s is not a git repository, so it has no history to report"
+            % canvas_dir
+        )
+
+    edits = _node_commits(canvas_dir, node_id, path)
+    if not edits:
+        raise Refusal(
+            "no node with id %s in the history of the canvas for %s: no commit "
+            "names it, so it was never a node of this canvas. The canvas is "
+            "there; the node is not" % (node_id, ledger_id)
+        )
+    return edits
+
+
 # --------------------------------------------------------------------------
 # The four verbs
 # --------------------------------------------------------------------------
@@ -767,7 +910,8 @@ def read(ledger_id):
 # Each of them is exactly one commit, because `_write_and_commit` writes and
 # commits in one call and there is no other way to put a canvas on its path.
 # Each names exactly one node in a `Canvas-Node:` trailer, which is what makes
-# `git log --grep='Canvas-Node: b7'` that node's whole life.
+# the commits carrying that trailer that node's whole life, and `history` the
+# command that reads it back.
 #
 # Each takes a `ledger_id` as well as the node id. `node-identity.md` makes ids
 # unique across the whole repository, so a node id alone does identify a node —

@@ -92,8 +92,8 @@ own temporary directory; none of them touches a live workspace.
 ### What the schema deliberately does not check
 
 - **That an `id` is globally unique.** Uniqueness is a property of the whole git
-  history (`git log --grep='Canvas-Node: <id>'`), which no document schema can
-  see. The schema checks the *shape* of an id; `insert` checks that it is free.
+  history — the commits whose `Canvas-Node:` trailer names the id — which no
+  document schema can see. The schema checks the *shape* of an id; `insert` checks that it is free.
 - **That `v` agrees with the commit count.** Same reason — checkable against the
   log, not against the file.
 - **`<figure>` content beyond a textual source.** The engineering spec leaves
@@ -117,11 +117,13 @@ lands on production data.
 `state/canvas` is **one git repository** holding every ledger row's file,
 initialised on first use and never re-initialised over one that already exists.
 It is one repository and not one per canvas because ids are unique across the
-whole of it, and the documented history command
-`git log --grep='Canvas-Node: b7'` is written with no path filter.
+whole of it: the uniqueness check `insert` runs is the history itself, with no
+path filter, so a repository per canvas would path-scope it by accident and
+hand out an id another canvas already used.
 
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
     bin/canvas read    <ledger_id>
+    bin/canvas history <ledger_id> <node-id>
     bin/canvas replace <ledger_id> <node-id> --why TEXT [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
     bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
     bin/canvas remove  <ledger_id> <node-id> --why TEXT [--author TEXT]
@@ -198,6 +200,53 @@ document.** The document alone, byte for byte what is on disk, is
 
 A read is a read. It writes nothing, commits nothing, and does not initialise a
 repository.
+
+### A node's history
+
+The reason an edit was made is in the commit subject and nowhere else, so the
+way to ask what a node's current text is *for* is to read the log. `history` is
+the verb that does it:
+
+    $ bin/canvas history my-task b7pk
+    Canvas-Node: b7pk
+
+    Canvas-Commit: 31499cf2d88f070dcd9f3fc7914c1e801e17d209
+    Canvas-Author: leo | by-hand
+    insert: the options this decision is between
+
+    Canvas-Commit: d8cabf10a6537bab095bcc0c22d607c1af1ff6c4
+    Canvas-Author: leo | step:implement | run:ship-the-flag-3
+    move: file it under the decisions section
+
+    Canvas-Commit: e29e76568379c9720c8ef2f7af59774122612c10
+    Canvas-Author: leo | step:implement | run:ship-the-flag-3
+    replace: chose A over B: B needs a migration we are not paying for
+
+**Oldest first**, because the answer is a story: the reason the node was born,
+then every reason it changed, ending at the reason it reads the way it does
+now. One block per edit — the commit, the author, and then the verb and the
+reason, which are the commit's subject taken apart. The reason is last in its
+block because it is free text and everything before it is not.
+
+**Edits made before a `move` are in the list**, and not as a special case.
+`node-identity.md` §3 keeps a node's id across a move, so the commit the move
+wrote names the same node the earlier commits named, and one query spans it.
+That is what the id buys: a node that was drafted at the top of the canvas,
+sharpened, and then filed under a section still answers for all three.
+
+It names the canvas as well as the node, like every other verb, because
+`state/canvas` holds one file per ledger row. And it is a read: it writes no
+file, makes no commit, and does not initialise a repository.
+
+**The match is on the trailer's value, for equality** — not the substring match
+`git log --grep='Canvas-Node: b7'` performs. Ids are four characters, so asking
+that for `b7` also returns `b7pk`'s whole life, and a `--why` that merely quotes
+the string `Canvas-Node: b7pk` is counted as an edit to a node it never touched.
+Both are reachable by following the documentation. `history` reads the trailer
+block git itself parses and compares the value, so a prefix of an id, a longer
+id that starts with it, and a reason quoting the trailer text are all excluded.
+`v` is counted through the same matcher, which is what keeps the number in the
+file equal to the number of commits the history shows.
 
 ### The four verbs
 
@@ -357,7 +406,7 @@ that the verbs inherit an answer instead of improvising one.
 | exit | meaning |
 |---|---|
 | `0` | it worked |
-| `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, or the document is invalid. Re-read and re-decide |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, there is no such node in this canvas's history, or the document is invalid. Re-read and re-decide |
 | `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`**), a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
 
 This is `bin/canvas-validate`'s `1` / `2` split with its purpose preserved, and
@@ -378,8 +427,12 @@ with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
 - **It does not enforce `--base`.** The read hands out the sha and stops
   there, and no verb accepts one. The `Canvas-Base:` trailer an edit writes is
   the truthful record of the head it was applied to, compared against nothing.
-- **It does not report a node's history.** `git log --grep='Canvas-Node: b7'`
-  is the documented command and there is no verb wrapping it.
+- **It does not report a node's history beyond one node at a time.**
+  `bin/canvas history <ledger_id> <node-id>` returns one node's edits, oldest
+  first, with the reason for each. There is no verb that reports a whole
+  canvas's history, no verb that reports a node's diffs, and none that reverts
+  one: `git log`, `git show` and `git revert` are right there, and wrapping
+  them would be restating git rather than using it.
 - **It does not batch, and cannot be made to.** Nothing in it can touch two
   nodes in one commit, and the one function that puts a canvas on its path
   refuses a write worth more than the one node the commit names. There is no

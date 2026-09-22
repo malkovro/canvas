@@ -1,15 +1,20 @@
 """The `bin/canvas` command line: the store, the read path and the four verbs.
 
-Six subcommands, and no more:
+Seven subcommands, and no more:
 
     canvas create  <ledger_id> --problem TEXT --expected-value TEXT
     canvas read    <ledger_id>
+    canvas history <ledger_id> <node-id>
     canvas replace <ledger_id> <node-id> --why TEXT
     canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT
     canvas remove  <ledger_id> <node-id> --why TEXT
     canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT
 
-Four editing verbs. There is no `resolve`, no `collapse` and no `supersede`:
+Four editing verbs, and three reads: `create` is the only one of the other
+three that writes. `history` reads the log the four verbs write, and `read`
+reads the document they leave behind.
+
+There is no `resolve`, no `collapse` and no `supersede`:
 the semantics live in the reason, not in a verb name. There is no selector of
 any kind either — addressing is by explicit node id, which is the property that
 makes IWE's `--expect` match-count guard unnecessary, and the day a selector
@@ -60,6 +65,29 @@ def _read(args):
     for problem in problems:
         sys.stderr.write("%s\n" % problem)
     return 1 if problems else 0
+
+
+def _history(args):
+    """Print one node's edits, oldest first: sha, author, verb and reason.
+
+    The node id once, at the top, under the same name every other verb prints
+    it under — then one block per edit, oldest first, so the blocks read as the
+    story of how the node got to its current text.
+
+    The reason is the commit subject's and is printed last in its block, after
+    the verb, because a reason is free text and everything before it is not. An
+    edit made before a `move` is in the list like any other: the move kept the
+    id, so the query that finds the move finds everything the id ever did.
+    """
+    edits = store.history(args.ledger_id, args.node_id)
+    out = ["Canvas-Node: %s\n" % args.node_id]
+    for edit in edits:
+        out.append(
+            "Canvas-Commit: %s\nCanvas-Author: %s\n%s: %s\n"
+            % (edit.sha, edit.author, edit.verb, edit.reason)
+        )
+    sys.stdout.write("\n".join(out))
+    return 0
 
 
 def _edited(args, node_id, sha):
@@ -234,6 +262,24 @@ def build_parser():
     read.add_argument("ledger_id", help="the ledger row whose canvas to print")
     read.set_defaults(handler=_read)
 
+    history = verbs.add_parser(
+        "history",
+        help="print one node's edits, oldest first, with the reason for each",
+        description=(
+            "Print every edit that named this node, oldest first: the commit "
+            "sha, the author, the verb and the reason. The reason lives in "
+            "the commit subject and nowhere else, which is why this reads the "
+            "log. Edits made before a move are included — a move keeps the "
+            "node's id. Writes nothing, commits nothing, and does not "
+            "initialise a repository."
+        ),
+    )
+    history.add_argument("ledger_id", help="the ledger row this canvas belongs to")
+    history.add_argument(
+        "node_id", metavar="node-id", help="the node whose history to print"
+    )
+    history.set_defaults(handler=_history)
+
     replace = verbs.add_parser(
         "replace",
         help="replace one node, possibly with a node of a different type",
@@ -307,8 +353,8 @@ def main(argv):
     if getattr(args, "handler", None) is None:
         parser.print_usage(sys.stderr)
         sys.stderr.write(
-            "canvas: a verb is required: create, read, replace, insert, "
-            "remove, move\n"
+            "canvas: a verb is required: create, read, history, replace, "
+            "insert, remove, move\n"
         )
         return 2
     try:
