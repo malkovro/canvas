@@ -1,0 +1,306 @@
+# Node identity
+
+Settled 2026-09-22. This document decides how a node's `id` is minted and what
+keeps it stable, before any verb is written. It is scoped to what step 1 of
+*The path* needs in order to be buildable — `bin/canvas`, four verbs, git-backed,
+no renderer. It does not claim to settle wholesale restructure; the part it
+leaves open is named at the end.
+
+The reason it is settled now and not later: `replace`, `insert` and `move` all
+either mint or preserve an id, so the first implementation of any of them
+chooses an identity rule whether or not anybody wrote one down. A rule arrived
+at implicitly is a rule nobody can argue with afterwards, because there is
+nothing to point at.
+
+It holds the spec's existing commitments fixed rather than relitigating them:
+ids are stable for the life of the node, addressing is by explicit id, one edit
+is one node, one edit is one commit, and a node's history is
+`git log --grep='Canvas-Node: <id>'`. Every rule below was checked against those
+five, and where a candidate rule contradicted one, the candidate was the thing
+that gave way.
+
+## What an id is
+
+**An id names a position in the argument, not the text that currently occupies
+it and not the element type that currently expresses it.**
+
+This is the definition the rest of the document rests on, so it is worth being
+blunt about what it rules out. A node is not identified by its content — content
+is exactly what `replace` changes. It is not identified by its place in the tree
+— place is exactly what `move` changes. It is not identified by its node type —
+type is exactly what an options `<table>` settling into a `<text>` changes. What
+persists across all three is the claim the document is making at that spot, and
+the accumulated record of why it makes it.
+
+That record is the point. A node's id is the key that `git log --grep` joins on,
+so an id is worth precisely as much history as it can still reach. Every rule
+below is chosen to maximise the span of reasons a single id still reaches, and
+rejected alternatives are rejected on the same measure: how much history they
+detach, and when.
+
+en-quire is the existence proof of getting this wrong. It addresses sections by
+heading text and derives history from line ranges, so the first rename detaches
+a node from its own reasons — and worse than losing them, it silently attaches
+them to whatever text now occupies those lines. A wrong history that looks right
+is the failure mode to design against, not a missing one.
+
+## 1. Minting an id on `insert`
+
+**`insert` is the only verb that mints an id.** The tool mints it; there is no
+`--id` flag and a caller cannot supply one.
+
+An id is a four-character token, first character a lowercase letter, remaining
+three drawn from lowercase letters and digits with the visually confusable
+`l`, `1`, `o`, `0` and `i` excluded. It is drawn at random, not derived from
+anything. Before it is used it is checked for having ever been used, and on a
+collision it is drawn again.
+
+**It is derived from nothing, which is the point.** The candidates that derive
+an id from something all fail on the same axis:
+
+| derivation | why it was rejected |
+|---|---|
+| a hash of the node's content | changes on every `replace`, which is the one thing an id must survive; and two identical paragraphs collide by construction |
+| position in the tree, or a heading path | changes on every `move`, and this is precisely en-quire's failure |
+| the next number after the highest id in the file | reuses the ids of removed nodes, which fuses two unrelated nodes' histories under one grep — see below |
+
+That third one deserves its cost stated plainly, because a counter is the
+obvious thing to build and it is wrong in a way that does not show up until
+later. Remove node `b7`, insert a new node, and a high-water counter that
+counts what is currently in the file hands the newcomer `b7` again. From that
+moment `git log --grep='Canvas-Node: b7'` returns two nodes' histories
+interleaved in one list, with nothing in the output marking the boundary. The
+reasons for a decision that was deleted six weeks ago are now presented as the
+reasons for the node that took its place. That is the en-quire failure again,
+reached by a different road.
+
+So: **a retired id is never reminted.** Uniqueness is checked against every id
+that has ever existed, not against the ids currently in the file.
+
+**The uniqueness check is the git history itself.** A candidate id is free if
+`git log --grep='Canvas-Node: <candidate>'` is empty. No registry file, no
+allocator state, nothing to keep in sync with the document. This works because
+every node is named in at least one commit — its own `insert` — so the set of
+ids ever minted is exactly the set of ids the log has ever mentioned.
+
+**Ids are unique across the whole canvas repository, not within one file.** The
+canvas directory is one git repository holding `<ledger_id>.xml` for every
+ledger row, and the spec's history command is written without a path filter. If
+ids were scoped per canvas, `git log --grep='Canvas-Node: b7'` would return the
+histories of one node in this task and an unrelated node in some other task,
+fused. Path-scoping the grep would also fix it, and was rejected: it makes the
+correctness of every history lookup depend on somebody remembering a flag, and
+the command as the spec writes it would be quietly wrong. A globally unique id
+makes the documented command correct as written.
+
+**Four characters is enough, and short on purpose.** Ids are typed by hand on a
+command line — `canvas replace b7 --why "..."` — and read in commit trailers, so
+length is a usability cost paid on every single edit. The excluded-character
+alphabet gives about nine hundred thousand tokens; a canvas is bounded by what
+is affordable to put in every step's prompt, so the population that has to stay
+distinct is small, and the history check makes a collision a re-draw rather than
+a corruption. If the repository ever grows past the point where re-draws are
+noticeable, the fix is a fifth character and no change to any rule here.
+
+**An id is stable across a re-read of the file, because it is stored in the
+file.** It is an attribute, written once at insert and never recomputed. Reading
+the canvas twice — or reading it after ten unrelated edits — returns the same
+id for the same node. Nothing anywhere recomputes an id from content, position
+or type, and no rule below introduces a case where one is recomputed.
+
+## 2. `replace` keeps the node's id — including across a type change
+
+**`replace` never mints and never changes an id.** The node keeps it, and it
+keeps it when the new node is a different node type.
+
+The spec's own worked example is the case that decides this. An options
+`<table>` becoming a settled `<text>` is a `replace` on the table node, with
+`--why "chose A over B: ..."`. There is no `resolve` and no `supersede` verb;
+this is how a decision gets made in a canvas, and it is the most consequential
+edit the tool supports.
+
+**The rejected alternative was minting a new id on a type change**, on the
+reasoning that a table and a paragraph are plainly not the same node. Its cost
+is exact and it lands on the most important edit in the system: the settled
+decision would have a history one commit long, and every argument that produced
+it — the options, the comparison, the reasons each row was written — would be
+stranded under an id that is no longer in the document and that nothing in the
+document points at. Ask the new node what it was for and it answers "chose A
+over B". Ask it why those were the options, and there is no longer a question
+you can ask.
+
+It also reintroduces, through the back door, the verb the spec deliberately does
+not have. If `replace` can sever a lineage, something has to be able to say "new
+node `b9` continues `b7`" — and that thing is `supersede`, wearing a different
+hat, with its own attribute to maintain and its own way of being wrong.
+
+So the definition in *What an id is* holds without exception: the id names the
+slot, the element type is just how the slot is currently expressed, and changing
+the expression is not changing the node. The node type is content.
+
+## 3. `move` does nothing to an id
+
+**`move` changes position and nothing else.** The id is unchanged, the content
+is unchanged, and the node's type is unchanged. Moving a node between sections
+is the same: reparenting is a position change.
+
+This is a direct consequence of the spec's choice to address by explicit id
+rather than by selector. If position were any part of identity, then addressing
+by id would be a lie — the id would be a cached lookup of a position and would
+have to be invalidated when the position changed.
+
+**The rejected alternative — re-minting on move — would make restructure
+maximally destructive**, which is the exact opposite of what the hardest open
+item needs. A restructure is mostly moves. Under a re-minting rule, reordering
+two paragraphs detaches both from their reasons, and reorganising a section
+detaches everything in it. Under this rule, a restructure composed of moves
+costs no history at all: every node keeps its id, so every node keeps its
+reasons, and the history of the restructure itself is in the log as the sequence
+of moves that performed it, each with its own `--why`.
+
+## 4. What happens to `v`
+
+**`v` is the number of edits a node has been the subject of.** It is not a
+content hash, not a concurrency token and not a timestamp. Staleness is handled
+by `--base` against a commit sha, as *Staleness* specifies, and `v` deliberately
+does not duplicate that job.
+
+The rule is one line:
+
+> **`v` equals the number of commits whose `Canvas-Node:` trailer names that
+> node.**
+
+Which gives, verb by verb:
+
+| verb | effect on `v` |
+|---|---|
+| `insert` | the new node is born with `v="1"` — it exists because of one edit, the one that created it. No other node's `v` changes |
+| `replace` | the replaced node's `v` bumps by one. No other node's `v` changes |
+| `move` | the moved node's `v` bumps by one. Neither the old nor the new parent changes |
+| `remove` | the node leaves the document, so there is no `v` left to bump. The commit that removed it is the last entry in its history, and its id is retired |
+
+**Why that invariant and not "bump on content change".** Tying `v` to the
+`Canvas-Node:` trailer makes it derivable and therefore checkable:
+`git log --grep='Canvas-Node: b7' | grep -c ^commit` and the file's `v="..."`
+have to agree, and a canvas where they disagree is corrupt and can be found to
+be corrupt by a script nobody has to think hard about. The alternative — `v`
+bumps only when content changes, so `move` leaves it alone — reads more
+intuitive and costs the invariant: `v` becomes a number you have to trust,
+maintained by a rule with an exception in it, verifiable against nothing. The
+case where it matters is also the case where it was rejected: a node shuffled
+repeatedly through a restructure is exactly the node a reader should be told has
+been churned, and a content-only rule reports it as untouched.
+
+**A container's `v` does not bump when its children change.** Inserting into a
+section, removing from it, or moving a node in or out of it changes the
+children's `v` and never the section's. This is not a separate rule — it falls
+straight out of the invariant, because the commit names the child. It also has
+to be this way for a second reason: if a section's `v` bumped on a commit that
+named a child, then `git log --grep` on the section would not contain the commit
+that changed the section's own `v`, and `v` would become the one number in the
+file that its own node's history cannot account for.
+
+**The canvas's creation commit creates the root only.** `<canvas>` carries no
+`id` and no `v`, so it is outside all of this. The two nodes the ledger's `open`
+contributes — the problem and the expected value — arrive as two ordinary
+`insert` commits, each naming its own node, each born at `v="1"`. Creating the
+file with two nodes already in it would be one commit touching two nodes, which
+is the rule the tool exists to make inexpressible; the birth of a canvas gets no
+exemption from it.
+
+The net effect is an invariant worth stating on its own, because it is what
+makes the grep trustworthy:
+
+> **A node's entire life — its birth, every edit it was the subject of, and its
+> death — is exactly the set of commits that name it.**
+
+Nothing happens to a node that its own history does not record.
+
+## 5. What happens to a section's children when the `<section>` is replaced
+
+**Nothing. `replace` on a `<section>` replaces that section node and nothing
+else: its `title` and its own attributes. Its children keep their ids, their
+`v`, their content and their order.**
+
+A `<section>` is the only container in the vocabulary, and its own content is
+its title. Its children are separate nodes with separate ids, edited by separate
+commands. So `canvas replace <section-id>` renames the section — it does not and
+cannot re-express what is inside it.
+
+**Two commands are therefore refused, and the refusals are the load-bearing part
+of this rule.**
+
+**A `replace` payload for a `<section>` that contains child nodes is refused.**
+Not merged, not flattened, not applied to the section and silently dropped for
+the children — refused, non-zero, nothing written. Accepting it would be a
+single commit rewriting N nodes under one `Canvas-Node:` trailer, which breaks
+one-edit-is-one-node and one-edit-is-one-commit in the same stroke, and leaves
+N−1 nodes changed by a commit their own history never sees. It is also,
+precisely, the whole-document rewrite verb that three funded 2026 projects
+shipped next to a correct base-version check, arriving here in the one place the
+vocabulary makes it look reasonable. A root-level section replace being a
+whole-file rewrite is already recorded in the survey as en-quire's third defect.
+
+**`replace` on a `<section>` that would change its type is refused while it has
+children**, because a `<text>` has nowhere to put them. Move the children out
+first, then replace the empty section. The children keep their ids throughout,
+which is the entire benefit.
+
+**`remove` on a non-empty `<section>` is refused**, for the same reason in the
+other direction. A cascading delete either names N nodes in one trailer or names
+one and lets N−1 nodes vanish in a commit no grep on them will ever return — so
+a reader asking a dead id for its history would be shown a node that, by its own
+record, is still alive and was last edited cheerfully. Empty the section first.
+Each child's removal is its own commit with its own `--why`, which is a
+requirement and not an inconvenience: "we deleted this section" is not a reason
+for deleting any particular thing that was in it.
+
+**The refusals follow IWE's error surface**, as *What to copy* requires: a
+refusal names the section, names every child id the rejected payload would have
+touched, and says to edit them one at a time. An agent can act on that. It
+cannot act on the word "refused".
+
+**What this costs, stated honestly.** Restructuring is tedious. Reorganising a
+section of eight nodes is eight commands and eight reasons, not one. That is the
+intended trade and it is the same trade the four verbs already make everywhere
+else: the tool is slow in exactly the places where being fast means being able
+to destroy things. What it buys is that a restructure performed this way costs
+zero history — every node keeps its id, so every node keeps every reason it ever
+carried.
+
+## Still open
+
+This rule is scoped to step 1 and it does not settle everything the *Open*
+section raised. What is genuinely left, stated precisely enough that a planning
+task can pick it up:
+
+- **Merge and split have no representation, and this is the restructure
+  remainder.** The rules above mean a restructure made of moves, renames and
+  one-node replaces costs no history at all. A restructure that *merges* two
+  nodes into one, or *splits* one node into two, is not expressible without
+  losing some: a split is a `replace` plus an `insert`, so one half keeps the
+  original id and its reasons and the other half is born with an empty history;
+  a merge is a `replace` plus a `remove`, so one node's reasons survive and the
+  other's dead-end at a retired id that the surviving node does not point at.
+  Nothing above makes that wrong — the verbs behave exactly as specified — but
+  nothing above makes it *recoverable* either, and merge and split are what
+  people actually do when they restructure prose. **This is the part of the
+  hardest open item that remains open.** Solving it means either a way for a
+  node to record an ancestor id, or a deliberate decision that lineage ends at a
+  merge and that the `--why` on the merging edit has to carry the pointer by
+  convention. Both are real options; neither is decided here, and neither should
+  be decided by whoever happens to write `replace` first.
+- **Whether a restructure should ever be atomic.** Today it is a sequence of
+  independent commits, and a run that dies halfway leaves the canvas in a
+  coherent but half-reorganised state. Whether that wants a grouping mechanism —
+  and whether any such mechanism can exist without becoming the batch-write verb
+  this document just spent a section refusing — is not addressed.
+- **`insert --after <node-id>` cannot name the first position of an empty
+  container.** There is no node to be after. Noticed while checking these rules
+  against the four verbs; it is an addressing gap rather than an identity one,
+  so it is not decided here, but step 1 cannot be built without answering it.
+- **Nothing here ages.** A canvas is frozen at `done` and never deleted, so the
+  set of retired ids grows without bound and the uniqueness check greps a log
+  that only gets longer. At canvas scale this is not a problem for a long time.
+  It is written down so that whoever eventually measures it knows it was a known
+  consequence and not an oversight.

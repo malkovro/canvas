@@ -6,6 +6,7 @@ This repository is the canonical home for both Canvas specifications:
 
 - [Product spec](https://malkovro.github.io/canvas/product-spec.html)
 - [Engineering spec](https://malkovro.github.io/canvas/engineering-spec.html)
+- [Node identity](https://malkovro.github.io/canvas/node-identity.html) — how an `id` is minted, what preserves it under each of the four verbs, and what bumps `v`
 
 ## History/source
 
