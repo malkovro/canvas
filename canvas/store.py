@@ -888,13 +888,49 @@ def _one_node_only(path, root, node_id):
     its container sits. A payload that rewrites that subtree does not.
     """
     if not os.path.isfile(path):
-        raise Refusal(
-            "refusing to write %s in a commit naming %s: there is no canvas "
-            "there for that node to be one edit of. A canvas is created by "
-            "`create`, and only its birth commit names no node" % (path, node_id),
-            "create the canvas first, with `bin/canvas create <ledger-id> "
-            "--problem \"<the problem>\" --expected-value \"<the expected "
-            "value>\"`, and then edit it one node at a time",
+        # The same distinction `_no_canvas` draws, for the same reason: "there
+        # is no canvas there" has to be a fact and not an inference from one
+        # bit that four different states collapse into. Asked of the
+        # filesystem, so that a mode set on any directory above this path
+        # between the read and the write comes out as "the tool cannot tell"
+        # at exit 2 rather than as "create it first" at exit 1.
+        try:
+            os.stat(path)
+        except FileNotFoundError:
+            raise Refusal(
+                "refusing to write %s in a commit naming %s: there is no canvas "
+                "there for that node to be one edit of. A canvas is created by "
+                "`create`, and only its birth commit names no node" % (path, node_id),
+                "create the canvas first, with `bin/canvas create <ledger-id> "
+                "--problem \"<the problem>\" --expected-value \"<the expected "
+                "value>\"`, and then edit it one node at a time",
+                nodes=[node_id],
+                about=["canvas %s" % path],
+            )
+        except OSError as error:
+            raise ToolProblem(
+                "refusing to write %s in a commit naming %s: looking at it was "
+                "refused, so whether there is a canvas there to be one edit of "
+                "is unknown: %s" % (path, node_id, refusal.os_condition(error)),
+                refusal.os_next_action(
+                    error,
+                    aftermath=(
+                        "nothing was written and nothing was committed, and "
+                        "whether that canvas exists is still unknown"
+                    ),
+                ),
+                nodes=[node_id],
+                about=["canvas %s" % path]
+                + refusal.os_about(error, unless=["canvas %s" % path]),
+            )
+        raise ToolProblem(
+            "refusing to write %s in a commit naming %s: there is something at "
+            "that path and it is not a regular file, so it is not a canvas: %s"
+            % (path, node_id, _what_is_there(os.stat(path).st_mode)),
+            "move %s out of the way — `ls -ld %s` shows what it is — and then "
+            "create the canvas with `bin/canvas create <ledger-id> --problem "
+            "\"<the problem>\" --expected-value \"<the expected value>\"`; "
+            "nothing was written and nothing was committed" % (path, path),
             nodes=[node_id],
             about=["canvas %s" % path],
         )

@@ -3610,6 +3610,46 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
         self.assertIn("path /one", built.about)
         self.assertIn("path /two", built.about)
 
+    # -- the same distinction on the one guard no command line reaches ----
+
+    def test_the_one_node_check_tells_absent_from_cannot_look(self):
+        # Defence in depth for the library API, and the last site in the store
+        # that inferred absence from `os.path.isfile` alone. From a command
+        # line `_open_canvas` has already read the file by the time this runs,
+        # so the ways here are a mode set mid-write and a caller reaching past
+        # `bin/canvas` — and neither may be told the canvas is absent when it
+        # is there and this process may not look.
+        from canvas import store
+
+        root = document.new_canvas("a-ledger-row")
+        state = os.path.join(self.workspace, "state")
+        original = self.at_mode(state, 0o000)
+        try:
+            with self.assertRaises(store.ToolProblem) as caught:
+                store._one_node_only(self.canvas_file(), root, self.problem_id)
+        finally:
+            os.chmod(state, original)
+        self.assertEqual([self.problem_id], caught.exception.nodes)
+        self.assertIn("is unknown", str(caught.exception))
+        self.assertTrue(
+            any(each.startswith("errno ") for each in caught.exception.about)
+        )
+        # And the control: genuinely absent is still the Refusal it was.
+        with self.assertRaises(store.Refusal):
+            store._one_node_only(
+                self.canvas_file("no-such-row"), root, self.problem_id
+            )
+
+    def test_the_one_node_check_refuses_a_directory_at_the_canvas_path(self):
+        from canvas import store
+
+        root = document.new_canvas("a-ledger-row")
+        os.mkdir(self.canvas_file("d-row"))
+        with self.assertRaises(store.ToolProblem) as caught:
+            store._one_node_only(self.canvas_file("d-row"), root, self.problem_id)
+        self.assertIn("a directory", str(caught.exception))
+        self.assertEqual([self.problem_id], caught.exception.nodes)
+
     def test_the_blocking_ancestor_is_the_shallowest_one(self):
         from canvas import refusal
 
