@@ -564,6 +564,25 @@ same trailers, the same documented code and a next action naming the path and
 the condition, rather than inheriting the sentence written for the errno
 somebody happened to meet first.
 
+**A canvas file that vanished is `1`; the `state/canvas` repository that
+vanished is `2`, and that is deliberate.** Both are `ENOENT`, both reach the
+tool one syscall after a check that said otherwise, and the errno decides the
+refusal in both — it is only the code the two land on that differs, because the
+two absences are not the same fact. A canvas that is not there is one missing
+file in a store that is otherwise intact, and the caller acts on it by creating
+that canvas: `1`, "re-read and re-decide". A `state/canvas` that is not there is
+the store itself missing, and that absence already has a code — the check one
+syscall earlier answers "not a git repository" and refuses at `2`. Putting the
+later answer at `1` would make the exit code depend on which side of a race the
+caller landed on, which is the thing this section's `ENOENT` rule exists to
+stop; it would just be the repository's race rather than the canvas file's. It
+would also be false advice, because a read never initialises the repository, so
+the re-read `1` asks for raises the same refusal again. What the errno changes
+here is what the tool *says*: `ENOENT` gets the claim and the repair the check
+gives — the repository is not there, make the first canvas with `bin/canvas
+create` — and not "cannot tell whether there are any commits in it", which
+contradicts the `errno 2 ENOENT` on the refusal's own `Canvas-About:` line.
+
 **No failed look is reported as a finding.** That rule holds for the repository
 and the workspace as well as for the canvas file, and each of the three used to
 break it in the same way — a call that can fail for two reasons was read as

@@ -4319,6 +4319,137 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         self.assertNotIn("the file is there", stderr)
 
     # ------------------------------------------------------------------
+    # The same race, one level up: the repository removed after the check
+    # ------------------------------------------------------------------
+    #
+    # `is_repository` asks `os.stat(.git)` and `head_sha` runs `rev-parse`
+    # after it, so a `state/canvas/.git` removed in between raises `ENOENT`
+    # where the guard above already decided the repository was there — the
+    # canvas file's race, one level up. `_cannot_read_repository` answered it
+    # with "cannot tell whether there are any commits in <dir>" at an aftermath
+    # of "what that repository holds is still unknown", one line under its own
+    # `Canvas-About: errno 2 ENOENT`. Both sentences are false at that errno:
+    # it can tell, and what the repository holds is nothing, because there is
+    # no repository. The check one syscall earlier says exactly that, in
+    # `_not_a_repository`, and the two have to agree — a caller must not be
+    # able to read which side of a race it landed on out of what the tool said.
+    #
+    # They agree at exit `2`, not at `_cannot_read`'s `1`, and `README.md`
+    # section *Exit codes* carries the reason: a canvas that is gone is one
+    # file missing from an intact store, and a `state/canvas` that is gone is
+    # the store. Exit `1` would also be false advice here, because a read never
+    # initialises the repository, so the re-read it asks for raises this again.
+
+    REPOSITORY_RACE = (
+        "import os, shutil, sys\n"
+        "sys.path.insert(0, %(root)r)\n"
+        "target = os.path.abspath(%(target)r)\n"
+        "seen = [0]\n"
+        "asked = os.stat\n"
+        "def vanishing(path, *a, **k):\n"
+        "    answer = asked(path, *a, **k)\n"
+        "    try:\n"
+        "        same = os.path.abspath(path) == target\n"
+        "    except TypeError:\n"
+        "        same = False\n"
+        "    if same:\n"
+        "        seen[0] += 1\n"
+        "        if seen[0] == 1:\n"
+        "            shutil.rmtree(target)\n"
+        "    return answer\n"
+        "os.stat = vanishing\n"
+        "from canvas.cli import main\n"
+        "sys.exit(main(%(args)r))\n"
+    )
+
+    def raced_repository(self, args):
+        """Run an entry point with `state/canvas/.git` removed after the check.
+
+        `os.stat` rather than `os.path.isdir`, because `is_repository` asks
+        `os.stat` outright — it needs `S_ISDIR` and not a boolean, so that a
+        regular file where `.git` belongs is answered definitely rather than
+        inferred.
+        """
+        environment = dict(os.environ)
+        environment["OPENCLAW_WORKSPACE"] = self.workspace
+        script = self.REPOSITORY_RACE % {
+            "root": ROOT,
+            "target": os.path.join(self.canvas_dir, ".git"),
+            "args": list(args),
+        }
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+        return (
+            result.returncode,
+            result.stdout,
+            result.stderr.decode("utf-8", "replace"),
+        )
+
+    def test_a_repository_removed_after_the_check_says_it_is_not_there(self):
+        """The racy answer and the checked answer are the same answer.
+
+        Both routes are run against the same store, in that order — the race
+        is what removes `.git`, and the plain read after it is the check
+        meeting the absence head-on. What each says is then compared, because
+        the claim under test is not "this message is nice" but "these two
+        cannot disagree".
+        """
+        code, _, raced = self.raced_repository(["read", "a-ledger-row"])
+        self.assertFalse(os.path.exists(os.path.join(self.canvas_dir, ".git")))
+        self.assertEqual(2, code, raced)
+        self.assertActionable(code, raced, "the repository ENOENT race")
+
+        # The two false sentences, named. They are what `ENOENT` reached
+        # before, and neither is true of a repository that is not there.
+        self.assertNotIn("cannot tell", raced)
+        self.assertNotIn("what that repository holds is still unknown", raced)
+
+        # What it says instead is what the check says, in the check's words.
+        checked_code, _, checked = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(2, checked_code, checked)
+        self.assertActionable(
+            checked_code, checked, "the repository absent at the check"
+        )
+        claim = "%s is not a git repository" % self.canvas_dir
+        self.assertIn(claim, raced)
+        self.assertIn(claim, checked)
+        self.assertIn("errno 2 ENOENT", raced)
+
+        # And the repair it names is run, as it names it: `create` is the one
+        # thing that initialises the repository, and the read after it works.
+        self.assertIn("bin/canvas create", self.surface(raced)["Canvas-Next"][0])
+        code, _, stderr = self.run_canvas(
+            "create", "rebuilt", "--problem", "P", "--expected-value", "V"
+        )
+        self.assertEqual(0, code, stderr)
+        code, stdout, stderr = self.run_canvas("read", "rebuilt")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"<canvas", stdout)
+
+    def test_a_repository_that_cannot_be_read_still_says_it_cannot_tell(self):
+        """`EACCES` is the look failing, and that sentence is true of it.
+
+        The half of `_cannot_read_repository` the errno rule leaves alone. It
+        is asserted here so that "`ENOENT` says the repository is not there"
+        cannot be satisfied by deleting the honest sentence for every errno.
+        """
+        git_dir = os.path.join(self.canvas_dir, ".git")
+        original = stat.S_IMODE(os.stat(git_dir).st_mode)
+        os.chmod(git_dir, 0o000)
+        try:
+            code, _, stderr = self.run_canvas("read", "a-ledger-row")
+        finally:
+            os.chmod(git_dir, original)
+        self.assertEqual(2, code, stderr)
+        self.assertIn("cannot tell whether there are any commits in", stderr)
+        self.assertIn("errno 13 EACCES", stderr)
+        self.assertNotIn("is not a git repository", stderr)
+
+    # ------------------------------------------------------------------
     # The errno nobody anticipated
     # ------------------------------------------------------------------
 
