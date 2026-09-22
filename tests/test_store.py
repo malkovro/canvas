@@ -2623,20 +2623,12 @@ class EveryAppliedEditCommitCarriesAllThreeTrailers(VerbTestCase):
         )
 
 
-class EveryRefusalNamesTheNodesAndTheNextAction(VerbTestCase):
-    """The todo's done condition, verbatim: every refusal path in the tool
-    prints the node ids involved and a concrete next action, and no refusal
-    exits with an unexplained non-zero code.
+class RefusalSurface(object):
+    """Everything the done condition asks of one refusal, as assertions.
 
-    `engineering-spec.md` section *What to copy* takes IWE's error surface
-    unconditionally — "a refusal names every node it matched and how to narrow,
-    because an agent can act on that and cannot act on the word 'refused'" —
-    and these are that sentence held to.
-
-    These assert behaviour and not wording, like everything else here: that the
-    ids that were on the command line are on `Canvas-Node:` lines, that there
-    is a `Canvas-Next:` line and what it points at, that `Canvas-Exit:` carries
-    the code the process actually exited with, and that the store did not move.
+    A mixin rather than a base test case, so that the classes checking two
+    different families of refusal share the reading of the trailer block
+    without inheriting each other's tests.
     """
 
     TRAILERS = ("Canvas-Node", "Canvas-About", "Canvas-Next", "Canvas-Exit")
@@ -2680,6 +2672,23 @@ class EveryRefusalNamesTheNodesAndTheNextAction(VerbTestCase):
         for phrase in next_action:
             self.assertIn(phrase, trailers["Canvas-Next"][0], "%s\n%s" % (msg, stderr))
         return trailers
+
+
+class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
+    """The todo's done condition, verbatim: every refusal path in the tool
+    prints the node ids involved and a concrete next action, and no refusal
+    exits with an unexplained non-zero code.
+
+    `engineering-spec.md` section *What to copy* takes IWE's error surface
+    unconditionally — "a refusal names every node it matched and how to narrow,
+    because an agent can act on that and cannot act on the word 'refused'" —
+    and these are that sentence held to.
+
+    These assert behaviour and not wording, like everything else here: that the
+    ids that were on the command line are on `Canvas-Node:` lines, that there
+    is a `Canvas-Next:` line and what it points at, that `Canvas-Exit:` carries
+    the code the process actually exited with, and that the store did not move.
+    """
 
     def section_with_children(self):
         section = self.inserted(
@@ -3122,6 +3131,180 @@ class EveryRefusalNamesTheNodesAndTheNextAction(VerbTestCase):
                 kind("something is wrong", "do this instead")
             kind("something is wrong", "do this instead", nodes=["ab2c"])
             kind("something is wrong", "do this instead", about=["ledger id x"])
+
+
+class AnUnreadableCanvasIsARefusalAndNotATraceback(RefusalSurface, VerbTestCase):
+    """An ordinary OS condition is a refusal in the same shape as every other.
+
+    A canvas file this process cannot read, and a `state/canvas` it cannot
+    write or look in, are conditions any real workspace produces: a file
+    written by another user, a directory mounted read-only, a mode somebody
+    tightened. `os.path.isfile` answers True for a mode-`000` file, so the "no
+    such file" guard passes and the `open` after it used to raise — a raw
+    traceback, Python's exit `1`, and none of the four trailers.
+
+    Exit `2` and not `1` for each of them. `1` means "the request is wrong
+    against the store as it stands; re-read and re-decide", and here the
+    request was fine and the store is intact, so that advice invites a caller
+    to retry something that will fail again in exactly the same way. `2` is
+    "the tool or its environment is wrong; do not touch the canvas", which is
+    what is true.
+
+    Every test restores the mode it changed before it returns, so a failing
+    assertion cannot leave an unreadable file or an undeletable directory
+    behind for the tests that run after it.
+    """
+
+    def unreadable(self, path):
+        """Make a file unreadable for the rest of this test, and no longer."""
+        self.addCleanup(os.chmod, path, 0o644)
+        os.chmod(path, 0o000)
+        return path
+
+    def unwritable(self, directory):
+        """Make a directory readable but not writable, for this test only."""
+        self.addCleanup(os.chmod, directory, 0o755)
+        os.chmod(directory, 0o555)
+        return directory
+
+    def unlookable(self, directory):
+        """Make a directory impossible to look in, for this test only."""
+        self.addCleanup(os.chmod, directory, 0o755)
+        os.chmod(directory, 0o000)
+        return directory
+
+    def validate(self, *paths):
+        """Run bin/canvas-validate. Returns (exit code, stderr text)."""
+        result = subprocess.run(
+            [sys.executable, VALIDATE] + list(paths),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return result.returncode, result.stderr.decode("utf-8", "replace")
+
+    # -- store.read -------------------------------------------------------
+
+    def test_read_of_an_unreadable_canvas_names_it_and_says_what_to_do(self):
+        path = self.unreadable(self.canvas_file())
+        code, _, stderr = self.verb("read")
+        self.assertNotIn("Traceback", stderr)
+        self.assertSurface(
+            2, code, stderr, about=["ledger id a-ledger-row", path],
+            next_action=["chmod"],
+        )
+
+    # -- store._open_canvas, via document.parse ---------------------------
+
+    def test_every_editing_verb_refuses_an_unreadable_canvas(self):
+        path = self.unreadable(self.canvas_file())
+        for edit in (
+            ("replace", self.problem_id, "--text", "restated", "--why", "w"),
+            ("insert", "--after", self.problem_id, "--text", "new", "--why", "w"),
+            ("remove", self.problem_id, "--why", "w"),
+            ("move", self.problem_id, "--into", "root", "--why", "w"),
+        ):
+            code, _, stderr = self.verb(*edit)
+            self.assertNotIn("Traceback", stderr, edit)
+            self.assertSurface(
+                2, code, stderr, msg=edit,
+                about=["ledger id a-ledger-row", path], next_action=["chmod"],
+            )
+
+    # -- validate._wellformedness_problem ---------------------------------
+
+    def test_canvas_validate_of_an_unreadable_file_is_exit_two(self):
+        # README section *Validating a file by hand* and `validate_file`'s own
+        # docstring have both always promised exit 2 for a file "missing or
+        # unreadable". The missing half was true; the unreadable half was a
+        # traceback and exit 1.
+        path = self.unreadable(self.canvas_file())
+        code, stderr = self.validate(path)
+        self.assertNotIn("Traceback", stderr)
+        self.assertSurface(
+            2, code, stderr, about=["file %s" % path], next_action=["chmod"],
+        )
+
+    # -- store._write_and_commit ------------------------------------------
+
+    def test_a_write_into_an_unwritable_directory_names_the_node(self):
+        directory = self.unwritable(self.canvas_dir)
+        before = self.state()
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "restated", "--why", "w"
+        )
+        self.assertNotIn("Traceback", stderr)
+        self.assertSurface(
+            2, code, stderr, nodes=[self.problem_id],
+            about=[self.canvas_file(), directory], next_action=["chmod"],
+        )
+        self.assertEqual(before, self.state())
+
+    # -- store.preflight ---------------------------------------------------
+
+    def test_create_into_an_unwritable_directory_refuses_in_the_same_shape(self):
+        directory = self.unwritable(self.canvas_dir)
+        code, _, stderr = self.run_canvas(
+            "create", "b-row", "--problem", "P", "--expected-value", "V"
+        )
+        self.assertNotIn("Traceback", stderr)
+        self.assertSurface(
+            2, code, stderr, about=[self.canvas_file("b-row"), directory],
+            next_action=["chmod"],
+        )
+
+    # -- store._no_canvas, when the absence cannot be trusted --------------
+
+    def test_a_directory_it_cannot_look_in_is_not_reported_as_no_canvas(self):
+        # `os.path.isfile` answers False here too, and "no canvas for that
+        # ledger id" would be a false statement carrying a next action —
+        # create it — that would make things worse rather than better.
+        directory = self.unlookable(self.canvas_dir)
+        for args in (
+            ("read",),
+            ("replace", self.problem_id, "--text", "x", "--why", "w"),
+            ("history", self.problem_id),
+        ):
+            code, _, stderr = self.verb(*args)
+            self.assertNotIn("Traceback", stderr, args)
+            self.assertSurface(
+                2, code, stderr, msg=args, about=[directory],
+                next_action=["chmod"],
+            )
+
+    def test_a_canvas_that_is_genuinely_absent_is_still_exit_one(self):
+        # The control for the test above: the distinction it draws has to
+        # leave the ordinary case exactly where README's table puts it.
+        code, _, stderr = self.run_canvas("read", "no-such-row")
+        self.assertSurface(
+            1, code, stderr, about=["ledger id no-such-row"],
+            next_action=["create"],
+        )
+
+    # -- validate_file, for the same distinction ---------------------------
+
+    def test_canvas_validate_tells_absent_from_impossible_to_look_for(self):
+        directory = self.unlookable(self.canvas_dir)
+        code, stderr = self.validate(self.canvas_file())
+        self.assertNotIn("Traceback", stderr)
+        self.assertSurface(
+            2, code, stderr, about=[directory], next_action=["chmod"],
+        )
+
+    # -- store._one_node_only, which no command line can reach -------------
+
+    def test_the_one_node_check_refuses_a_canvas_it_cannot_re_read(self):
+        # Defence in depth for the library API. From a command line
+        # `_open_canvas` has already read the file by the time this runs, so
+        # the only ways here are a file that becomes unreadable mid-write and
+        # a caller reaching past `bin/canvas` — and neither may traceback.
+        from canvas import store
+
+        path = self.unreadable(self.canvas_file())
+        root = document.new_canvas("a-ledger-row")
+        with self.assertRaises(store.ToolProblem) as caught:
+            store._one_node_only(path, root, self.problem_id)
+        self.assertEqual([self.problem_id], caught.exception.nodes)
+        self.assertTrue(caught.exception.next_action.strip())
 
 
 if __name__ == "__main__":
