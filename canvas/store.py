@@ -230,6 +230,49 @@ def _no_git(error):
     )
 
 
+def _cannot_read(path, error, ledger_id=None, node_id=None):
+    """The one refusal for a canvas that is there and cannot be read.
+
+    `os.path.isfile` answers True for a file whose mode is `000`, so the "no
+    canvas for this ledger id" guard passes and the read below is where an
+    ordinary permission problem lands. Exit `2` and not `1`: the store is
+    intact and this process cannot see it, so "the request is wrong against the
+    store as it stands; re-read and re-decide" is not merely unhelpful but
+    wrong — it invites a caller to retry a request that was fine, against a
+    canvas it still cannot read.
+    """
+    return ToolProblem(
+        "cannot read %s: %s" % (path, error),
+        "make that file readable — `ls -l %s` shows who owns it and what its "
+        "mode is, and `chmod u+r %s` is usually the repair — and re-run; the "
+        "canvas is there and unchanged, nothing was written and nothing was "
+        "committed" % (path, path),
+        nodes=[node_id] if node_id is not None else [],
+        about=(["ledger id %s" % ledger_id] if ledger_id is not None else [])
+        + ["canvas %s" % path],
+    )
+
+
+def _cannot_write(path, error, node_id=None):
+    """The one refusal for a canvas directory that cannot be written.
+
+    Every write this store makes goes to a temporary name beside the canvas and
+    is renamed onto it, so the directory's own mode is what a write needs and
+    what it is refused for. Exit `2`, and for the same reason `_cannot_read`
+    is: nothing about the request is wrong.
+    """
+    directory = os.path.dirname(path) or "."
+    return ToolProblem(
+        "cannot write %s: %s" % (path, error),
+        "make %s writable — `ls -ld %s` shows who owns it and what its mode "
+        "is, and `chmod u+w %s` is usually the repair — and re-run; nothing "
+        "was written and nothing was committed"
+        % (directory, directory, directory),
+        nodes=[node_id] if node_id is not None else [],
+        about=["canvas %s" % path, "directory %s" % directory],
+    )
+
+
 def _git(canvas_dir, *arguments):
     """Run git against the canvas repository and nothing else."""
     command = [
@@ -632,12 +675,18 @@ def preflight(path, ledger_id, contents):
         document.place_into(root, document.ROOT, document.new_text(_PREFLIGHT_ID, content))
     temporary = "%s.preflight-%d" % (path, os.getpid())
     try:
-        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(document.serialise(root))
+        try:
+            with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(document.serialise(root))
+        except OSError as error:
+            raise _cannot_write(path, error)
         problems = _validate(temporary, path)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        try:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        except OSError as error:
+            raise _cannot_write(path, error)
     if problems:
         raise Refusal(
             "refusing to create an invalid canvas at %s" % path,
@@ -771,6 +820,11 @@ def _one_node_only(path, root, node_id):
             nodes=[node_id],
             about=["canvas %s" % path],
         )
+    except OSError as error:
+        # The document on disk is what this write is held against, so a canvas
+        # that cannot be read cannot be written either — there is nothing to
+        # compare the one-node claim to.
+        raise _cannot_read(path, error, node_id=node_id)
 
     before, before_order = _shape(stored)
     after, after_order = _shape(root)
@@ -918,8 +972,11 @@ def _write_and_commit(
     text = document.serialise(root)
     temporary = "%s.tmp-%d" % (path, os.getpid())
     try:
-        with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
+        try:
+            with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+        except OSError as error:
+            raise _cannot_write(path, error, node_id=node_id)
         problems = _validate(temporary, path)
         if problems:
             raise Refusal(
@@ -934,10 +991,16 @@ def _write_and_commit(
                 about=["canvas %s" % path],
                 details=problems,
             )
-        os.replace(temporary, path)
+        try:
+            os.replace(temporary, path)
+        except OSError as error:
+            raise _cannot_write(path, error, node_id=node_id)
     finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+        try:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        except OSError as error:
+            raise _cannot_write(path, error, node_id=node_id)
 
     # -f so that a stray ignore rule somewhere above cannot make `add` a silent
     # no-op and the commit a confusing failure.
@@ -1099,8 +1162,11 @@ def read(ledger_id):
     if sha is None:
         raise _no_commits(canvas_dir, "sha to write against")
 
-    with open(path, "rb") as handle:
-        body = handle.read()
+    try:
+        with open(path, "rb") as handle:
+            body = handle.read()
+    except OSError as error:
+        raise _cannot_read(path, error, ledger_id=ledger_id)
     return sha, body, _validate(path, path)
 
 
@@ -1434,6 +1500,11 @@ def _open_canvas(ledger_id):
             "reports it — and re-run; nothing was written" % path,
             about=["ledger id %s" % ledger_id, "canvas %s" % path],
         )
+    except OSError as error:
+        # A canvas that is there and unreadable is not a wrong request, so it
+        # is the one thing in this function that is a `ToolProblem` and not a
+        # `Refusal`: exit 2, do not touch the canvas.
+        raise _cannot_read(path, error, ledger_id=ledger_id)
     return canvas_dir, path, root, head
 
 
