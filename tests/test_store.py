@@ -945,7 +945,7 @@ class EveryVerbRequiresAReason(VerbTestCase):
     def test_the_write_path_itself_refuses_a_reasonless_write(self):
         # The done condition is about code paths, not about the CLI surface: a
         # caller that never goes near canvas/cli.py must not be able to write
-        # an unexplained edit either. write_and_commit is the only function
+        # an unexplained edit either. _write_and_commit is the only function
         # that puts a canvas on its real path, and it will not.
         from canvas import store
 
@@ -954,7 +954,7 @@ class EveryVerbRequiresAReason(VerbTestCase):
                 store.require_reason(reason)
 
         with self.assertRaises(store.ToolProblem):
-            store.write_and_commit(
+            store._write_and_commit(
                 self.canvas_dir,
                 self.canvas_file(),
                 document.new_canvas("a-ledger-row"),
@@ -1279,6 +1279,544 @@ class OneEditIsStillOneNode(VerbTestCase):
         self.assertEqual(1, code)
         self.assertIn("section", stderr)
         self.assertEqual(before, self.state())
+
+
+class TwoNodeEditsExitNonZero(VerbTestCase):
+    """The done condition's third clause, in the shapes an agent actually
+    reaches for: two ids in one invocation, a payload that tries to carry a
+    second node, and the three container edits whose refusal is the whole of
+    `node-identity.md` §5. Every one of them is non-zero with nothing written.
+    """
+
+    def section_with_children(self):
+        section_id = self.inserted(
+            "--into", "root", "--type", "section", "--title", "Options",
+            "--why", "the options",
+        )
+        first = self.inserted("--into", section_id, "--text", "Option A", "--why", "a")
+        second = self.inserted("--into", section_id, "--text", "Option B", "--why", "b")
+        return section_id, first, second
+
+    def test_naming_two_node_ids_in_one_invocation_exits_non_zero(self):
+        section_id, first, second = self.section_with_children()
+        before = self.state()
+        # The argv an agent writes when it wants to settle both options at once.
+        code, stdout, stderr = self.verb(
+            "replace", first, second, "--type", "text", "--text", "both",
+            "--why", "change both options",
+        )
+        self.assertEqual(2, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn(second, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_a_second_id_is_refused_by_every_verb_that_takes_one(self):
+        section_id, first, second = self.section_with_children()
+        for edit in (
+            ("replace", first, second, "--text", "both"),
+            ("remove", first, second),
+            ("move", first, second, "--into", "root"),
+        ):
+            before = self.state()
+            code, stdout, _ = self.verb(*(edit + ("--why", "a reason")))
+            self.assertEqual(2, code, edit)
+            self.assertEqual(b"", stdout, edit)
+            self.assertEqual(before, self.state(), edit)
+
+    def test_a_payload_carrying_a_second_node_writes_one_node_of_text(self):
+        # Not a refusal but the stronger answer: the payload has no way to
+        # express a node, so markup handed to --text is character data on the
+        # one node the command named, and no second node comes into being.
+        before = self.ids()
+        smuggled = (
+            '<text id="zzzz" v="1">smuggled</text>'
+            '<text id="yyyy" v="1">two</text>'
+        )
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", smuggled,
+            "--why", "try to write two nodes through the payload",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(before, self.ids())
+        self.assertEqual(smuggled, self.node(self.problem_id).text)
+
+    def test_the_three_container_edits_that_would_reach_a_subtree_exit_non_zero(self):
+        section_id, first, second = self.section_with_children()
+        for edit in (
+            # A1: turn a container into a leaf, which would reach its subtree.
+            ("replace", section_id, "--type", "text", "--text", "We chose A."),
+            # A2: give a container character data while it has children.
+            ("replace", section_id, "--text", "We chose A."),
+            # A3: remove a container while it has children.
+            ("remove", section_id),
+        ):
+            before = self.state()
+            code, stdout, stderr = self.verb(*(edit + ("--why", "settle the options")))
+            self.assertEqual(1, code, edit)
+            self.assertEqual(b"", stdout, edit)
+            # The refusal names the container, every child it would have
+            # touched, and what to do instead — each child, with its own --why.
+            for named in (section_id, first, second):
+                self.assertIn(named, stderr, edit)
+            self.assertIn("each child", stderr, edit)
+            self.assertIn("--why", stderr, edit)
+            self.assertEqual(before, self.state(), edit)
+
+
+class WhatOneNodeMeansWhenTheNodeHasChildren(VerbTestCase):
+    """The done condition's second clause. `node-identity.md` §5 is written for
+    *a node that has children* and not for `<section>` alone, so every
+    container the vocabulary has is exercised here: `<section>`, `<list>`,
+    `<table>` and `<row>`. A docstring is not a specification, and a rule
+    stated of one element is not a rule about containers."""
+
+    def containers(self):
+        """One of every container in the vocabulary, each holding two children.
+
+        Returns a list of (container id, its two children, a position it may
+        legally be moved to). The position is per container because the schema
+        says where each type may sit: a `<row>` lives in a `<table>` and
+        nowhere else, and a `<section>` nests one level.
+        """
+        destination = self.inserted(
+            "--into", "root", "--type", "section", "--title", "Elsewhere",
+            "--why", "somewhere to move into",
+        )
+        section = self.inserted(
+            "--into", "root", "--type", "section", "--title", "A heading",
+            "--why", "a section",
+        )
+        section_children = [
+            self.inserted("--into", section, "--text", text, "--why", "a leaf")
+            for text in ("one", "two")
+        ]
+        a_list = self.inserted("--into", "root", "--type", "list", "--why", "a list")
+        items = [
+            self.inserted(
+                "--into", a_list, "--type", "item", "--text", text, "--why", "an item"
+            )
+            for text in ("first", "second")
+        ]
+        table = self.inserted("--into", "root", "--type", "table", "--why", "a table")
+        rows = [
+            self.inserted("--into", table, "--type", "row", "--why", "a row")
+            for _ in range(2)
+        ]
+        cells = [
+            self.inserted(
+                "--into", rows[0], "--type", "cell", "--text", text, "--why", "a cell"
+            )
+            for text in ("option", "cost")
+        ]
+        return [
+            (section, section_children, ("--after", self.problem_id)),
+            (a_list, items, ("--into", destination)),
+            (table, rows, ("--into", destination)),
+            (rows[0], cells, ("--after", rows[1])),
+        ]
+
+    def subtree(self, node_id):
+        """Every descendant's id, type, v, attributes and text, in order.
+
+        A container's own character data is the serialiser's indentation and
+        not content — `canvas/document.py` drops it on every parse — so it is
+        dropped here too, and a subtree that moved deeper still compares equal.
+        """
+        return [
+            (
+                node.tag,
+                node.get("id"),
+                node.get("v"),
+                sorted(node.items()),
+                None if len(node) else node.text,
+            )
+            for node in list(self.node(node_id).iter())[1:]
+        ]
+
+    def test_replace_on_a_container_replaces_that_node_and_nothing_else(self):
+        # "Nothing. replace on a container replaces that container node and
+        # nothing else. Its children keep their ids, their v, their content and
+        # their order." Stated of <section> and true of every container.
+        for container, _, _ in self.containers():
+            before = self.subtree(container)
+            was = self.node(container).get("v")
+            # A <section>'s own content is its title; the other containers
+            # carry nothing but their identity, so a rename is all there is.
+            payload = ()
+            if self.node(container).tag == "section":
+                payload = ("--title", "A heading, settled")
+            code, _, stderr = self.verb(
+                *(("replace", container) + payload + ("--why", "rename it"))
+            )
+            self.assertEqual(0, code, (container, stderr))
+            self.assertEqual(before, self.subtree(container), container)
+            now = self.node(container).get("v")
+            self.assertEqual(int(was) + 1, int(now), container)
+            self.assertEqual(
+                [container], self.commits_naming_only(container), container
+            )
+
+    def commits_naming_only(self, node_id):
+        """The nodes named by the commit this edit just made."""
+        body = self.git("log", "-1", "--format=%B")
+        return [
+            line.split(": ", 1)[1].strip()
+            for line in body.splitlines()
+            if line.startswith("Canvas-Node:")
+        ]
+
+    def test_a_replace_payload_cannot_express_a_child_at_all(self):
+        # The flags a payload has are four scalars. There is no --children, no
+        # --file, no --body and no stdin, so "one commit rewriting N children"
+        # is inexpressible here rather than merely refused.
+        for flag in ("--children", "--body", "--file", "--xml", "--content", "--stdin"):
+            code, _, _ = self.verb(
+                "replace", self.problem_id, flag, "x", "--why", "a reason"
+            )
+            self.assertEqual(2, code, flag)
+        code, _, _ = self.run_canvas("replace", "a-ledger-row", self.problem_id, "-")
+        self.assertEqual(2, code)
+
+    def test_a_type_change_is_refused_while_the_node_has_children(self):
+        for container, children, _ in self.containers():
+            before = self.state()
+            code, stdout, stderr = self.verb(
+                "replace", container, "--type", "text", "--text", "flattened",
+                "--why", "it reads better as prose",
+            )
+            self.assertEqual(1, code, container)
+            self.assertEqual(b"", stdout, container)
+            for named in [container] + children:
+                self.assertIn(named, stderr, container)
+            self.assertEqual(before, self.state(), container)
+
+    def test_character_data_is_refused_while_the_node_has_children(self):
+        for container, children, _ in self.containers():
+            before = self.state()
+            code, stdout, stderr = self.verb(
+                "replace", container, "--text", "prose", "--why", "a note"
+            )
+            self.assertEqual(1, code, container)
+            self.assertEqual(b"", stdout, container)
+            for named in [container] + children:
+                self.assertIn(named, stderr, container)
+            self.assertEqual(before, self.state(), container)
+
+    def test_remove_is_refused_while_the_node_has_children(self):
+        for container, children, _ in self.containers():
+            before = self.state()
+            code, stdout, stderr = self.verb(
+                "remove", container, "--why", "tidying up"
+            )
+            self.assertEqual(1, code, container)
+            self.assertEqual(b"", stdout, container)
+            for named in [container] + children:
+                self.assertIn(named, stderr, container)
+            self.assertEqual(before, self.state(), container)
+
+    def test_an_emptied_container_can_then_be_removed_one_node_at_a_time(self):
+        # The refusal is a route and not a wall: what it asks for is possible,
+        # and each step of it is one node with its own reason.
+        # Deepest first, because a container inside a container has to be
+        # emptied before its own parent can be — which is the rule, applied to
+        # itself, and is exactly what the refusals ask for.
+        emptied = list(reversed(self.containers()))
+        for container, children, _ in emptied:
+            for child in children + [container]:
+                if self.node(child) is None:
+                    continue
+                code, _, stderr = self.verb(
+                    "remove", child, "--why", "no longer needed"
+                )
+                self.assertEqual(0, code, (container, child, stderr))
+        for container, children, _ in emptied:
+            self.assertIsNone(self.node(container), container)
+            for child in children:
+                self.assertIsNone(self.node(child), child)
+
+    def test_move_carries_the_subtree_and_is_still_one_node(self):
+        # The children travel with the container and not one of their records
+        # changes: same id, same v, same content, same parent, same order. The
+        # commit names one node, and it is the one whose position changed.
+        for container, children, position in self.containers():
+            before = self.subtree(container)
+            was = self.node(container).get("v")
+            code, _, stderr = self.verb(
+                *(("move", container) + position + ("--why", "reorganise"))
+            )
+            self.assertEqual(0, code, (container, stderr))
+            self.assertEqual(before, self.subtree(container), container)
+            now = self.node(container).get("v")
+            self.assertEqual(int(was) + 1, int(now), container)
+            self.assertEqual(
+                [container], self.commits_naming_only(container), container
+            )
+            for child in children:
+                self.assertEqual(1, len(self.history(child)), (container, child))
+
+    def test_moving_a_container_into_its_own_subtree_is_refused(self):
+        for container, children, _ in self.containers():
+            for position in (("--into", container), ("--after", children[0])):
+                before = self.state()
+                code, _, stderr = self.verb(
+                    *(("move", container) + position + ("--why", "reorganise"))
+                )
+                self.assertEqual(1, code, (container, position))
+                self.assertIn(container, stderr)
+                self.assertEqual(before, self.state(), (container, position))
+
+    def test_insert_brings_exactly_one_node_and_it_arrives_childless(self):
+        # An insert may bring a container, and the container it brings is
+        # empty: there is no payload that fills one, so a subtree is built one
+        # node and one reason at a time.
+        for node_type, extra in (
+            ("section", ("--title", "A heading")),
+            ("list", ()),
+            ("table", ()),
+            ("text", ("--text", "a leaf")),
+        ):
+            before = set(self.ids())
+            node_id = self.inserted(
+                *(("--into", "root", "--type", node_type)
+                  + extra + ("--why", "one node"))
+            )
+            self.assertEqual({node_id}, set(self.ids()) - before, node_type)
+            self.assertEqual([], list(self.node(node_id)), node_type)
+            self.assertEqual("1", self.node(node_id).get("v"), node_type)
+
+
+class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
+    """The done condition's first clause, at the level the todo scopes it to —
+    "including any file-level or import path". `from canvas import store` must
+    offer no function that writes a document wholesale, and the one private
+    function that puts a canvas on its path must refuse a write worth more than
+    one node no matter who calls it."""
+
+    #: Every public name `canvas.store` offers, frozen. A new one added here
+    #: fails this test until somebody has classified it, which is the point: the
+    #: supported write surface is five functions and the rest reads or computes.
+    PUBLIC_STORE = {
+        "Refusal", "ToolProblem",
+        # The supported write surface, and all of it.
+        "create", "insert", "replace", "remove", "move",
+        # Reads, lookups and pure functions.
+        "read", "canvas_directory", "canvas_path", "is_repository",
+        "ensure_repository", "head_sha", "is_free", "mint", "require_reason",
+        "history_length", "next_version", "default_author", "preflight",
+        # Imported modules, not API.
+        "os", "re", "secrets", "subprocess", "document", "validate_file",
+        "EnvironmentProblem",
+    }
+
+    def store(self):
+        from canvas import store
+
+        return store
+
+    def public(self, module):
+        return {name for name in vars(module) if not name.startswith("_")}
+
+    def test_the_store_offers_no_public_function_that_takes_a_document(self):
+        self.assertEqual(self.PUBLIC_STORE, self.public(self.store()))
+        self.assertFalse(hasattr(self.store(), "write_and_commit"))
+
+    def test_nothing_public_in_canvas_document_writes_to_disk(self):
+        # document.py builds and serialises trees; the one function that opens
+        # a file is parse, and it reads.
+        import inspect
+
+        from canvas import document as module
+
+        for name in self.public(module):
+            thing = getattr(module, name)
+            if not inspect.isfunction(thing):
+                continue
+            source = inspect.getsource(thing)
+            self.assertNotIn('open(', source.replace("ET.parse", ""), name)
+            self.assertNotIn("os.replace", source, name)
+
+    def test_the_write_path_refuses_a_whole_document_rewrite(self):
+        # The audit's A17, which exited 0 and committed: build a new document
+        # from nothing and hand it in. It is now a refusal, and it is one for
+        # every caller, because it lives in the only function that can put a
+        # canvas on its path.
+        store = self.store()
+        before = self.state()
+        rewritten = document.new_canvas("a-ledger-row")
+        document.place_into(rewritten, document.ROOT, document.new_text("qqqq", "gone"))
+        document.place_into(rewritten, document.ROOT, document.new_text("pppp", "also"))
+
+        with self.assertRaises(store.Refusal) as caught:
+            store._write_and_commit(
+                self.canvas_dir, self.canvas_file(), rewritten,
+                "replace", "the whole document", "a whole-document rewrite",
+                "audit | by-hand", node_id="qqqq",
+            )
+        for named in (self.problem_id, self.value_id, "pppp"):
+            self.assertIn(named, str(caught.exception))
+        self.assertEqual(before, self.state())
+
+    def test_the_write_path_refuses_n_nodes_hidden_behind_one_trailer(self):
+        # The worse variant node-identity.md §5 names literally: one commit
+        # rewriting N nodes under one Canvas-Node: trailer, so that N-1 nodes
+        # are changed by a commit their own history never sees.
+        store = self.store()
+        before = self.state()
+        tree = document.parse(self.canvas_file())
+        for node in list(tree):
+            node.text = "rewritten wholesale"
+
+        with self.assertRaises(store.Refusal) as caught:
+            store._write_and_commit(
+                self.canvas_dir, self.canvas_file(), tree,
+                "replace", self.problem_id, "rewrite every node at once",
+                "audit | by-hand", node_id=self.problem_id,
+            )
+        self.assertIn(self.value_id, str(caught.exception))
+        self.assertNotIn("Canvas-Node: %s" % self.problem_id, self.git("log", "-1"))
+        self.assertEqual(before, self.state())
+
+    def test_the_write_path_refuses_a_second_node_born_in_the_same_commit(self):
+        store = self.store()
+        before = self.state()
+        tree = document.parse(self.canvas_file())
+        document.find(tree, self.problem_id).text = "restated"
+        document.place_into(
+            tree, document.ROOT, document.new_text("qqqq", "and a new one")
+        )
+
+        with self.assertRaises(store.Refusal) as caught:
+            store._write_and_commit(
+                self.canvas_dir, self.canvas_file(), tree,
+                "replace", self.problem_id, "one edit and one smuggled birth",
+                "audit | by-hand", node_id=self.problem_id,
+            )
+        self.assertIn("qqqq", str(caught.exception))
+        self.assertEqual(before, self.state())
+
+    def test_the_write_path_refuses_a_reorder_of_nodes_it_did_not_name(self):
+        # A rewrite that shuffles two siblings changes no node's own record, so
+        # the order is compared too.
+        store = self.store()
+        third = self.inserted("--into", "root", "--text", "a third", "--why", "a third")
+        before = self.state()
+        tree = document.parse(self.canvas_file())
+        moved = document.detach(tree, self.value_id)
+        tree.insert(0, moved)
+        document.find(tree, third).text = "a third, restated"
+
+        with self.assertRaises(store.Refusal) as caught:
+            store._write_and_commit(
+                self.canvas_dir, self.canvas_file(), tree,
+                "replace", third, "an edit with a reshuffle in it",
+                "audit | by-hand", node_id=third,
+            )
+        self.assertIn("root", str(caught.exception))
+        self.assertEqual(before, self.state())
+
+    def test_the_write_path_refuses_a_nameless_write_over_an_existing_canvas(self):
+        # A commit that names no node changes no node's history, so the only
+        # document it may write is a canvas being born.
+        store = self.store()
+        before = self.state()
+        with self.assertRaises(store.Refusal) as caught:
+            store._write_and_commit(
+                self.canvas_dir, self.canvas_file(),
+                document.new_canvas("a-ledger-row"),
+                "replace", "whole document", "a rewrite naming nothing",
+                "audit | by-hand",
+            )
+        self.assertIn(self.canvas_file(), str(caught.exception))
+        self.assertEqual(before, self.state())
+
+    def test_a_canvas_cannot_be_born_with_nodes_already_in_it(self):
+        # node-identity.md §4: the creation commit creates the root only, and
+        # the birth of a canvas gets no exemption from the rule.
+        store = self.store()
+        born = document.new_canvas("a-new-row")
+        document.place_into(born, document.ROOT, document.new_text("qqqq", "a problem"))
+        path = self.canvas_file("a-new-row")
+
+        with self.assertRaises(store.Refusal) as caught:
+            store._write_and_commit(
+                self.canvas_dir, path, born, "create", "a-new-row",
+                "born with two nodes in it", "audit | by-hand",
+            )
+        self.assertIn("qqqq", str(caught.exception))
+        self.assertFalse(os.path.exists(path))
+
+    def test_the_write_path_refuses_an_edit_to_a_canvas_that_is_not_there(self):
+        # A commit naming a node is an edit of something. With no canvas at the
+        # path there is nothing for it to be one edit of, and writing the whole
+        # document anyway is the rewrite under another name.
+        store = self.store()
+        path = self.canvas_file("no-such-row")
+        with self.assertRaises(store.Refusal):
+            store._write_and_commit(
+                self.canvas_dir, path, document.new_canvas("no-such-row"),
+                "replace", "x", "an edit of nothing", "audit | by-hand",
+                node_id="qqqq",
+            )
+        self.assertFalse(os.path.exists(path))
+
+    def test_the_write_path_refuses_a_document_that_uses_one_id_twice(self):
+        # Two nodes sharing an id share one history, so the guard cannot say
+        # which of them an edit was of — and neither could a reader.
+        store = self.store()
+        before = self.state()
+        tree = document.parse(self.canvas_file())
+        document.place_into(
+            tree, document.ROOT, document.new_text(self.problem_id, "a twin")
+        )
+        with self.assertRaises(store.Refusal) as caught:
+            store._write_and_commit(
+                self.canvas_dir, self.canvas_file(), tree, "insert",
+                self.problem_id, "a node with a borrowed id", "audit | by-hand",
+                node_id=self.problem_id,
+            )
+        self.assertIn(self.problem_id, str(caught.exception))
+        self.assertEqual(before, self.state())
+
+    def test_the_write_path_refuses_a_path_outside_the_canvas_repository(self):
+        store = self.store()
+        escaped = os.path.join(self.workspace, "escaped.xml")
+        with self.assertRaises(store.ToolProblem):
+            store._write_and_commit(
+                self.canvas_dir, escaped, document.new_canvas("escaped"),
+                "create", "escaped", "a canvas outside the store",
+                "audit | by-hand",
+            )
+        self.assertFalse(os.path.exists(escaped))
+
+    def test_a_refused_write_leaves_no_temporary_file_behind(self):
+        store = self.store()
+        tree = document.parse(self.canvas_file())
+        for node in list(tree):
+            node.text = "rewritten wholesale"
+        with self.assertRaises(store.Refusal):
+            store._write_and_commit(
+                self.canvas_dir, self.canvas_file(), tree, "replace",
+                self.problem_id, "a reason", "audit | by-hand",
+                node_id=self.problem_id,
+            )
+        self.assertEqual(
+            ["a-ledger-row.xml"],
+            sorted(name for name in os.listdir(self.canvas_dir) if name != ".git"),
+        )
+
+    def test_the_four_verbs_still_reach_the_write_path_they_are_guarded_by(self):
+        # The guard is not a wall around the store: every ordinary edit still
+        # goes through it, exits 0, and makes exactly one commit.
+        before = len(self.git("log", "--format=%H").split())
+        node_id = self.inserted("--into", "root", "--text", "a node", "--why", "one")
+        for edit in (
+            ("replace", node_id, "--text", "restated", "--why", "two"),
+            ("move", node_id, "--after", self.problem_id, "--why", "three"),
+            ("remove", node_id, "--why", "four"),
+        ):
+            code, _, stderr = self.verb(*edit)
+            self.assertEqual(0, code, (edit, stderr))
+        self.assertEqual(before + 4, len(self.git("log", "--format=%H").split()))
 
 
 if __name__ == "__main__":
