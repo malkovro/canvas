@@ -3552,6 +3552,59 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
         self.assertEqual(0, code, stderr)
         self.assertIn(self.problem_id.encode(), stdout)
 
+    #: Everything inside `.git` that the store's reads depend on. Checking the
+    #: mode of `.git` itself was a check at a fixed depth, and this whole
+    #: surface exists because a check at a fixed depth can be defeated by going
+    #: one deeper: with `.git` readable and `refs/heads` at `000`, git finds no
+    #: ref and reports it exactly as it reports an unborn branch.
+    INSIDE_THE_REPOSITORY = ("refs/heads", "refs", "objects", "HEAD", "config")
+
+    def test_nothing_unreadable_inside_the_repository_is_read_as_emptiness(self):
+        """The fifth instance of the same lie, one level inside `.git`.
+
+        `_illegible` walks the whole of `.git` rather than asking after its top
+        level, so the answer does not depend on the depth somebody happened to
+        think of. Where git declines to answer and the walk finds anything it
+        cannot read, the tool says it cannot tell.
+        """
+        git_dir = os.path.join(self.canvas_dir, ".git")
+        for inside in self.INSIDE_THE_REPOSITORY:
+            target = os.path.join(git_dir, inside)
+            if not os.path.exists(target):
+                continue
+            original = self.at_mode(target, 0o000)
+            try:
+                for args in (("read",), ("history", self.problem_id)):
+                    code, _, stderr = self.verb(*args)
+                    if code == 0:
+                        # git did not need it. Nothing was claimed, so there is
+                        # nothing here that can be false.
+                        continue
+                    self.assertConforms(code, stderr, (inside, args))
+                    self.assertEqual(2, code, "%s %s\n%s" % (inside, args, stderr))
+                    for claim in self.DEFINITE_CLAIMS:
+                        self.assertNotIn(claim, stderr, (inside, args, claim))
+                    self.assertIn("cannot tell", stderr)
+            finally:
+                os.chmod(target, original)
+
+    def test_the_repair_named_for_something_inside_the_repository_works(self):
+        # The next action has to name the thing that is actually refusing, and
+        # running it has to make the same command succeed. `refs/heads` is two
+        # levels below the `.git` the old check looked at.
+        target = os.path.join(self.canvas_dir, ".git", "refs", "heads")
+        original = self.at_mode(target, 0o000)
+        try:
+            code, _, stderr = self.verb("read")
+            self.assertEqual(2, code, stderr)
+            next_action = self.surface(stderr)["Canvas-Next"][0]
+            self.assertIn("chmod u+rx %s" % target, next_action)
+        finally:
+            os.chmod(target, original)
+        code, stdout, stderr = self.verb("read")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(b"<canvas", stdout)
+
     # -- above the workspace, which no chain rooted at it can reach ---------
 
     def nested_workspace(self):

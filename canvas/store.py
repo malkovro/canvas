@@ -437,27 +437,58 @@ def _illegible(canvas_dir):
     """Why this process cannot read the canvas repository, or None when it can.
 
     The positive evidence every claim of emptiness below has to produce first.
-    `git` reports "this repository has no commits" and "I could not open this
+    `git` reports "this repository has no commits" and "I could not read this
     repository" through the same failing exit status, so a caller that reads a
     non-zero exit as emptiness states something false whenever the second one
     is what happened — and the repair it then names, `create` the first canvas,
-    fails in turn against a repository that is already there. Asking the
-    filesystem whether `.git` can be read and traversed is what tells the two
-    apart, and it is asked *before* the emptiness is asserted rather than after
-    the assertion has already gone out.
+    fails in turn against a repository that is already there.
+
+    **The whole of `.git`, not its top level.** Checking the mode of `.git`
+    itself is a check at a fixed depth, and this surface exists because a check
+    at a fixed depth can always be defeated by going one deeper: with `.git`
+    readable and `.git/refs/heads` at mode `000`, git finds no ref, says so the
+    same way an unborn branch does, and the tool announced that a repository
+    holding three commits had none. There is no depth at which that stops being
+    possible, so the traversal is not given one — it walks until it has seen
+    everything or until something refuses it, and only "I saw all of it" counts
+    as permission to call the repository empty.
+
+    The walk is affordable because of *when* it runs: only after git has
+    already declined to answer, which is the rare path. A repository this
+    process can read costs one full traversal of `.git` on that path and
+    nothing at all on every other.
     """
     git_dir = os.path.join(canvas_dir, ".git")
     try:
         os.stat(git_dir)
     except OSError as error:
         return error
-    if not os.access(git_dir, os.R_OK | os.X_OK):
-        # `os.stat` succeeds on a directory whose own mode is 000 — the mode
-        # that refuses it is read on the way *in*, not on the way to it — so
-        # the mode has to be asked about separately.
-        return PermissionError(
-            errno.EACCES, os.strerror(errno.EACCES), git_dir
-        )
+    # `os.stat` succeeds on a directory whose own mode is 000 — the mode that
+    # refuses it is read on the way *in*, not on the way to it — so each
+    # directory's own readability has to be asked about separately.
+    refused = []
+    for path in (git_dir,):
+        if not os.access(path, os.R_OK | os.X_OK):
+            return PermissionError(errno.EACCES, os.strerror(errno.EACCES), path)
+    for directory, subdirectories, files in os.walk(
+        git_dir, onerror=refused.append
+    ):
+        if refused:
+            return refused[0]
+        for name in subdirectories:
+            path = os.path.join(directory, name)
+            if not os.access(path, os.R_OK | os.X_OK):
+                return PermissionError(
+                    errno.EACCES, os.strerror(errno.EACCES), path
+                )
+        for name in files:
+            path = os.path.join(directory, name)
+            if not os.access(path, os.R_OK):
+                return PermissionError(
+                    errno.EACCES, os.strerror(errno.EACCES), path
+                )
+    if refused:
+        return refused[0]
     return None
 
 
