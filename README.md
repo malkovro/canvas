@@ -120,12 +120,15 @@ It is one repository and not one per canvas because ids are unique across the
 whole of it, and the documented history command
 `git log --grep='Canvas-Node: b7'` is written with no path filter.
 
-    bin/canvas create <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
-    bin/canvas read <ledger_id>
+    bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
+    bin/canvas read    <ledger_id>
+    bin/canvas replace <ledger_id> <node-id> --why TEXT [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
+    bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
+    bin/canvas remove  <ledger_id> <node-id> --why TEXT [--author TEXT]
+    bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--author TEXT]
 
-`replace`, `insert`, `remove` and `move` are not here yet, and neither is
-`--why`. The read hands out the current sha; it does not enforce `--base` and
-does not accept one.
+The read hands out the current sha; nothing enforces `--base` and no verb
+accepts one.
 
 ### Creating a canvas
 
@@ -196,6 +199,108 @@ document.** The document alone, byte for byte what is on disk, is
 A read is a read. It writes nothing, commits nothing, and does not initialise a
 repository.
 
+### The four verbs
+
+Four editing verbs, and no more:
+
+    $ bin/canvas replace my-task b7pk --type text \
+                 --text "Chose A." \
+                 --why "chose A over B: B needs a migration we are not paying for"
+    Canvas-Node: b7pk
+    Canvas-Base: 9c1e0a7…
+
+Each is **one commit**, whose subject is `<verb> <node-id>: <why>` and whose
+trailers are `Canvas-Node:`, `Canvas-Author:` and `Canvas-Base:` — the same
+three `create`'s own `insert` commits already write. The reason is recorded in
+the commit and nowhere else: there is no `Canvas-Why:` trailer and no attribute
+on the node, because a node's reasons are its history.
+
+**There is no `resolve`, no `collapse` and no `supersede`.** An options
+`<table>` becoming a settled decision is `replace` on the table node with
+`--type text`. The semantics live in the reason, where they can be anything,
+and not in a verb name, where they can only be what somebody thought of in
+advance.
+
+**Addressing is by explicit node id.** No selector, no path, no "the first
+heading". That is the property that makes IWE's `--expect` match-count guard
+unnecessary here — a selector can match two nodes, an id cannot — and it is the
+argument against ever adding one.
+
+| verb | what it does | id | `v` |
+|---|---|---|---|
+| `insert` | adds one node at a named position | mints a fresh one, never reminting a retired id | born at `1` |
+| `replace` | new content, possibly of a different node type | unchanged, including across the type change | bumps |
+| `move` | position only: content, type and children untouched | unchanged | bumps |
+| `remove` | takes the node out | retired, never reminted | none left to bump |
+
+A node's `v` is written from the log rather than incremented in the file:
+`node-identity.md` §4 defines `v` as the number of commits whose `Canvas-Node:`
+trailer names the node, so the store counts them and adds the commit it is
+about to make. The number in the file cannot drift away from its own
+definition.
+
+Each verb names the canvas as well as the node. Ids are unique across the
+repository, so an id does identify a node on its own — but `state/canvas` holds
+one file per ledger row, `--into root` names a root that every one of them has,
+and finding the file by scanning them all would need a match-count guard for
+the case where two answered. Naming the canvas is the cheaper half of that
+trade, and it is what `create` and `read` already do.
+
+#### `--why`, and what it costs to omit
+
+`--why` is required by all four, **with no default and no fallback**. An absent
+one is refused by the argument parser; an empty or whitespace-only one is
+refused by the store. Both exit `2` — an unexplained edit is a malformed
+invocation, not a request that is wrong against the store — and both write
+nothing, commit nothing and mint nothing.
+
+The rule lives in `canvas/store.py` and not in the command line above it.
+`write_and_commit` is the only function that puts a canvas on its real path, it
+takes the reason as a positional argument and it calls `require_reason` before
+it opens a file. **There is no code path that writes to a canvas without a
+reason** — including from Python, including for `create`, whose three commits
+carry their reasons the same way.
+
+#### How new content is supplied
+
+Neither spec said, so this is settled here: a node type by name, and the two
+attributes the closed vocabulary has that are not identity.
+
+| flag | what it sets |
+|---|---|
+| `--type NAME` | the element name. Defaults to `text` on `insert`, and on `replace` to the type the node already has |
+| `--text TEXT` | the node's character data |
+| `--title TEXT` | the `title` a `<section>` requires |
+| `--href URL` | the `href` a `<link>` requires |
+
+Named flags rather than a general `--attr name=value`, because a general one
+could set `id` and `v` — and `insert` mints ids, so a caller cannot supply one.
+Which element names exist and which attributes each requires stays
+`schema/canvas.rng`'s business: `--type decision` builds a `<decision>` node
+and the validator refuses to let it reach the canvas's path.
+
+#### One edit is still one node
+
+`node-identity.md` §5 decided these in writing before any verb existed, so they
+ship with the verbs rather than after them:
+
+- **`remove` on a node that still has children is refused**, naming the node
+  and every child id. A cascading delete either names N nodes in one trailer or
+  lets N−1 vanish in a commit no grep on them will ever return.
+- **`replace` that would change the type of a node that has children is
+  refused**, because the new type has nowhere to put them. Move them out first;
+  they keep their ids throughout, which is the entire benefit.
+- **`replace` that would give a node with children character data is refused**,
+  because a node holds children or text and never both, so the text would be
+  dropped silently.
+- **`move` of a node into itself is refused.** The subtree would leave the
+  document and the commit would name one node while N disappeared.
+
+A `replace` payload cannot express children at all, so "one commit rewriting N
+children" is inexpressible here rather than merely refused. Replacing a
+`<section>` that has children renames it: the children keep their ids, their
+`v`, their content and their order.
+
 ### Naming a position
 
 `node-identity.md` §6 settles how a position is named, including the first
@@ -211,7 +316,7 @@ that the verbs inherit an answer instead of improvising one.
 |---|---|
 | `0` | it worked |
 | `1` | the request is wrong against the store as it stands — the canvas already exists, there is no canvas for that ledger id, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument, a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or not a directory, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`**), a ledger id that is not a filename, `git` or `xmllint` missing, or the validator unable to run. Do not touch the canvas |
 
 This is `bin/canvas-validate`'s `1` / `2` split with its purpose preserved, and
 it differs from it in one deliberate place. `canvas-validate` maps a missing
@@ -228,7 +333,11 @@ with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
 
 ### What the store deliberately does not do
 
-- **It does not enforce `--base`.** The read hands out the sha and stops there.
+- **It does not enforce `--base`.** The read hands out the sha and stops
+  there, and no verb accepts one. The `Canvas-Base:` trailer an edit writes is
+  the truthful record of the head it was applied to, compared against nothing.
+- **It does not report a node's history.** `git log --grep='Canvas-Node: b7'`
+  is the documented command and there is no verb wrapping it.
 - **It does not batch.** Nothing in it can touch two nodes in one commit.
 - **It does not wire the ledger's `open` transition.** `create` is driven by hand.
 - **It does not shell out to `xmllint` and does not restate the vocabulary.**
