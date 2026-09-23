@@ -115,10 +115,13 @@ class CreateFromACleanWorkspace(StoreTestCase):
         code, stdout, stderr = self.create()
         self.assertEqual(0, code)
         self.assertEqual("", stderr)
-        lines = stdout.decode("utf-8").splitlines()
-        self.assertTrue(lines[0].startswith("Canvas-Base: "), lines)
-        self.assertTrue(SHA.match(lines[0].split(": ", 1)[1]), lines[0])
-        self.assertEqual("Canvas-File: %s" % self.canvas_file(), lines[1])
+        # By name and not by position: `create` now prints the ids it minted
+        # above these two, and what a caller parses is the name.
+        printed = dict(
+            line.split(": ", 1) for line in stdout.decode("utf-8").splitlines()
+        )
+        self.assertTrue(SHA.match(printed["Canvas-Base"]), printed)
+        self.assertEqual(self.canvas_file(), printed["Canvas-File"])
 
     def test_the_file_lands_beside_the_ledger_at_the_documented_path(self):
         self.create()
@@ -826,6 +829,93 @@ class TheFourVerbsApplyToARealCanvas(VerbTestCase):
             self.assertEqual(
                 "Canvas-Base: %s" % self.git("rev-parse", "HEAD").strip(), lines[1]
             )
+
+
+class CreatePrintsTheIdsItMinted(StoreTestCase):
+    """The done condition's fourth clause: `create` prints the ids it minted,
+    so a caller's first command after it is no longer a `read`."""
+
+    def minted(self, stdout):
+        return dict(
+            line.split(": ", 1) for line in stdout.decode("utf-8").splitlines()
+        )
+
+    def test_it_prints_one_id_for_each_of_its_two_arguments(self):
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        self.assertTrue(NODE_ID.match(printed["Canvas-Problem"]), printed)
+        self.assertTrue(NODE_ID.match(printed["Canvas-Expected-Value"]), printed)
+        self.assertNotEqual(
+            printed["Canvas-Problem"], printed["Canvas-Expected-Value"]
+        )
+
+    def test_the_ids_it_prints_are_the_nodes_it_made(self):
+        _, stdout, _ = self.create(problem="The problem.", value="The value.")
+        printed = self.minted(stdout)
+        root = ElementTree.parse(self.canvas_file()).getroot()
+        found = {node.get("id"): node.text for node in root}
+        self.assertEqual("The problem.", found[printed["Canvas-Problem"]])
+        self.assertEqual("The value.", found[printed["Canvas-Expected-Value"]])
+
+    def test_each_id_is_the_one_its_own_insert_commit_names(self):
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        for name, subject in (
+            ("Canvas-Problem", "the problem the ledger row states"),
+            ("Canvas-Expected-Value", "the expected value the ledger row states"),
+        ):
+            commits = self.git(
+                "log", "--grep=Canvas-Node: %s" % printed[name], "--format=%s"
+            ).splitlines()
+            self.assertEqual(
+                ["insert %s: %s" % (printed[name], subject)], commits
+            )
+
+    def test_the_caller_never_has_to_count_to_tell_them_apart(self):
+        # The finding is not only that the ids were unprinted; it is that order
+        # was the only thing telling them apart.
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        self.assertIn("Canvas-Problem", printed)
+        self.assertIn("Canvas-Expected-Value", printed)
+        self.assertEqual([], [
+            line for line in stdout.decode("utf-8").splitlines()
+            if line.startswith("Canvas-Node: ")
+        ])
+
+    def test_the_two_lines_it_already_printed_are_unchanged(self):
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        self.assertTrue(SHA.match(printed["Canvas-Base"]), printed)
+        self.assertEqual(self.canvas_file(), printed["Canvas-File"])
+        lines = stdout.decode("utf-8").splitlines()
+        self.assertLess(
+            lines.index("Canvas-Base: %s" % printed["Canvas-Base"]),
+            lines.index("Canvas-File: %s" % printed["Canvas-File"]),
+        )
+
+    def test_a_first_command_after_create_is_no_longer_a_read(self):
+        # What the round trip was for: the id is usable straight away.
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        code, out, stderr = self.run_canvas(
+            "replace", "a-ledger-row", printed["Canvas-Problem"],
+            "--text", "The problem, restated.",
+            "--why",
+            "restating the problem node %s from the ledger row's own words; "
+            "unlike the expected value %s it says what is wrong rather than "
+            "what good looks like"
+            % (printed["Canvas-Problem"], printed["Canvas-Expected-Value"]),
+            "--base", printed["Canvas-Base"],
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn(
+            "Canvas-Node: %s" % printed["Canvas-Problem"], out.decode("utf-8")
+        )
+
+    def test_create_still_mints_exactly_two_ids_in_three_commits(self):
+        self.create()
+        self.assertEqual(3, len(self.subjects()))
 
 
 class ReplaceCanProduceADifferentNodeType(VerbTestCase):

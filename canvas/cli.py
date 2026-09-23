@@ -100,10 +100,33 @@ def _refuse(refused, code):
 
 
 def _create(args):
-    path, sha = store.create(
+    """What the birth of a canvas prints: the two ids it minted, then the sha.
+
+    The ids first, for the reason `_edited` already gives for `insert`: an id is
+    the thing the caller did not know, so it goes above the sha. `create` mints
+    two and used to print neither, which made every caller's first command after
+    it a `read` to find out what it had just made.
+
+    One name each, and not `Canvas-Node:` twice. Two lines differing only in
+    their position would reproduce in the terminal exactly the thing
+    `node-naming.md` rules the document does not carry — which of the two is
+    which — and the caller would be left counting. `Canvas-Problem:` and
+    `Canvas-Expected-Value:` name the two flags `create` already takes, one for
+    one. Inventing a name rather than bending `Canvas-Node:` is the move
+    `freeze` already made, and the cost is the same one `freeze` already pays: a
+    caller grepping `Canvas-Node:` across the verbs to collect minted ids does
+    not see `create`'s.
+
+    The two existing lines are unchanged and in their existing order, below.
+    """
+    path, sha, problem_id, value_id = store.create(
         args.ledger_id, args.problem, args.expected_value, args.author
     )
-    sys.stdout.write("Canvas-Base: %s\nCanvas-File: %s\n" % (sha, path))
+    sys.stdout.write(
+        "Canvas-Problem: %s\nCanvas-Expected-Value: %s\n"
+        "Canvas-Base: %s\nCanvas-File: %s\n"
+        % (problem_id, value_id, sha, path)
+    )
     return 0
 
 

@@ -169,8 +169,22 @@ and the path:
 
     $ bin/canvas create my-task --problem "The store does not exist." \
                                 --expected-value "A writer can learn what to write against."
+    Canvas-Problem: y8dk
+    Canvas-Expected-Value: itpe
     Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
     Canvas-File: /…/state/canvas/my-task.xml
+
+**The two ids first**, because an id is the thing the caller did not know —
+`insert` prints `Canvas-Node:` for the same reason. One name each, and not
+`Canvas-Node:` twice: two lines differing only in their position would leave the
+caller counting, which is the thing [`node-naming.md`](node-naming.md) rules the
+document does not carry. `Canvas-Problem:` and `Canvas-Expected-Value:` name the
+two flags `create` takes, one for one. The price, the same one `freeze` already
+pays for `Canvas-Freeze:`: a caller grepping `Canvas-Node:` across the verbs to
+collect minted ids does not see `create`'s.
+
+The two lines below them are unchanged and in their existing order, so anything
+parsing `Canvas-Base:` or `Canvas-File:` by name is unaffected.
 
 It is **three commits, not one**:
 
@@ -192,7 +206,10 @@ against. Each `insert` bases on the commit before it.
 The two first nodes are `<text>` nodes, problem first. They carry no marker
 saying which is which: the vocabulary has no semantic node and inventing one is
 the `<decision>` / `<risk>` tripwire. The distinction lives in the commit
-subject and in the order.
+subject, in the order, and in the two lines above — and
+[`node-naming.md`](node-naming.md) is the ruling that settles it, says what would
+reopen it, and names the one thing it costs: the rendered page shows two
+unlabelled paragraphs, which the renderer is free to fix and the grammar is not.
 
 `create` refuses rather than overwrites. A canvas that already exists is exit
 `1`, with the path and its current sha, and nothing is written.

@@ -1915,6 +1915,14 @@ def create(ledger_id, problem, expected_value, author=None):
     which is which: the vocabulary has no semantic node and inventing one is the
     `<decision>`/`<risk>` tripwire. The distinction lives in the commit subject
     and in the order, where a reader and a `git log --grep` can both find it.
+    `node-naming.md` is the ruling that settles it and says what would reopen
+    it, and the answer it takes turns on this function handing its two ids back:
+    the distinction is carried outside the document, so the caller has to be
+    told which id is which rather than made to go and look.
+
+    So the two minted ids are returned beside the path and the sha — they are
+    already in hand where they are minted, and discarding them was what made
+    every caller's first command after `create` a `read`.
     """
     canvas_dir = canvas_directory()
     path = canvas_path(canvas_dir, ledger_id)
@@ -1978,8 +1986,10 @@ def create(ledger_id, problem, expected_value, author=None):
         (problem, "the problem the ledger row states"),
         (expected_value, "the expected value the ledger row states"),
     )
+    minted = []
     for content, reason in first_nodes:
         node_id = mint(canvas_dir)
+        minted.append(node_id)
         document.place_into(root, document.ROOT, document.new_text(node_id, content))
         sha = _write_and_commit(
             canvas_dir,
@@ -1993,7 +2003,8 @@ def create(ledger_id, problem, expected_value, author=None):
             base=sha,
         )
 
-    return path, sha
+    problem_id, value_id = minted
+    return path, sha, problem_id, value_id
 
 
 def read(ledger_id):
