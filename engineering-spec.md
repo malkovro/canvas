@@ -437,18 +437,24 @@ them to.
 
 ## Open
 
-- **How a node's `id` survives a restructure — decided, with a remainder.**
+- **How a node's `id` survives a restructure — decided, remainder included.**
   The survey promoted this from a footnote to the hardest open item: ids have to
   be stable for history to mean anything, and a restructure is exactly when
   somebody will want to renumber; en-quire shipped without solving it and its
   history silently attaches to the wrong text the first time a heading is
   renamed. Minting, preservation under each of the four verbs, `v` bumping, and
   what happens to a container's children when the container is replaced,
-  removed or moved are now settled in [node identity](node-identity.md). What remains open is **merge and
-  split**: a restructure made of moves, renames and one-node replaces costs no
-  history under that rule, but splitting one node into two or merging two into
-  one strands the lineage of one side, and nothing yet records an ancestor id.
-  See that document's closing section for the precise remainder.
+  removed or moved are now settled in [node identity](node-identity.md), and so
+  is **merge and split**, which was that document's remainder. Its section 7
+  rules that a node's lineage is the set of commits naming its id and ends where
+  that set ends: the tool records no ancestor and no successor, and the pointer
+  across a merge or a split lives in the `--why` of the edit that made it. Its
+  section 8 rules that a restructure is never atomic and that a grouping
+  mechanism may aggregate commits that already exist but may never be the unit
+  in which a write happens. Both were decided against the real merge and split
+  in [docs/merge-and-split/](docs/merge-and-split/), whose transcript holds the
+  `bin/canvas history` output for the surviving id and the stranded one. What is
+  still open in that document is its third item, that nothing here ages.
 - **Whether a model writes a useful `--why`.** Untested by anyone, because
   nobody ships a mandatory reason field. See step 1 of *The path*.
 - Whether a step that writes to the canvas should have to, or whether an empty

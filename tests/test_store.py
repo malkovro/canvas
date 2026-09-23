@@ -2748,6 +2748,202 @@ class EveryAppliedEditCommitCarriesAllThreeTrailers(VerbTestCase):
         )
 
 
+class MergeAndSplitRecordNoLineageOfTheirOwn(VerbTestCase):
+    """`node-identity.md` section 7's premise, as an invariant rather than as
+    prose: the tool records no ancestor and no successor.
+
+    A real merge and a real split, performed with the four verbs that exist,
+    leave the pointer between the two halves in exactly one place — the text
+    of a `--why` — and section 7's ruling is built on that being true. What is
+    asserted here is the tool's half of it: no attribute, no trailer and no
+    shared commit carries lineage, the retained and surviving ids keep every
+    reason they ever had, and the stranded id still answers with its whole
+    life. If a lineage field is ever added these fail, which reopens the
+    ruling rather than letting it be quietly outgrown.
+
+    The same merge and split were run by hand against `bin/canvas` and are
+    recorded in `docs/merge-and-split/`; this is that exercise as something the
+    suite re-runs.
+    """
+
+    TRAILER_KEYS = ("Canvas-Node", "Canvas-Author", "Canvas-Base")
+
+    def edits(self, node_id):
+        """`history`'s blocks as (verb, reason), oldest first."""
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", node_id)
+        self.assertEqual(0, code, stderr)
+        pairs = []
+        for paragraph in stdout.decode("utf-8").split("\n\n")[1:]:
+            subject = paragraph.strip("\n").splitlines()[2]
+            verb, reason = subject.split(": ", 1)
+            pairs.append((verb, reason))
+        return pairs
+
+    def trailer_keys(self, body):
+        return [
+            line.split(": ", 1)[0]
+            for line in body.strip().splitlines()
+            if line.startswith("Canvas-")
+        ]
+
+    def split(self):
+        """A real split: `replace` cuts the node down to its first claim, and
+        `insert` gives the remainder its own node. Returns (retained, born)."""
+        retained = self.inserted(
+            "--into", "root",
+            "--text", "One claim. And a second claim.",
+            "--why", "the node this test splits, deliberately holding two claims",
+        )
+        code, _, stderr = self.verb(
+            "replace", retained,
+            "--text", "One claim.",
+            "--why", "cut down to the first claim; the second is going into its own node",
+        )
+        self.assertEqual(0, code, stderr)
+        born = self.inserted(
+            "--after", retained,
+            "--text", "And a second claim.",
+            "--why", "the second claim, which was the second sentence of %s "
+                     "until the replace one commit earlier" % retained,
+        )
+        return retained, born
+
+    def two_halves(self):
+        """Two adjacent nodes whose content joins into one. Returns the pair."""
+        survivor = self.inserted(
+            "--into", "root", "--text", "The first clause.",
+            "--why", "the half of the claim a merge will keep",
+        )
+        loser = self.inserted(
+            "--after", survivor, "--text", "And the second clause.",
+            "--why", "the half of the claim a merge will strand, which %s does "
+                     "not state and which a reader needs" % survivor,
+        )
+        return survivor, loser
+
+    def merge(self):
+        """A real merge: `replace` takes both clauses onto the survivor, and
+        `remove` retires the other. Returns (surviving id, stranded id)."""
+        survivor, loser = self.two_halves()
+        code, _, stderr = self.verb(
+            "replace", survivor,
+            "--text", "The first clause. And the second clause.",
+            "--why", "takes on the clause node %s holds, so the claim reads as "
+                     "the one claim it is" % loser,
+        )
+        self.assertEqual(0, code, stderr)
+        code, _, stderr = self.verb(
+            "remove", loser,
+            "--why", "the one clause this node holds now stands word for word "
+                     "inside node %s, so keeping it would assert the same thing "
+                     "twice under two ids" % survivor,
+        )
+        self.assertEqual(0, code, stderr)
+        return survivor, loser
+
+    def test_the_node_born_in_a_split_records_nothing_about_where_it_came_from(self):
+        retained, born = self.split()
+        # One edit old, because it has been edited once. The commit that cut
+        # the other half down is not in this node's history at all.
+        self.assertEqual(1, len(self.edits(born)))
+        self.assertEqual("insert", self.edits(born)[0][0])
+        self.assertEqual("1", self.node(born).get("v"))
+        self.assertEqual(1, len(self.history(born)))
+        self.assertEqual([], [sha for sha in self.history(retained)
+                              if sha in self.history(born)])
+
+    def test_the_retained_side_of_a_split_keeps_every_reason_it_ever_had(self):
+        retained, _ = self.split()
+        self.assertEqual(
+            ["insert", "replace"], [verb for verb, _ in self.edits(retained)]
+        )
+        self.assertEqual("2", self.node(retained).get("v"))
+
+    def test_the_stranded_id_of_a_merge_still_answers_with_its_whole_life(self):
+        survivor, stranded = self.merge()
+        # Gone from the document — not in a node, not in an attribute, not in
+        # any text — and still answering at exit 0 with the removal last.
+        self.assertIsNone(self.node(stranded))
+        with open(self.canvas_file(), "rb") as handle:
+            self.assertNotIn(stranded.encode("utf-8"), handle.read())
+        self.assertEqual(
+            ["insert", "remove"], [verb for verb, _ in self.edits(stranded)]
+        )
+        # The shape is a live node's: the same header and the same blocks.
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", stranded)
+        self.assertEqual(0, code, stderr)
+        self.assertTrue(
+            stdout.decode("utf-8").startswith("Canvas-Node: %s\n" % stranded)
+        )
+        # And an id that was never a node is still the other case entirely.
+        code, _, _ = self.run_canvas("history", "a-ledger-row", "root")
+        self.assertEqual(1, code)
+        # The surviving side kept its id and its history spans the merge.
+        self.assertEqual(
+            ["insert", "replace"], [verb for verb, _ in self.edits(survivor)]
+        )
+        self.assertEqual("2", self.node(survivor).get("v"))
+
+    def test_no_attribute_and_no_trailer_carries_the_pointer(self):
+        retained, born = self.split()
+        survivor, stranded = self.merge()
+        # The document says nothing about lineage: a node carries its id and
+        # the count of edits that named it, and there is nowhere else to look.
+        for node_id in (retained, born, survivor):
+            self.assertEqual(
+                ["id", "v"], sorted(self.node(node_id).attrib), node_id
+            )
+        # Neither does a commit. Every edit commit carries the same three
+        # trailers and names exactly one node, so an ancestor could only be
+        # recorded by a commit naming two — which is the write the store
+        # refuses for every caller.
+        for body in self.bodies()[1:]:
+            self.assertEqual(
+                sorted(self.TRAILER_KEYS), sorted(set(self.trailer_keys(body))), body
+            )
+            self.assertEqual(1, body.count("Canvas-Node:"), body)
+        # So the two halves of the merge share no commit: the pointer between
+        # them exists only in the prose of the reasons, which is section 7's
+        # ruling and the reason it is a convention and not a field.
+        self.assertEqual([], [sha for sha in self.history(survivor)
+                              if sha in self.history(stranded)])
+
+    def test_a_merge_stopped_half_way_leaves_a_valid_canvas_and_true_histories(self):
+        # Section 8's case: the state a run that dies mid-restructure leaves.
+        # The exercise reached it for real — the survivor's replace landed and
+        # the first remove was refused — so it is asserted here rather than
+        # assumed. Coherent, legal, and every history true about how far it got.
+        survivor, loser = self.two_halves()
+        code, _, stderr = self.verb(
+            "replace", survivor,
+            "--text", "The first clause. And the second clause.",
+            "--why", "takes on the clause node %s holds, so the claim reads as "
+                     "the one claim it is" % loser,
+        )
+        self.assertEqual(0, code, stderr)
+
+        before = self.state()
+        code, _, stderr = self.verb("remove", loser, "--why", "Merged upward; reason as above.")
+        self.assertEqual(2, code, stderr)
+        self.assertEqual(before, self.state())
+
+        self.assertEqual([], validate_file(self.canvas_file()))
+        self.assertIsNotNone(self.node(loser))
+        self.assertEqual(
+            ["insert", "replace"], [verb for verb, _ in self.edits(survivor)]
+        )
+        self.assertEqual(["insert"], [verb for verb, _ in self.edits(loser)])
+        # And the restructure finishes from here with one more command.
+        code, _, stderr = self.verb(
+            "remove", loser,
+            "--why", "the one clause this node holds now stands word for word "
+                     "inside node %s, so keeping it would assert the same thing "
+                     "twice under two ids" % survivor,
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIsNone(self.node(loser))
+
+
 class RefusalSurface(object):
     """Everything the done condition asks of one refusal, as assertions.
 

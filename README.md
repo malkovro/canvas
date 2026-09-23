@@ -364,6 +364,44 @@ something — should name its evidence in `--why`: a PR, a verdict, a file and
 line, so a reader can follow it. Nothing enforces that, and nothing is meant
 to: the check would have to leave the canvas to run.
 
+##### A merge or a split names the other node's id
+
+The third convention in this place, and the same shape as the two above: about
+what a reason must name, unenforced, and load-bearing because nothing else
+carries it. `node-identity.md` §7 rules that a node's lineage is the set of
+commits whose `Canvas-Node:` trailer names its id, and that it ends where that
+set ends — the tool records no ancestor and no successor. So when an edit moves
+one node's material into another id, **the `--why` of that edit is the only
+place the pointer exists**, and it has to be in it:
+
+- **A `remove` that retires the losing half of a merge names the id that took
+  the material over**, and says that it now stands there. The retired node's
+  history is not lost — `bin/canvas history` on a removed id still exits `0`
+  and prints its whole life, with the removing commit last — but nothing in the
+  document leads a reader to that id, so this sentence is the only route to it.
+- **A `replace` that takes material over names the id it is taking it from**,
+  while that node is still in the document to be named.
+- **An `insert` that is the second half of a split names the id it was cut out
+  of.** The split's `replace` cannot name the born node in return, because the
+  id does not exist until the `insert` runs; that is the one direction the
+  convention cannot carry, and no follow-up edit is made to repair it.
+
+This is the same rule as `VERDICT.md` §5.1's first clause reaching its hardest
+case rather than a new one. It says never to point at another reason, and to
+name the other node's id and say what differs when the justification is a
+sibling's;
+a merge's `remove` is exactly that situation, and the reason that clears the
+bar — why *this* node may go, when *"we deleted this section" is not a reason
+for deleting any particular thing that was in it* — has to say that what it
+held now stands inside the other node, which names it. The pointer is the
+evidence the reason needs, not an extra clause. `require_reason` refuses the
+version without it that a writer reaches for first: `--why "Merged upward;
+reason as above."` exits `2` with nothing written.
+
+`docs/merge-and-split/` holds the merge and the split this was decided against,
+with every invocation, both refusals and the `bin/canvas history` output for
+the surviving id and for the stranded one.
+
 #### How new content is supplied
 
 Neither spec said, so this is settled here: a node type by name, and the two

@@ -3,8 +3,10 @@
 Settled 2026-09-22. This document decides how a node's `id` is minted and what
 keeps it stable, before any verb is written. It is scoped to what step 1 of
 *The path* needs in order to be buildable — `bin/canvas`, four verbs, git-backed,
-no renderer. It does not claim to settle wholesale restructure; the part it
-leaves open is named at the end.
+no renderer. It did not claim to settle wholesale restructure: sections 7 and
+8, settled 2026-09-23, close the two parts of that remainder it first left open
+— what a merge and a split do to lineage, and whether a restructure may ever be
+atomic. What is still open is named at the end.
 
 The reason it is settled now and not later: `replace`, `insert` and `move` all
 either mint or preserve an id, so the first implementation of any of them
@@ -430,15 +432,301 @@ position, and position is exactly what `move` changes. Every index in a script
 goes stale the moment anything is inserted above it — en-quire's line-range
 failure arriving through a new door.
 
+## 7. Merge and split: lineage ends at the retired id, and the reason carries the pointer
+
+Settled 2026-09-23, against an exercise rather than against a prediction of one.
+`docs/merge-and-split/` holds every `bin/canvas` invocation of a real split and
+a real merge, with exit codes and complete output, and a findings file beside
+it. The corpus behind the friction record could not settle this: in its 76
+invocations there is no `remove`, no `move`, and `history` was never run once,
+so nothing in it said what a stranded id answers. Now something does.
+
+Of the two options the closing section named, this is the second one. **A
+node's lineage is the set of commits whose `Canvas-Node:` trailer names its id,
+and it ends where that set ends.** The tool records no ancestor and no
+successor — not in the document, not in a trailer, not anywhere. Where a merge
+or a split moves one node's material into another id, the pointer to that id
+lives in the `--why` of the edit that moved it, and naming it there is part of
+what makes the reason a reason rather than a decoration on one.
+
+### What happens to each of the four ids
+
+**The split's retained id keeps everything.** It is a `replace`, so section 2
+already decides it: the id is unchanged and every reason ever written for it is
+still reachable by asking for it. In the exercise the `replace` on `e8ec`
+(`canvas-transcript.md:148`) returned `Canvas-Node: e8ec`, and
+`history … e8ec` (`:230`) prints two entries — the original `insert` and that
+`replace` — under one header, with the node at `v="2"` in the final read
+(`:375`). Nothing detached.
+
+**The retained id's reason cannot name the id born beside it, and that is
+forced rather than chosen.** The `replace` that cuts the node down runs before
+the `insert` that mints the other half, so at the moment the reason is written
+there is no id to name. Nothing repairs it afterwards: a second `replace` whose
+only content is a cross-reference is a commit whose `--why` is about the tool,
+which is the one thing a reason may not be about. What the retained reason has
+to say instead is what the node no longer holds and that it is going into its
+own node — which is what `e8ec`'s says at `:148`, and which is enough for a
+reader to know to look at what follows it.
+
+**The split's born id starts one edit old, and that is correct rather than a
+loss.** `history … dkjk` (`:250`) prints exactly one entry, its own `insert`,
+and the node is `v="1"`. Under *What an id is* a node names a position in the
+argument, and this position did not exist before the split: there was one claim
+where there are now two, and the second one is genuinely new. What the born
+node inherits is not history but a sentence. Its `insert`'s `--why` must name
+the id it was cut out of, and in the exercise it does — *"This content was the
+second sentence of e8ec until the replace one commit earlier"*. Take that
+sentence out and the node's record holds no trace of its origin at all: the
+commit that split `e8ec` does not appear in `dkjk`'s history, because `history`
+returns the commits whose trailer names `dkjk` and that commit names `e8ec`.
+
+**The merge's surviving id keeps everything and takes on the claim.** Again a
+`replace`: `history … oskz` (`:266`) prints its `insert` and its `replace`,
+`v="2"` in the final read. Its `replace`'s `--why` must name the id whose
+material it is taking over, and at `:266` the printed reason does — *"Node dwqu
+holds that clause today and will hold nothing this node does not once this
+commit lands."* That sentence is the whole of the forward pointer; nothing else
+in that output contains the string `dwqu`.
+
+**The merge's stranded id is where the rule earns its name: the lineage ends,
+and it ends completely rather than partially.** This is the fact the ruling
+rests on and it is the one that had to be run for real.
+`bin/canvas history bc-10330566962-merge-and-split-exercise dwqu`, asked after
+the node was removed and gone from the document, **exits 0** and prints the
+node's whole life, oldest first, with the removing commit last and its complete
+reason (`:286`):
+
+```
+Canvas-Node: dwqu
+
+Canvas-Commit: f05035c60e48dcfdab36631acad1b29acc13aa29
+Canvas-Author: lfigea | by-hand
+insert: States the losing half of the same merge cost, quoting node-identity.md:446. …
+
+Canvas-Commit: ce80ed3bb301f01e1f4864edf58a7b6a60ed0aa2
+Canvas-Author: lfigea | by-hand
+remove: The one clause this node holds — that the losing id's reasons dead-end at a retired id the survivor does not point at — now stands word for word inside node oskz, …
+```
+
+There is no refusal, no warning, and no marker in that output saying the node
+is gone; the shape is identical to a live node's, and only the presence of a
+`remove:` entry says otherwise. (An id no commit ever named is a different
+case and the tool does distinguish it: `history … root` at `:358` exits **1**
+with *"no commit names it, so it was never a node of this canvas"*.)
+
+**So what a merge costs is not the history. It is the path from the document to
+the id.** The final `read` (`:375`) contains no occurrence of `dwqu` — not in
+an id, not in an attribute, not in any text — and `history` takes the id as a
+required positional. There is no command that lists retired ids and none that
+searches reasons. A reader who does not already hold the string `dwqu` reaches
+it by exactly one route: the sentence in `oskz`'s reason that names it. That
+two-hop path was walked in the exercise and it worked, and it worked because a
+person wrote the id into a reason.
+
+### Why the pointer belongs in the reason and not in a field
+
+Because the reason has to carry it anyway.
+
+Section 5 sets the bar on a `remove`: each removal is its own commit with its
+own `--why`, and *"we deleted this section" is not a reason for deleting any
+particular thing that was in it*. Apply that to the losing half of a merge and
+the phrase a writer reaches for — *merged upward* — fails on its face, because
+it describes the operation and not the node. The reason that clears the bar has
+to say why **this node** may go, and the only true answer is that what it held
+now stands somewhere else. Saying that names the somewhere else.
+
+The exercise ran both. The first attempt, `--why "Merged upward; reason as
+above."`, was refused at exit **2** by `require_reason` with nothing written,
+nothing committed and nothing minted (`:187`); the store's own message is *"if
+the reason is another node's, name that node's id and say what differs here"*.
+The accepted one (`:204`) says the clause this node holds now stands word for
+word inside `oskz`. **The lineage pointer was not an extra clause bolted on for
+lineage's sake — it was the evidence the reason needed in order to be about
+this node at all.** A rule that asks for it is asking for something the reason
+bar already asks for, in the one place a writer is already thinking about it.
+
+An `ancestor` attribute would sit beside that sentence recording less of the
+same fact, and would be believed in preference to it, because it is structured
+and the sentence is not. The field can say that `dwqu` went into `oskz`. It
+cannot say why that made `dwqu` removable, and why is the whole of what a
+reader of a canvas is there for.
+
+### What the rejected option would have cost
+
+An ancestor id is the obvious answer, so the leaner rule has to be worth more
+than it. Four costs, each of them one this document has already priced
+somewhere else.
+
+**It is `supersede` in an attribute.** Section 2 rejected exactly this, in as
+many words: if `replace` can sever a lineage, something has to be able to say
+"new node `b9` continues `b7`" — and that thing is the verb the spec
+deliberately does not have, wearing a different hat, with its own attribute to
+maintain and its own way of being wrong. Merge and split are the case section 2
+anticipated. Answering them with a field is answering them with `supersede`.
+
+**It would be the first piece of node state not derivable from the log.**
+Section 4 chose the `v` invariant over the more intuitive one on exactly this
+axis: `v` is what `git log --grep` counts, so a canvas whose file and log
+disagree is corrupt and can be found to be corrupt by a script nobody has to
+think hard about. An `ancestor` attribute is verifiable against nothing — a
+claim about history stored outside history. The transcript's appendix shows
+what history carries: the commit that retired `dwqu` has the trailers
+`Canvas-Node: dwqu`, `Canvas-Author:` and `Canvas-Base:` and nothing else
+(`:421`). Making the attribute checkable means putting the other id in a
+trailer too, and a commit that names two ids is the multi-node write section 5
+refuses.
+
+**It is single-valued against an operation that is not.** Two nodes merge
+today and the survivor merges again next month; three nodes merge at once; a
+split's halves are later rejoined. One attribute becomes a list, and a list
+attribute is a subtree wearing an attribute's clothes — addressed by no id,
+edited by no verb, and outside every rule in this document.
+
+**And it can be false at exactly the moment a run dies.** A merge is two
+commits. If the survivor's `replace` stamps `ancestor="dwqu"` and the `remove`
+then does not land, the document asserts that `oskz` descends from a node that
+is still in it, alive, at `v="1"`: a wrong lineage that looks right, which
+*What an id is* names as the failure mode to design against. That interleaving
+is not hypothetical — it is what the exercise did. The `replace` on `oskz`
+landed at `:174` and the first `remove` on `dwqu` was refused at `:187`, and
+the canvas sat in exactly that half-merged state until the second attempt
+succeeded at `:204`. Under this rule, what the canvas said in that window was
+merely true: `oskz`'s reason says `dwqu` *"holds that clause today and will
+hold nothing this node does not once this commit lands"* — a sentence about an
+intent, which a reader can check against the document in front of them, and
+which stays honest whether or not the second commit ever arrives.
+
+### What this costs, stated honestly
+
+**Nothing enforces it.** A writer who omits the other id writes a valid edit,
+the store accepts it, and no command reports the gap. That is the same honesty
+the README's *A reason that asserts a fact about the world names its evidence*
+already carries, and the same limit: the check would have to leave the canvas
+to run. When the pointer is missing the stranded id is not damaged, it is
+unfindable — its history is intact and complete and nobody has the string to
+ask for it with.
+
+That price is payable only because the bar already pushes hard in the same
+direction. `require_reason` refuses the bare back-reference outright, and
+section 5 refuses an operation-shaped reason on a `remove`. A merge reason that
+omits the surviving id has to get past both while still saying something true
+about this node, and the exercise suggests that is hard to do by accident.
+
+**One thing the exercise does not establish, and this rule does not claim.**
+That merge worked by copying the losing node's clause into the survivor first,
+so the survivor's own text was the evidence and naming it was unavoidable. A
+merge that rewrites both halves into something neither of them said has a
+harder reason to write, and the id is likelier to be left out of it. Nothing
+here makes that case easier. It makes the requirement explicit, so that the
+writer of that reason knows the other id is part of the reason and not an
+extra, and so that the decision was not made by whoever happened to write
+`replace` first.
+
+## 8. A restructure is never atomic, and a grouping mechanism may never be a write
+
+**No.** A restructure is a sequence of independent commits, each naming one
+node and each carrying its own reason, and nothing will be added that lets N of
+them land or fail together. This overrules nothing above; it is section 5's
+refusal followed to the place the closing section said it had not yet been
+followed to.
+
+The second half of the question is the one worth spending words on, because it
+has a different answer. **Could a grouping mechanism exist that is not the
+batch-write verb section 5 refuses? Yes — exactly one kind, and its boundary is
+one sentence: a grouping mechanism may name a set of commits that already
+exist; it may never be the unit in which a write happens.**
+
+### Why atomic is refused, taking the two shapes it could have
+
+Atomicity over N edits has two implementations and this tool cannot have either.
+
+**A staging area — hold N writes and apply them together — is the batch-write
+verb with a queue in front of it.** The applying write touches N nodes, and
+`canvas/store.py` compares the document it is about to write against the one on
+disk and refuses unless exactly the node named in the commit's `Canvas-Node:`
+trailer is the one that differs. That guard is in the write path, not the
+command line: it holds for every caller and every import path, so the queue
+would have to be given a way through it that nothing else has. And the question
+section 5 asks of any such write has no good answer here either — what does
+`history` print for the N−1 nodes? The join is trailer equality, so a commit
+naming N ids either appears in N histories carrying one verb and one reason,
+and that reason is about the operation rather than about any node in it, or it
+names one and lets N−1 nodes change in a commit their own history never sees.
+The exercise shows the join doing exactly the thing that makes this impossible
+to fudge: the `move` of section `sdtf` (`canvas-transcript.md:217`) changed
+where its child `ps58` sits, and `history … ps58` (`:326`) prints one entry,
+its own `insert`. One commit, one node named, one history it turns up in.
+
+**A rollback — let a failed restructure undo the commits it already made — is
+worse than it looks.** Ids are retired and never reminted, and the uniqueness
+check is a grep over the log. Remove the commits and the retired ids stop being
+retired: a later `insert` may draw one again, and `history` on it would then
+answer for two different nodes with one undivided list. That is a wrong history
+that looks right, which is the en-quire failure this document was written
+against, arriving by a door nobody was watching. **Nothing in this tool may
+remove a commit from the log.**
+
+### What the worry is actually worth
+
+The open item's own words were that a run which dies halfway leaves the canvas
+*coherent but half-reorganised*. Coherent is not luck there; it is bought, in
+three places. Every intermediate state is a legal document, because
+`schema/canvas.rng` makes every container `zeroOrMore` and never `oneOrMore`
+precisely so the empty container each sequence passes through is legal. Every
+refusal writes nothing at all — the exercise's store holds 15 commits for 25
+invocations and not one of them is the refused `remove` (`:407`). And every
+node's history is true about how far the restructure got, because every commit
+in it names one node and describes that node's own change.
+
+So atomicity would buy one thing: not being *seen* mid-restructure. It would
+buy it with the single write this tool exists to be unable to perform.
+
+**This is not a claim that a half-finished restructure is pleasant.** The
+exercise produced one and it is not. Between `:174` and `:204` the canvas
+asserted the same clause twice under two ids, and a reader meeting it in that
+window reads a duplicated claim and has to work out which id to believe. That
+is a real cost and it is the cost being accepted here. It is not, however, the
+cost atomicity is usually sold against: the document was valid, both nodes were
+live, both histories said exactly what had happened, and one more command
+finished the job. A half-finished restructure is legible and repairable by
+hand. What a batch write produces when it half-fails is N nodes changed by a
+commit none of them records, which is neither.
+
+### What may exist, and where the line is
+
+A marker over commits that already exist. N commits, each still exactly one
+node with its own `--why`, sharing something that lets a reader ask what one
+restructure did as a whole: a further trailer beside `Canvas-Node:`, a run id,
+or nothing more than the convention that the reasons name the same thing. Such
+a marker writes no document state, changes no verb, adds no flag that could
+carry a second node, and passes the identity guard untouched, because each
+commit still differs in exactly one node. It cannot destroy anything, because
+it is a name for a set and not a way of writing. It is a read-side index over
+the log, and the log is already where a node's life is kept.
+
+**The boundary, once more, because it is the whole of the ruling:** a grouping
+mechanism may aggregate commits after the fact; it may never be the unit in
+which a write happens. Anything on the read side of that line is a reporting
+feature and may be argued for on its merits, against what it costs to maintain.
+Anything on the write side is the batch-write verb whatever it is called, and
+section 5's refusal stands against it unmodified.
+
+Nothing here is being built. This section rules that something may be, within
+that boundary, and that the atomic version may not be — so that neither is
+decided by whoever first wants a restructure to go faster.
+
 ## Still open
 
-This rule is scoped to step 1 and it does not settle everything the *Open*
-section raised. What is genuinely left, stated precisely enough that a planning
-task can pick it up:
+This rule is scoped to step 1 and it did not settle everything the *Open*
+section raised. Two of the three items below have since been ruled on and are
+kept here, marked, so that a reader who was told they were open is told by the
+same place that they are not. What is genuinely left is the third:
 
 - **Merge and split have no representation, and this is the restructure
-  remainder.** The rules above mean a restructure made of moves, renames and
-  one-node replaces costs no history at all. A restructure that *merges* two
+  remainder. — Settled 2026-09-23 in section 7.** The rules above mean a
+  restructure made of moves, renames and one-node replaces costs no history at
+  all. A restructure that *merges* two
   nodes into one, or *splits* one node into two, is not expressible without
   losing some: a split is a `replace` plus an `insert`, so one half keeps the
   original id and its reasons and the other half is born with an empty history;
@@ -447,16 +735,27 @@ task can pick it up:
   Nothing above makes that wrong — the verbs behave exactly as specified — but
   nothing above makes it *recoverable* either, and merge and split are what
   people actually do when they restructure prose. **This is the part of the
-  hardest open item that remains open.** Solving it means either a way for a
-  node to record an ancestor id, or a deliberate decision that lineage ends at a
-  merge and that the `--why` on the merging edit has to carry the pointer by
-  convention. Both are real options; neither is decided here, and neither should
-  be decided by whoever happens to write `replace` first.
-- **Whether a restructure should ever be atomic.** Today it is a sequence of
-  independent commits, and a run that dies halfway leaves the canvas in a
-  coherent but half-reorganised state. Whether that wants a grouping mechanism —
-  and whether any such mechanism can exist without becoming the batch-write verb
-  this document just spent a section refusing — is not addressed.
+  hardest open item that remained open**, and the problem is left stated above
+  because the ruling is a choice between the two options it names: either a way
+  for a node to record an ancestor id, or a deliberate decision that lineage
+  ends at a merge and that the `--why` on the merging edit has to carry the
+  pointer by convention. **Section 7 takes the second one**, against the merge
+  and split performed for real in `docs/merge-and-split/` — where
+  `bin/canvas history` on the stranded id exits 0 and prints that node's whole
+  life, so what a merge costs is the path from the document to the id and not
+  the history behind it. The ancestor id is rejected there, with what it would
+  have cost. Nothing is left open in this bullet.
+- **Whether a restructure should ever be atomic. — Settled 2026-09-23 in
+  section 8, and the answer is no.** It stays a sequence of independent commits,
+  each naming one node and each carrying its own reason, and the half-reorganised
+  state a dying run leaves is accepted: every intermediate state is a legal
+  document, every refusal writes nothing, and every node's history is true about
+  how far the restructure got. The second half of the question — whether any
+  grouping mechanism can exist without becoming the batch-write verb this
+  document spent a section refusing — is answered there too, and it is yes, with
+  a boundary: such a mechanism may aggregate commits that already exist, and may
+  never be the unit in which a write happens. Nothing is left open in this
+  bullet either.
 - **Nothing here ages.** A canvas is frozen at `done` and never deleted, so the
   set of retired ids grows without bound and the uniqueness check greps a log
   that only gets longer. At canvas scale this is not a problem for a long time.
