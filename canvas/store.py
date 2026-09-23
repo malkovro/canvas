@@ -986,7 +986,83 @@ def mint(canvas_dir):
 # --------------------------------------------------------------------------
 
 
-def require_reason(why, nodes=(), about=()):
+#: The seven phrases `docs/why-verdict/VERDICT.md` §5.2 names, as they look
+#: after a reason has been lowercased and had its punctuation stripped.
+_BACK_REFERENCE_PHRASES = (
+    "as above",
+    "as before",
+    "see above",
+    "same as above",
+    "same shape",
+    "ditto",
+    "as previously",
+)
+
+#: Four-character tokens that are ordinary English words, not node ids.
+#:
+#: §5.2 says "no four-character node id matching `[a-z0-9]{4}`", and that
+#: pattern alone does not reproduce §5.2's own stated outcomes: read as a bare
+#: substring it matches inside almost every word (`column` holds `colu`) and
+#: the guard never fires at all; read as a whole token it treats `same`, `what`,
+#: `each` and `read` as ids, which exempts corpus entries 21 and 22 — and §5.2
+#: names 22 as caught and 21 as the false positive it priced. So the shipped
+#: rule is the whole-token reading minus this list, which is the narrowest
+#: change that makes the guard behave as §5.2 says it does.
+#:
+#: The list is derived, not guessed: these are every four-character token that
+#: appears in any of the first fifty corpus reasons a phrase above fires on
+#: (`docs/why-verdict/corpus-reasons.md`, entries 21–24). Grow it against new
+#: evidence, not imagination. The cost of a word being here is that a minted id
+#: that happens to spell it stops exempting a reason — four ids out of the
+#: 774,206 `mint` can produce.
+_NOT_A_NODE_ID = ("each", "read", "same", "what")
+
+_FOUR_CHARACTER_TOKEN = re.compile(r"^[a-z0-9]{4}$")
+
+
+def _points_at_another_reason(why, target):
+    """Whether the reason is a bare back-reference: `VERDICT.md` §5.2's check.
+
+    True when the reason, lowercased and stripped of punctuation, contains one
+    of `_BACK_REFERENCE_PHRASES` and contains no four-character token that
+    could be another node's id — `target`, the id this very edit is about, does
+    not count, because naming the node you are editing is not naming the node
+    you pointed at.
+
+    **What it catches**, measured on the fifty reasons in
+    `docs/why-verdict/corpus-reasons.md`: entries 23 and 24 ("column one, as
+    above." / "column two, as above.") and entry 22 ("Same shape, same
+    reading."). Three of the six reasons the verdict judged as failing.
+
+    **What it does not catch**: entries 10, 25 and 28, which do say something —
+    it is just something true of any table, or a preview of text a later commit
+    will write. No containment check reaches those; they are the prompt rule's
+    job (§5.1, quoted in `README.md`). Nor does it catch a back-reference whose
+    sentence happens to carry some other four-character English word the list
+    above does not hold: `_NOT_A_NODE_ID` is deliberately only what the corpus
+    evidenced, so this guard is a speed bump against one failing shape and not
+    a tautology detector.
+
+    **Its false positive is deliberate and was priced.** Entry 21 ends "Empty
+    for one commit, as before." and names no other node's id, so this fires on
+    it although the verdict judged it informative — one wrongly refused out of
+    the forty-one that met the bar. §5.2 accepts that trade in as many words: a
+    writer who means "as before" and has a node id to name is told to name it.
+    It is not a bug to fix later; fixing it means deleting the guard.
+    """
+    plain = re.sub(r"[^\w\s]", " ", why.lower())
+    if not any(phrase in plain for phrase in _BACK_REFERENCE_PHRASES):
+        return False
+    for token in plain.split():
+        if not _FOUR_CHARACTER_TOKEN.match(token):
+            continue
+        if token in _NOT_A_NODE_ID or token == target:
+            continue
+        return False
+    return True
+
+
+def require_reason(why, nodes=(), about=(), target=None):
     """Return the edit's reason, or refuse. Required, no default, no fallback.
 
     `nodes` and `about` are what the caller already knows about the edit that
@@ -1004,6 +1080,14 @@ def require_reason(why, nodes=(), about=()):
     nothing written, the same code `canvas/cli.py` already gives any other
     malformed argument. Both codes are non-zero; this one is the one that says
     the command was not well formed, which is what an empty `--why` is.
+
+    A second refusal, the same class and the same exit code, is
+    `_points_at_another_reason` — `VERDICT.md` §5.2's guard against a reason
+    that points at another reason instead of giving one. `target` is the id of
+    the node this edit is about, which the reason may name without that
+    counting as naming another node; an `insert` has none yet when it asks,
+    and passes `None`. Read that function's docstring for what the guard
+    catches, what it does not, and why its one false positive stays.
     """
     if why is None or not why.strip():
         raise ToolProblem(
@@ -1014,7 +1098,21 @@ def require_reason(why, nodes=(), about=()):
             nodes=nodes,
             about=["option --why"] + list(about),
         )
-    return why.strip()
+    why = why.strip()
+    if _points_at_another_reason(why, target):
+        raise ToolProblem(
+            "--why must say what this node is for, not where it sits; if the "
+            "reason is another node's, name that node's id and say what "
+            "differs here.",
+            "re-run the same command with a --why that says what this node "
+            "holds that the one you were pointing at does not — and if the "
+            "reason really is that other node's, name its four-character id "
+            "in the reason and say what differs here; nothing was written, "
+            "committed or minted",
+            nodes=nodes,
+            about=["option --why"] + list(about),
+        )
+    return why
 
 
 def history_length(canvas_dir, node_id):
@@ -1420,6 +1518,7 @@ def _write_and_commit(
         why,
         nodes=[node_id] if node_id is not None else [],
         about=["canvas %s" % path],
+        target=node_id,
     )
     _inside_the_store(canvas_dir, path)
     if node_id is None:
@@ -2134,6 +2233,9 @@ def insert(
         why,
         nodes=[each for each in (after, into) if each is not None],
         about=["ledger id %s" % ledger_id],
+        # An `insert` has no target yet: its id is minted below, after this
+        # check, so there is no id of its own for the reason to be excused by.
+        target=None,
     )
     _one_position(after, into, ledger_id)
     canvas_dir, path, root, head = _open_canvas(ledger_id)
@@ -2207,7 +2309,7 @@ def replace(
     N children" inexpressible rather than merely refused.
     """
     why = require_reason(
-        why, nodes=[node_id], about=["ledger id %s" % ledger_id]
+        why, nodes=[node_id], about=["ledger id %s" % ledger_id], target=node_id
     )
     canvas_dir, path, root, head = _open_canvas(ledger_id)
     # Before `_addressed`, so that a node *removed* since `--base` is the hard
@@ -2286,7 +2388,7 @@ def remove(ledger_id, node_id, why, author=None, base=None):
     first, each removal with its own reason.
     """
     why = require_reason(
-        why, nodes=[node_id], about=["ledger id %s" % ledger_id]
+        why, nodes=[node_id], about=["ledger id %s" % ledger_id], target=node_id
     )
     canvas_dir, path, root, head = _open_canvas(ledger_id)
     news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
@@ -2342,6 +2444,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
         why,
         nodes=[each for each in (node_id, after, into) if each is not None],
         about=["ledger id %s" % ledger_id],
+        target=node_id,
     )
     _one_position(after, into, ledger_id, moving=node_id)
     canvas_dir, path, root, head = _open_canvas(ledger_id)
