@@ -4104,6 +4104,41 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
     #: `assertRepairsRun` being satisfied by deleting the word `run`.
     CHMOD = re.compile(r"`(chmod \S+ [^`]+)`")
 
+    #: The same escape, one punctuation mark cheaper: `CHMOD` only sees a
+    #: `chmod` written inside backticks, so a next action that drops the
+    #: backticks along with the word `run` slips past it. Every command this
+    #: surface names is backticked, so a `chmod` found in the prose is that
+    #: escape and not a command written some other legitimate way.
+    BACKTICKED = re.compile(r"`[^`]*`")
+    BARE_CHMOD = re.compile(r"\bchmod\b")
+
+    #: A backticked `git …`, whatever is pinned in front of the subcommand.
+    #: The reverse direction for `git`, which `git init` is the reason for:
+    #: like `chmod`, it exists only to make something work and never to show
+    #: what state produced a refusal, so an unmarked `git init` is the rule
+    #: escaped rather than an exception to it.
+    GIT = re.compile(r"`(git\b[^`]*)`")
+
+    #: The git commands a next action may name *without* marking them, by
+    #: subcommand — `assertRepairsRun`'s declared diagnostics.
+    #:
+    #: Deliberately the short list of the ones this surface actually names,
+    #: and not a family: `git fsck`, `git cat-file` and `git show` would all
+    #: read as diagnostics to anybody classifying by what a command does, and
+    #: none of them is in here, so naming one in a next action fails until
+    #: somebody adds it. That asymmetry with the forward direction is the
+    #: point. Forward, the marker is syntactic and a repair nobody anticipated
+    #: is covered the moment it is written, because the assertion can just run
+    #: it and see. Backward there is nothing to run — "is this a diagnostic?"
+    #: is a claim about intent — so the only honest form of the check is a
+    #: list somebody decided, which a reviewer sees grow.
+    GIT_DIAGNOSTICS = ("status", "rev-parse", "log")
+
+    #: git's global options that take their value as the next word, so that
+    #: word is not the subcommand. `--git-dir=…` and `--work-tree=…` carry
+    #: theirs and need no entry.
+    GIT_OPTIONS_WITH_A_VALUE = ("-C", "-c", "--git-dir", "--work-tree")
+
     #: A command with a placeholder in it is a *form* — `bin/canvas create
     #: <ledger-id> …` — and a form is never run as printed by anybody, so it is
     #: never marked as a repair. Asserted, not assumed: a marked repair that
@@ -4120,6 +4155,23 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         re.compile(r"nothing at (\S+)"),
         re.compile(r"there is no canvas at (\S+)"),
     )
+
+    def git_subcommand(self, command):
+        """The subcommand of a backticked `git …`, past the pinning options.
+
+        `canvas/store.py` pins every invocation with `--git-dir` and
+        `--work-tree`, and `canvas/cli.py` uses `-C`, so the subcommand is
+        never the second word and cannot be read off as one.
+        """
+        words = shlex.split(command)[1:]
+        while words:
+            if not words[0].startswith("-"):
+                return words[0]
+            words = (
+                words[2:] if words[0] in self.GIT_OPTIONS_WITH_A_VALUE
+                else words[1:]
+            )
+        return None
 
     def named_paths(self, trailers):
         """The paths a refusal named, by what it called them."""
@@ -4175,7 +4227,7 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         the line does not tell you to run it, the second is a repair and the
         line does.
 
-        Three things are checked, and together they are the rule:
+        Five things are checked, and together they are the rule:
 
         - **every marked repair runs, whatever the command is.** Not a list of
           command names this assertion is allowed to execute — the marker is
@@ -4187,6 +4239,19 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         - **every `chmod` a next action names is marked.** Otherwise the rule
           is satisfied by deleting the word `run`, and the exemption comes back
           wearing a justification.
+        - **no `chmod` is named outside backticks.** The check above reads a
+          backticked `chmod`, so without this one the rule is satisfied by
+          deleting the backticks as well as the word — a cheaper escape than
+          the one that check exists to close.
+        - **every backticked `git` a next action names is either marked or
+          declared.** The same reverse direction, for the family the store's
+          refusals are built out of: `git init` is never a diagnostic, so an
+          unmarked one is the rule escaped, and every other git command a next
+          action wants to name unmarked is named in `GIT_DIAGNOSTICS` where a
+          reviewer sees it. Only backticked, because "git" is an ordinary word
+          in these sentences — `canvas/store.py` says "git has to be able to
+          create `.git` inside it" and means the program, not a command line —
+          whereas "chmod" is only ever a command.
 
         Modes are put back afterwards, so a test that sets one up to be refused
         is not quietly repaired by the assertion that checks it.
@@ -4240,6 +4305,31 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
                 "is a repair, and a repair is marked `run `%s``, so that the "
                 "caller can tell it from the diagnostics beside it and this "
                 "assertion can run it\n%s" % (msg, command, command, next_action),
+            )
+        prose = self.BACKTICKED.sub("", next_action)
+        self.assertFalse(
+            self.BARE_CHMOD.search(prose),
+            "%s: named a chmod with no backticks around it, where the check "
+            "above cannot see it. Every command this surface names is "
+            "backticked, and a chmod is a repair, so it is written "
+            "`run `chmod <mode> <path>``\n%s" % (msg, next_action),
+        )
+        for command in self.GIT.findall(next_action):
+            if command in repairs:
+                continue
+            subcommand = self.git_subcommand(command)
+            self.assertIn(
+                subcommand, self.GIT_DIAGNOSTICS,
+                "%s: named `%s` without telling the caller to run it, and "
+                "`git %s` is not one of this helper's declared diagnostics "
+                "(%s). Either running it is what makes the refused command "
+                "work — then it is a repair, the line says `run `%s``, and "
+                "this assertion runs it — or it is there to show the state "
+                "that produced the refusal, and it goes in GIT_DIAGNOSTICS "
+                "where adding it is a decision somebody made rather than a "
+                "word somebody dropped\n%s"
+                % (msg, command, subcommand, ", ".join(self.GIT_DIAGNOSTICS),
+                   command, next_action),
             )
 
     def assertActionable(self, code, stderr, msg, nodes=()):
@@ -4636,6 +4726,175 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         self.assertIn("cannot tell whether there are any commits in", stderr)
         self.assertIn("errno 13 EACCES", stderr)
         self.assertNotIn("is not a git repository", stderr)
+
+    # ------------------------------------------------------------------
+    # The four refusals `canvas/store.py` raises when git itself refuses
+    # ------------------------------------------------------------------
+    #
+    # `assertRepairsRun` only ever sees a next action some test actually
+    # produced, so a branch no test enters is a branch the rule above is not
+    # applied to. Four of them were exactly that: `_git_checked`,
+    # `_cannot_read_repository`'s `complaint` arm, `ensure_repository` and
+    # `_log` each printed "run `git …` yourself to see what it objects to",
+    # which puts the marker in front of a command offered for *looking* — and
+    # the suite was green with them in it because nothing reached them.
+    # `README.md` section *What a refusal prints* carried them as a documented
+    # exception for exactly as long as that was true.
+    #
+    # The four tests below are what stops it being true. Each builds the
+    # condition its refusal is about — git refused to stage, git refused the
+    # question, git refused to initialise, git refused to read the history —
+    # runs a real entry point against it, and puts the answer through
+    # `assertActionable`, which is how the next action reaches
+    # `assertRepairsRun` and is held to the same rule a `canvas/refusal.py`
+    # template is held to.
+    #
+    # Two of the four also close a defect the marker was hiding: `_git_checked`
+    # and `_log` named a *bare* `git rev-parse HEAD` and `git log`, with no
+    # `--git-dir`, against a module whose first invariant (`canvas/store.py`
+    # lines 17-22) is that every git invocation is pinned. Run from anywhere
+    # else those two answer about whatever repository the caller is standing
+    # in, so they do not merely fail to be repairs — they can succeed and be
+    # about the wrong repository. Each test asserts the pinning.
+
+    def test_a_stage_git_refuses_names_the_repository_that_refused_it(self):
+        """`_git_checked`: the command it names is the one that just failed.
+
+        Its non-zero exit is the condition this refusal exists for, so it is a
+        diagnostic however useful it is, and what git said about it is in the
+        message already. What the line offers instead is the state of the
+        repository — asked of *that* repository, which the bare `git rev-parse
+        HEAD` it used to mark was not.
+        """
+        objects = os.path.join(self.canvas_dir, ".git", "objects")
+        original = stat.S_IMODE(os.stat(objects).st_mode)
+        os.chmod(objects, 0o500)
+        try:
+            code, _, stderr = self.verb(
+                "replace", self.problem_id,
+                "--text", "The problem restated.", "--why", "the restatement",
+            )
+            self.assertEqual(2, code, stderr)
+            self.assertActionable(code, stderr, "git refused to stage")
+            # The condition names the command that failed and what git said.
+            self.assertIn("git add -f --", stderr)
+            next_action = self.surface(stderr)["Canvas-Next"][0]
+            self.assertNotIn("run `git", next_action)
+            self.assertIn(
+                "`git --git-dir=%s --work-tree=%s status`"
+                % (os.path.join(self.canvas_dir, ".git"), self.canvas_dir),
+                next_action,
+            )
+        finally:
+            os.chmod(objects, original)
+
+    def test_a_question_git_refuses_says_it_cannot_tell_and_names_the_question(self):
+        """`_cannot_read_repository`'s `complaint` arm: git declined to answer.
+
+        Reached only where `_illegible` found nothing unreadable — the whole of
+        `.git` can be read and git still refuses — so the repository is
+        legible and the refusal is git's own. A repository declaring a format
+        version from the future is that: every byte of it readable, and every
+        command about it fatal.
+        """
+        with open(os.path.join(self.canvas_dir, ".git", "config"), "a") as handle:
+            handle.write("[core]\n\trepositoryformatversion = 99\n")
+        code, _, stderr = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(2, code, stderr)
+        self.assertActionable(code, stderr, "git refused the question")
+        self.assertIn("git refused the question", stderr)
+        self.assertIn("Expected git repo version", stderr)
+        next_action = self.surface(stderr)["Canvas-Next"][0]
+        self.assertNotIn("run `git", next_action)
+        self.assertIn(
+            "`git --git-dir=%s rev-parse HEAD`"
+            % os.path.join(self.canvas_dir, ".git"),
+            next_action,
+        )
+
+    def test_a_repository_that_cannot_be_initialised_does_not_mark_git_init(self):
+        """`ensure_repository`: the one of the four whose command is no
+        diagnostic at all, and still not a repair.
+
+        `git init` only ever changes something, so naming it unmarked would be
+        the rule escaped rather than an exception to it — which is why
+        `GIT_DIAGNOSTICS` has no entry for it and the line does not name it.
+        Nor may it be marked: the command the marker would claim is the command
+        that just failed, and it goes on failing for as long as the condition
+        the refusal is about holds. That is measured here rather than argued,
+        because it is the whole of the case — the todo this test comes from
+        says `git init -b main` should keep the marker *if it can be made to
+        exit `0` on the conditions that refusal is about*, and it cannot.
+        """
+        elsewhere = tempfile.mkdtemp(prefix="canvas-store-test-")
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        canvas_dir = os.path.join(elsewhere, "state", "canvas")
+        os.makedirs(canvas_dir)
+        original = stat.S_IMODE(os.stat(canvas_dir).st_mode)
+        os.chmod(canvas_dir, 0o500)
+        try:
+            code, _, stderr = self.run_canvas(
+                "create", "a-ledger-row",
+                "--problem", "The problem.", "--expected-value", "The value.",
+                workspace=elsewhere,
+            )
+            self.assertEqual(2, code, stderr)
+            self.assertActionable(code, stderr, "git refused to initialise")
+            self.assertIn("cannot initialise a git repository at", stderr)
+            next_action = self.surface(stderr)["Canvas-Next"][0]
+            self.assertNotIn("git init", next_action)
+            self.assertIn("`ls -ld %s`" % canvas_dir, next_action)
+            # The measurement, under the condition the refusal is about.
+            attempt = subprocess.run(
+                ["git", "init", "-b", "main", "--", canvas_dir],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            self.assertNotEqual(
+                0, attempt.returncode,
+                "`git init -b main -- %s` exited 0 against a directory this "
+                "process may not write into, so it could be marked as the "
+                "repair after all and this refusal should say so"
+                % canvas_dir,
+            )
+        finally:
+            os.chmod(canvas_dir, original)
+        # And what the line asks for is what makes the refused command work.
+        code, _, stderr = self.run_canvas(
+            "create", "a-ledger-row",
+            "--problem", "The problem.", "--expected-value", "The value.",
+            workspace=elsewhere,
+        )
+        self.assertEqual(0, code, stderr)
+
+    def test_a_history_git_refuses_names_the_repository_that_refused_it(self):
+        """`_log`: `git log` bare was the same defect as `_git_checked`'s.
+
+        This branch is the one `head_sha` has already cleared — it is reached
+        only when the repository does have a head, so "no commits" is not the
+        answer and the log genuinely could not be read. A head whose commit
+        object this process may not open is exactly that: `rev-parse` answers
+        from the ref and `log` cannot walk it.
+        """
+        head = self.git("rev-parse", "HEAD").strip()
+        loose = os.path.join(
+            self.canvas_dir, ".git", "objects", head[:2], head[2:]
+        )
+        original = stat.S_IMODE(os.stat(loose).st_mode)
+        os.chmod(loose, 0o000)
+        try:
+            code, _, stderr = self.verb("history", self.problem_id)
+            self.assertEqual(2, code, stderr)
+            self.assertActionable(code, stderr, "git refused the history")
+            self.assertIn("cannot search the canvas history for", stderr)
+            next_action = self.surface(stderr)["Canvas-Next"][0]
+            self.assertNotIn("run `git", next_action)
+            self.assertIn(
+                "`git --git-dir=%s --work-tree=%s log`"
+                % (os.path.join(self.canvas_dir, ".git"), self.canvas_dir),
+                next_action,
+            )
+        finally:
+            os.chmod(loose, original)
 
     # ------------------------------------------------------------------
     # The errno nobody anticipated
