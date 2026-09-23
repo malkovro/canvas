@@ -1266,7 +1266,17 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   nodes in one commit, and the one function that puts a canvas on its path
   refuses a write worth more than the one node the commit names. There is no
   transaction, no multi-node payload and no whole-document verb to add one to.
-- **It does not wire the ledger's `open` transition.** `create` is driven by hand.
+- **It does not wire the ledger's `open` transition.** Nothing here knows the
+  ledger exists: no path, no import, no subprocess, no read of `state/ledger`.
+  That has not changed and is not going to. What has changed is on the other
+  side of the call — `bin/task-ledger open` in
+  [`malkovro/ledger-orchestrator`](https://github.com/malkovro/ledger-orchestrator)
+  now runs `create` itself, from the `--problem` and `--expected-value` that
+  transition already required, so a row's canvas is born with the row and
+  `create` is no longer only driven by hand. This repository gained no
+  dependency and no caller it has to keep in step with: it is a command-line
+  tool, and something started running the command. If that caller goes away,
+  nothing here notices.
 - **It does not unfreeze.** [`freeze`](#ending-a-canvas) ends a canvas and
   nothing takes that back: there is no `unfreeze`, no `thaw` and no `reopen`,
   and those are unknown verbs at exit `2`. A ledger row whose task comes back
@@ -1276,9 +1286,10 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   An `unfreeze` would make "read-only history" a claim with exceptions, and a
   reader would have to find the *last* lifecycle commit rather than any freeze.
 - **It does not wire the ledger's `done` or `abandoned` transitions either.**
-  `freeze` is driven by hand, like `create`, and nothing here reads or writes
-  `state/ledger`. Which of the two endings it was lives in the `--why` and in
-  no field: one verb, and the semantics in the reason.
+  `freeze` is driven by hand — and unlike `create` above, nothing calls it yet
+  — and nothing here reads or writes `state/ledger`. Which of the two endings it
+  was lives in the `--why` and in no field: one verb, and the semantics in the
+  reason.
 - **It does not shell out to `xmllint` and does not restate the vocabulary.**
   Every write goes through `canvas.validate.validate_file` at a temporary path
   and is renamed into place only once it validates, so an invalid canvas is
