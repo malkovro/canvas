@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="bc-1" schema="1">
+  <question id="k3xq" v="1" answered="true">Answered; the reason names what answered it.</question>
+  <question id="mqxd" v="2" answered-by="k3xq">A question pointing at the node that answered it.</question>
+</canvas>

@@ -189,6 +189,7 @@ def _replace(args):
         text=args.text,
         title=args.title,
         href=args.href,
+        answered=args.answered,
         author=args.author,
         base=args.base,
     )
@@ -205,6 +206,7 @@ def _insert(args):
         text=args.text,
         title=args.title,
         href=args.href,
+        answered=args.answered,
         author=args.author,
         base=args.base,
     )
@@ -305,10 +307,11 @@ def _add_position(parser):
 def _add_payload(parser, default_type):
     """How new content arrives, which no spec settled and this command line does.
 
-    A node type by name, and the two attributes the closed vocabulary has that
-    are not identity: `<section>`'s title and `<link>`'s href. Named flags
-    rather than a general `--attr name=value`, because a general one could set
-    `id` and `v`, and `insert` mints ids — a caller cannot supply one.
+    A node type by name, and the three attributes the closed vocabulary has
+    that are not identity: `<section>`'s title, `<link>`'s href and
+    `<question>`'s answered. Named flags rather than a general `--attr
+    name=value`, because a general one could set `id` and `v`, and `insert`
+    mints ids — a caller cannot supply one.
 
     What element names exist, and which of these each one requires, is
     `schema/canvas.rng`'s business. A `--type decision` builds a `<decision>`
@@ -331,6 +334,16 @@ def _add_payload(parser, default_type):
     parser.add_argument("--text", help="the node's character data")
     parser.add_argument("--title", help="the title attribute a <section> requires")
     parser.add_argument("--href", help="the href attribute a <link> requires")
+    # node-state.md: the one state a canvas carries. A store-true flag and not
+    # a value, because `true` is the attribute's only legal value and absence
+    # means open. It is restated and not sticky: a `replace` that omits it
+    # clears it, exactly as one that omits --title clears a title, and that is
+    # how a question is reopened without a fifth verb.
+    parser.add_argument(
+        "--answered",
+        action="store_true",
+        help="mark a <question> answered; absence means open",
+    )
 
 
 #: The verbs, as the subparsers know them. Filled in by `build_parser` so that

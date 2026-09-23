@@ -142,6 +142,108 @@ class OutOfVocabularyNodesAreRejected(unittest.TestCase):
             declared,
         )
 
+    def test_the_grammar_declares_exactly_these_attributes(self):
+        # The mirror of the element invariant, and node-state.md section 6's
+        # tripwire: the ruling adds `answered` and nothing else, so a twelfth
+        # attribute — or a second legal value for `answered` — must break a
+        # test and send somebody back to node-state.md before it lands.
+        declared = {
+            e.get("name")
+            for e in ElementTree.parse(SCHEMA).iter()
+            if strip_namespace(e.tag) == "attribute"
+        }
+        self.assertEqual(
+            {"ledger", "schema", "id", "v", "title", "href", "answered"},
+            declared,
+        )
+
+    def test_answered_has_exactly_one_legal_value(self):
+        # node-state.md: absence means open, so `true` is the only spelling
+        # there is. The value set is read out of the grammar rather than
+        # inferred from the fixtures, so widening it here breaks this.
+        tree = ElementTree.parse(SCHEMA)
+        values = []
+        for attribute in tree.iter():
+            if strip_namespace(attribute.tag) != "attribute":
+                continue
+            if attribute.get("name") != "answered":
+                continue
+            values.extend(
+                child.text for child in attribute
+                if strip_namespace(child.tag) == "value"
+            )
+        self.assertEqual(["true"], values)
+
+
+class QuestionStateIsTheOnlyStateANodeHas(unittest.TestCase):
+    """node-state.md: a canvas says exactly one thing about a node's state —
+    whether a `<question>` has been answered. The legal shape validates; the
+    three wrong new shapes fail, and each diagnostic names the node it is
+    about, not the file."""
+
+    def assert_rejected_naming(self, name, *expected):
+        problems = validate_file(fixture(name))
+        self.assertTrue(problems, "%s should not validate" % name)
+        joined = "\n".join(problems)
+        for needle in expected:
+            self.assertIn(needle, joined)
+        code, stderr = run_shim(fixture(name))
+        self.assertEqual(1, code, "an invalid document is exit 1, not an environment error")
+        for needle in expected:
+            self.assertIn(needle, stderr)
+
+    def test_an_answered_question_validates(self):
+        # The new shape. valid.xml carries an answered <question> beside an
+        # open one, so both halves of the vocabulary are exercised.
+        with open(fixture("valid.xml")) as handle:
+            source = handle.read()
+        self.assertIn('<question id="mqxd" v="2" answered="true">', source)
+        self.assertIn('<question id="k3xq" v="1">', source)  # open: no attribute
+        self.assertEqual([], validate_file(fixture("valid.xml")))
+        self.assertEqual(0, run_shim(fixture("valid.xml"))[0])
+
+    def test_answered_on_an_element_that_is_not_a_question_is_rejected(self):
+        # State belongs to <question> and to nothing else: putting it on a
+        # structural element is what makes the vocabulary a taxonomy.
+        self.assert_rejected_naming(
+            "answered-on-wrong-element.xml", "<text>", 'id="q4rt"'
+        )
+
+    def test_answered_with_any_value_but_true_is_rejected(self):
+        # Absence means open, so `false`, `yes` and `TRUE` are all second
+        # spellings of a state the document already has one spelling for.
+        # The diagnostic does not echo the rejected value, so the assertion is
+        # on the element and the id.
+        self.assert_rejected_naming(
+            "answered-bad-value.xml", "<question>", 'id="mqxd"', 'id="jc5v"',
+            'id="q4rt"',
+        )
+
+    def test_a_question_may_not_point_at_what_answered_it(self):
+        # The pointer half of the option, refused: the reason names the node
+        # that answered the question. The fixture pins the refusal, so adding
+        # `answered-by` later means deleting this test and reopening
+        # node-state.md.
+        self.assert_rejected_naming(
+            "answered-by-pointer.xml", "<question>", 'id="mqxd"'
+        )
+
+    def test_no_other_element_declares_a_state_attribute(self):
+        # The ruling in the grammar's own terms: exactly one element carries
+        # `answered`, and it is <question>.
+        carriers = []
+        for element in ElementTree.parse(SCHEMA).iter():
+            if strip_namespace(element.tag) != "element":
+                continue
+            names = {
+                attribute.get("name")
+                for attribute in element.iter()
+                if strip_namespace(attribute.tag) == "attribute"
+            }
+            if "answered" in names:
+                carriers.append(element.get("name"))
+        self.assertEqual(["question"], carriers)
+
 
 class MissingIdOrVIsRejected(unittest.TestCase):
     """The done condition: a node missing `id` or `v` fails with a non-zero

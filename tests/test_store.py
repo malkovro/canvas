@@ -899,6 +899,73 @@ class ReplaceCanProduceADifferentNodeType(VerbTestCase):
         self.assertEqual(["1", "1"], [child.get("v") for child in section])
 
 
+class MarkingAQuestionAnswered(VerbTestCase):
+    """node-state.md: the one state a canvas carries reaches the command line
+    as `--answered`, and the attribute is restated rather than sticky."""
+
+    def test_a_question_can_be_born_answered_and_the_canvas_stays_valid(self):
+        node_id = self.inserted(
+            "--into", "root", "--type", "question", "--text", "Settled?",
+            "--answered", "--why", "the question and its answer arrive together",
+        )
+        self.assertEqual("true", self.node(node_id).get("answered"))
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_a_question_inserted_without_the_flag_is_open(self):
+        # Absence means open. There is no answered="false" to write.
+        node_id = self.inserted(
+            "--into", "root", "--type", "question", "--text", "Open?",
+            "--why", "a question nobody has answered yet",
+        )
+        self.assertIsNone(self.node(node_id).get("answered"))
+        self.assertNotIn("answered", self.node(node_id).attrib)
+
+    def test_marking_a_question_answered_is_a_replace_that_bumps_v(self):
+        # It is a commit naming the node, and `v` is what the log counts
+        # (node-identity.md section 4). Not a bug; the ruling names it.
+        node_id = self.inserted(
+            "--into", "root", "--type", "question", "--text", "Answered yet?",
+            "--why", "the question this canvas turns on",
+        )
+        self.assertEqual("1", self.node(node_id).get("v"))
+        code, _, stderr = self.verb(
+            "replace", node_id, "--type", "question", "--text", "Answered yet?",
+            "--answered", "--why", "settled by the ruling in node-state.md",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("true", self.node(node_id).get("answered"))
+        self.assertEqual("2", self.node(node_id).get("v"))
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_the_attribute_is_restated_and_not_sticky(self):
+        # A replace that omits --answered clears it, exactly as one that omits
+        # --title clears a title. That is how a question is reopened, and it
+        # needs no fifth verb.
+        node_id = self.inserted(
+            "--into", "root", "--type", "question", "--text", "Settled?",
+            "--answered", "--why", "answered on arrival",
+        )
+        code, _, stderr = self.verb(
+            "replace", node_id, "--type", "question", "--text", "Settled?",
+            "--why", "reopened: the answer did not survive contact",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIsNone(self.node(node_id).get("answered"))
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_answered_on_a_node_that_is_not_a_question_never_reaches_the_canvas(self):
+        # The vocabulary is written down once: the CLI does not police this,
+        # the validator does, and the write is refused before it lands.
+        before = self.state()
+        code, _, stderr = self.verb(
+            "insert", "--into", "root", "--type", "text", "--text", "prose",
+            "--answered", "--why", "state on a node that may not carry it",
+        )
+        self.assertNotEqual(0, code)
+        self.assertIn("<text>", stderr)
+        self.assertEqual(before, self.state())
+
+
 class EveryVerbRequiresAReason(VerbTestCase):
     """The done condition's second and third clauses: every verb is refused
     with a non-zero exit when `--why` is absent or empty, and there is no code

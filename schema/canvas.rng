@@ -186,9 +186,28 @@
     </element>
   </define>
 
+  <!-- The one node that carries state. node-state.md rules that a canvas says
+       exactly one thing about a node's state — whether a <question> has been
+       answered — so that an answered question can stand in the document
+       instead of being destroyed by the `replace` that answers it.
+
+       `answered` is legal here and on no other element: <question> is the
+       declared semantic exception (engineering-spec.md:108-109), and state on
+       a structural element is what turns the vocabulary into a taxonomy.
+
+       Its value set has exactly one member, `true`. `answered="false"` is
+       invalid deliberately: absence means open, and two ways to spell one
+       state is how a document learns to contradict itself. There is no
+       `answered-by` pointer either — the reason names the node that answered
+       it, as node-identity.md section 7 already rules for merge lineage. -->
   <define name="question">
     <element name="question">
       <ref name="node-attributes"/>
+      <optional>
+        <attribute name="answered">
+          <value>true</value>
+        </attribute>
+      </optional>
       <text/>
     </element>
   </define>

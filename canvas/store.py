@@ -2210,6 +2210,7 @@ def insert(
     text=None,
     title=None,
     href=None,
+    answered=False,
     author=None,
     base=None,
 ):
@@ -2248,7 +2249,13 @@ def insert(
         node_id,
         node_type,
         text=text,
-        attributes={"title": title, "href": href},
+        attributes={
+            "title": title,
+            "href": href,
+            # node-state.md: `true` or nothing. Absence means open, so a
+            # False here writes no attribute at all.
+            "answered": "true" if answered else None,
+        },
     )
     _place(root, node, after, into, ledger_id)
 
@@ -2274,6 +2281,7 @@ def replace(
     text=None,
     title=None,
     href=None,
+    answered=False,
     author=None,
     base=None,
 ):
@@ -2351,7 +2359,13 @@ def replace(
         becomes,
         version=next_version(canvas_dir, node_id),
         text=text,
-        attributes={"title": title, "href": href},
+        attributes={
+            "title": title,
+            "href": href,
+            # node-state.md: `true` or nothing. Absence means open, so a
+            # False here writes no attribute at all.
+            "answered": "true" if answered else None,
+        },
     )
     replacement.extend(children)
     document.replace_node(root, node_id, replacement)
