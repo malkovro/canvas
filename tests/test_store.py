@@ -4767,8 +4767,29 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         HEAD` it used to mark was not.
         """
         objects = os.path.join(self.canvas_dir, ".git", "objects")
-        original = stat.S_IMODE(os.stat(objects).st_mode)
-        os.chmod(objects, 0o500)
+        # Mode 0o500 on `objects` itself stops git *creating* a two-hex
+        # subdirectory, but not writing into one the fixture's earlier commits
+        # already made — and which of the 256 a blob lands in is the first byte
+        # of its hash, which varies run to run because canvas node ids are
+        # random (`canvas/store.py`, `mint()`). Sealing only `objects` therefore
+        # left `git add` succeeding on about 9 runs in 256, with the refusal
+        # arriving one step later from `git commit` and this test failing on an
+        # assertion about `git add`. Seal every existing subdirectory too, so no
+        # loose object can be written anywhere and `git add` is the step that is
+        # always refused. All modes are restored in the `finally`.
+        sealed = [objects] + [
+            os.path.join(objects, name)
+            for name in sorted(os.listdir(objects))
+            if len(name) == 2
+            and all(character in "0123456789abcdef" for character in name)
+            and os.path.isdir(os.path.join(objects, name))
+        ]
+        original = [
+            (directory, stat.S_IMODE(os.stat(directory).st_mode))
+            for directory in sealed
+        ]
+        for directory in sealed:
+            os.chmod(directory, 0o500)
         try:
             code, _, stderr = self.verb(
                 "replace", self.problem_id,
@@ -4786,7 +4807,8 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
                 next_action,
             )
         finally:
-            os.chmod(objects, original)
+            for directory, mode in original:
+                os.chmod(directory, mode)
 
     def test_a_question_git_refuses_says_it_cannot_tell_and_names_the_question(self):
         """`_cannot_read_repository`'s `complaint` arm: git declined to answer.
