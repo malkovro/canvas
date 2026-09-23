@@ -2144,7 +2144,7 @@ def _no_such_nodes(ledger_id, path, missing):
 
 
 def read(ledger_id, node_ids=None, node_types=None, since=None,
-         with_provenance=False):
+         with_provenance=False, with_freeze=False):
     """Return (sha, the bytes to print, diagnostics, header) for one ledger row.
 
     A read. It writes nothing, commits nothing, and does not initialise a
@@ -2166,15 +2166,41 @@ def read(ledger_id, node_ids=None, node_types=None, since=None,
     what comes back is a projection of the document and not the document —
     `canvas.document.select` says what that means. `since` asks what changed
     between a sha this repository handed out and the head. `with_provenance`
-    asks who last wrote each node printed and at which commit.
+    asks who last wrote each node printed and at which commit. `with_freeze`
+    asks whether this canvas has ended and why.
+
+    `with_freeze` prints exactly one line, always, whatever the answer:
+
+        Canvas-Frozen: <40-char sha> <the freeze's reason>
+        Canvas-Frozen: none
+
+    It parses by splitting once — the first field is forty hex characters or
+    the literal word `none`, and the reason is last and free text, which it has
+    to be, because a `--why` contains spaces, colons, quotes and pipes. That is
+    why there is no author on the line: the author is free text too, and two
+    free-text fields on one line cannot be split apart again. The freeze's sha
+    is on the line, so `git show <sha>` has the author, and the refusal a writer
+    gets already prints it on `Canvas-About: author …`.
+
+    **`none` is an answer and not a failure.** It is printed rather than
+    omitted for the reason `--since` already prints `Canvas-News: 0 commit(s)…`
+    when nothing moved: the question was asked on purpose, so silence would be
+    indistinguishable from the flag having done nothing. Both cases are exit
+    `0`.
+
+    Nothing is stored for this. The line is derived at read time by `frozen()`,
+    the same function the write path already calls on every write, so there is
+    no cache, no index and no second home for the fact to go stale in.
 
     `header` is the extra header lines, in order, for the caller to print
-    between the sha and the document: one `Canvas-Wrote:` per node printed, then
-    the `Canvas-News:` block. It is composed here for the same reason
-    `_check_base`'s news is — the lines are the store's answer and the command
-    line prints them — and the boundary is the one `README.md` states: **the
-    document begins at the `<?xml` declaration line, and everything before it is
-    the header.**
+    between the sha and the document: the `Canvas-Frozen:` line, then one
+    `Canvas-Wrote:` per node printed, then the `Canvas-News:` block. The freeze
+    comes first of the three because it is a fact about the whole canvas while
+    those two are per-node and per-range. It is composed here for the same
+    reason `_check_base`'s news is — the lines are the store's answer and the
+    command line prints them — and the boundary is the one `README.md` states:
+    **the document begins at the `<?xml` declaration line, and everything
+    before it is the header.**
     """
     canvas_dir = canvas_directory()
     path = canvas_path(canvas_dir, ledger_id)
@@ -2196,6 +2222,13 @@ def read(ledger_id, node_ids=None, node_types=None, since=None,
 
     problems = _validate(path, path)
     header = []
+
+    if with_freeze:
+        ended = frozen(canvas_dir, ledger_id)
+        header.append(
+            "Canvas-Frozen: none" if ended is None
+            else "Canvas-Frozen: %s %s" % (ended.sha, ended.reason)
+        )
 
     if node_ids or node_types or with_provenance:
         printed = _tree_to_read(path, ledger_id)

@@ -141,7 +141,7 @@ path filter, so a repository per canvas would path-scope it by accident and
 hand out an id another canvas already used.
 
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
-    bin/canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
+    bin/canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
     bin/canvas render  <ledger_id>
     bin/canvas history <ledger_id> <node-id>
     bin/canvas replace <ledger_id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
@@ -373,6 +373,65 @@ identical text in both places and does not have to learn a second shape.
   instant it is printed. `--base` on the next write is what refuses.
 - **It is not a whole-canvas history verb**, and the refusal below stands —
   see [*What the store deliberately does not do*](#what-the-store-deliberately-does-not-do).
+
+#### Whether this canvas has ended: `--frozen`
+
+A canvas is ended with [`freeze`](#ending-a-canvas), and this is how a reader
+holding only `bin/canvas` asks whether one has:
+
+    $ bin/canvas read my-task --frozen
+    Canvas-Base: e5adec19caf14d602d780b13530f24cbb13cca8d
+    Canvas-Frozen: e5adec19caf14d602d780b13530f24cbb13cca8d done: the done-gate artifact is PR #21, merged 2026-09-23
+    <?xml version="1.0" encoding="UTF-8"?>
+    …
+
+And against a canvas that is still open:
+
+    $ bin/canvas read my-task --frozen
+    Canvas-Base: c6429ddfbb6b3a1360e469dda2823227c33186a7
+    Canvas-Frozen: none
+    <?xml version="1.0" encoding="UTF-8"?>
+    …
+
+One line, `Canvas-Frozen: <40-char sha> <the freeze's reason>` or
+`Canvas-Frozen: none`, directly under `Canvas-Base:` and above `Canvas-Wrote:`
+and the `Canvas-News:` block, composing with all of them and with the
+selectors. It parses by splitting once: the first field is forty hex characters
+or the literal word `none`, and the reason is last and free text, which it has
+to be — a `--why` contains spaces, colons, quotes and pipes.
+
+- **Both answers are exit `0`, and `none` is one of them.** A canvas that has
+  not ended is not an error, exactly as a `--type` that matches nothing is exit
+  `0` and an empty root. It is printed rather than omitted for the reason
+  `--since` prints `Canvas-News: 0 commit(s)…` when nothing moved: the question
+  was asked on purpose, so silence would be indistinguishable from the flag
+  having done nothing.
+- **The line does not say who froze the canvas**, and that is a real cost
+  stated rather than argued away. The author is free text too, and two
+  free-text fields on one line cannot be split apart again. The line hands out
+  the freeze's sha, so `git show <sha>` has the author, and the refusal a
+  writer gets already prints it on `Canvas-About: author …`. A reader asking
+  *did this end, and why* is answered; a reader asking *by whom* has the sha to
+  ask with.
+- **`Canvas-Frozen:` is a new name and not a second spelling of
+  `Canvas-Freeze:`.** The commit trailer `Canvas-Freeze:`'s value is a ledger
+  id — it is how the freeze commit is found. This line's value is the freeze
+  *itself*: its commit and its reason. One name for one thing, so they are two
+  names.
+- **It is derived, and stores nothing.** The line comes from the same query the
+  write path already runs on every write, run again at read time. There is no
+  cache, no index, no attribute and no second home for the fact to go stale in
+  — the commit history stays the one place a freeze lives, and nothing is added
+  to `schema/canvas.rng`.
+- **The unflagged shape is untouched.** A read with no flags prints one header
+  line and then the document, frozen canvas or not, so `bin/canvas read my-task
+  | tail -n +2` is not falsified by anybody freezing anything. That is why this
+  is a flag rather than an unconditional line: [the boundary
+  rule](#reading-a-canvas) licenses a header line for a caller who asked for
+  one, and a caller who did not ask pays nothing.
+- **It is not a whole-canvas history verb** any more than `--since` is. It
+  answers one closed question — has this ended, and why — that the tool already
+  computes internally in order to refuse writes.
 
 ### Rendering a canvas
 
@@ -896,7 +955,11 @@ what ends a canvas is not a node state. The freeze is where every reason in this
 store already is, which is what makes it literally "the reason as the last
 edit"; an attribute would need a second home for the reason, and the refusals
 below have to name the freeze's *commit*, which a document can never carry for
-the commit that wrote it. To see it:
+the commit that wrote it. To see it, ask the tool:
+
+    bin/canvas read my-task --frozen
+
+or read the commit itself:
 
     git -C $OPENCLAW_WORKSPACE/state/canvas log --grep='^Canvas-Freeze: my-task$'
 
@@ -942,12 +1005,26 @@ being wrong whatever the store's state is.
 **`read` and `history` go on working, unchanged.** That is the other half of
 "never deleted": a record nobody can read is deleted in every way that matters.
 Both keep working *identically* — same stdout, same exit code — and in
-particular `read` does not grow a `Canvas-Freeze:` line, because [its output's
-shape is documented](#reading-a-canvas) as one header line and then the
-document, so that `bin/canvas read my-task | tail -n +2` is the document byte
-for byte. The cost: a writer learns about the freeze when it writes, not when it
-reads. That is the same moment this store already tells a writer its `--base`
-went stale, and the refusal is the feature.
+particular an **unflagged** `read` does not grow a freeze line, because [its
+output's shape is documented](#reading-a-canvas) as one header line and then
+the document, so that `bin/canvas read my-task | tail -n +2` is the document
+byte for byte, whether or not somebody froze the canvas in between.
+
+**A reader who asks is answered**, and does not have to write to find out:
+[`read --frozen`](#whether-this-canvas-has-ended---frozen) prints
+`Canvas-Frozen: <sha> <the freeze's reason>`, or `Canvas-Frozen: none`, at exit
+`0` either way, writing nothing and committing nothing. The flag exists because
+a tool that will refuse your next command on the strength of a fact should tell
+you that fact when you ask it; the alternative was `git log` on the store
+directory by hand, which means every caller learning the trailer's spelling and
+the store's path inside `$OPENCLAW_WORKSPACE`. What stays true is that the
+*unasked* read is unchanged — the flag buys the answer at a price nobody pays
+who does not ask.
+
+The remaining cost, stated because it is real: a writer that does not ask still
+learns about the freeze when it writes, not when it reads. That is the same
+moment this store already tells a writer its `--base` went stale, and the
+refusal is the feature.
 
 #### When a frozen canvas's task reopens
 
