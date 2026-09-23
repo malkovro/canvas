@@ -7,6 +7,7 @@ This repository is the canonical home for both Canvas specifications:
 - [Product spec](https://malkovro.github.io/canvas/product-spec.html)
 - [Engineering spec](https://malkovro.github.io/canvas/engineering-spec.html)
 - [Node identity](https://malkovro.github.io/canvas/node-identity.html) — how an `id` is minted, what preserves it under each of the four verbs, and what bumps `v`
+- [Rendering](https://malkovro.github.io/canvas/rendering.html) — what the renderer does with a `<figure>`, and how the index of open questions and the per-node marker treat a question that has been answered
 
 ## History/source
 
@@ -111,12 +112,13 @@ own temporary directory; none of them touches a live workspace.
   document schema can see. The schema checks the *shape* of an id; `insert` checks that it is free.
 - **That `v` agrees with the commit count.** Same reason — checkable against the
   log, not against the file.
-- **`<figure>` content beyond a textual source.** The engineering spec leaves
-  open whether the renderer draws a figure from a textual source or passes
-  through inline SVG. Admitting inline SVG means admitting a foreign namespace
-  with an open element set, which is the HTML problem the closed vocabulary
-  exists to prevent, so schema v1 admits a textual source only. Settling it the
-  other way is a v2 change with its own reasoning.
+- **`<figure>` content beyond a textual source.** Admitting inline SVG means
+  admitting a foreign namespace with an open element set, which is the HTML
+  problem the closed vocabulary exists to prevent, so schema v1 admits a
+  textual source only. Settling it the other way is a v2 change with its own
+  reasoning. What the renderer does with that source is now settled too, and
+  separately: [`rendering.md`](rendering.md) §1 rules that it prints it
+  verbatim and takes no drawing step, so nothing about the grammar moves.
 
 ## The store
 
@@ -138,6 +140,7 @@ hand out an id another canvas already used.
 
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
     bin/canvas read    <ledger_id>
+    bin/canvas render  <ledger_id>
     bin/canvas history <ledger_id> <node-id>
     bin/canvas replace <ledger_id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
     bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
@@ -149,10 +152,12 @@ The read hands out the current sha and all four verbs take it back as
 `--base`: the sha the edit was decided against. [The staleness
 rule](#--base-and-the-two-branches) is what it buys.
 
-Eight subcommands, and still **four editing verbs**. The other four are two
-reads — `read` and `history` — and the two ends of a canvas's life: `create`,
-which is its birth, and [`freeze`](#ending-a-canvas), which is its end. A
-freeze edits no node, so it is not a fifth verb in the sense the four are.
+Nine subcommands, and still **four editing verbs**. The other five are three
+reads — `read`, [`render`](#rendering-a-canvas) and `history` — and the two
+ends of a canvas's life: `create`, which is its birth, and
+[`freeze`](#ending-a-canvas), which is its end. A freeze edits no node, so it
+is not a fifth verb in the sense the four are, and a projection is not one
+either: `render` writes nothing at all.
 
 ### Creating a canvas
 
@@ -222,6 +227,74 @@ document.** The document alone, byte for byte what is on disk, is
 
 A read is a read. It writes nothing, commits nothing, and does not initialise a
 repository.
+
+### Rendering a canvas
+
+    bin/canvas render <ledger_id> > canvas.html
+
+`engineering-spec.md` section *Projections* gives the canvas three of them and
+this is the first: *"HTML — the renderer's output. Shareable as a file,
+viewable in a browser, pasteable into a Basecamp comment."* All of them are
+one-way. **A projection is never edited and never read back**, so there is no
+form, no button, no route and no flag here that writes to a canvas.
+
+    $ bin/canvas render my-task | head -3
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+
+**stdout is the page, and nothing but the page.** No `Canvas-Base:` line above
+the doctype and no trailer under the closing tag: unlike `read`, whose stdout
+[is deliberately not a valid XML document](#reading-a-canvas), this output is a
+file somebody opens in a browser or pastes into a comment, and a line of plain
+text above the doctype would be a defect in the artifact. Redirecting stdout is
+how the page becomes a file, and **there is no `--output`** — a projection this
+command could write anywhere is a projection somebody eventually writes into
+`state/canvas`.
+
+**One standalone document.** No stylesheet to fetch, no script, no font and no
+image. It opens from a `file://` path and survives being pasted somewhere with
+no network.
+
+What the page carries:
+
+- **Every element in the vocabulary.** `<section>` with its title and its one
+  level of nesting as two heading levels, `<text>` as a paragraph, `<list>` /
+  `<item>`, `<table>` / `<row>` / `<cell>`, `<figure>`, `<link>`, `<question>`.
+  Every node keeps its canvas `id` as the HTML `id`, so an id found in one is
+  found in the other and the index can link to it.
+- **A marker on every `<question>`.** In words — *Open question*, *Answered
+  question* — because a colour is not a marker a reader of the HTML can point
+  at.
+- **An index of open questions at the top**, naming every `<question>` id in
+  the document and nothing else. An answered question keeps its entry and is
+  quiet; it is not dropped. [`rendering.md`](rendering.md) §2 argues that, and
+  `tests/test_render.py` holds it on a canvas with open questions and on one
+  with none.
+- **The sha it was rendered from**, in full, in the page's own header. A
+  rendered page outlives the canvas it came from — that is what pasting one
+  into a comment does — and this line is the only thing that tells it apart
+  from the canvas as it stands now.
+
+**A `<figure>` is its textual source, printed verbatim. This renderer does not
+draw.** Schema v1 admits a textual source only, so there is no inline SVG to
+pass through; and a drawing step would be a diagram toolchain this repository
+would then own — an install, a dependency and a second grammar validated by a
+binary rather than by `schema/canvas.rng`. [`rendering.md`](rendering.md) §1
+settles it, with what it costs and what would reopen it.
+
+**A render is a read**, on `read`'s terms: it writes no file, makes no commit,
+mints no id and does not initialise a repository, and it goes on working on a
+canvas that has been [frozen](#ending-a-canvas).
+
+| exit | meaning |
+|---|---|
+| `0` | the page is on stdout |
+| `1` | the request is wrong against the store as it stands — there is no canvas for that ledger id, or the stored document is invalid. **An invalid canvas is refused rather than rendered**, with the validator's diagnostics: `read` prints an invalid document because refusing to show it would make it unrepairable, and a projection is the other case — a page asserting a canvas that does not exist, carrying a sha, is exactly the artifact somebody pastes into a comment. Repair it with `bin/canvas read` and `bin/canvas replace`, then re-render |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or unusable, a ledger id that is not a filename, a missing or unrecognised argument, `git` or `xmllint` missing, the validator unable to run, or any other condition the operating system refuses the command with |
+
+Those are [the tool's two codes](#exit-codes) and its
+[one refusal shape](#what-a-refusal-prints); a new subcommand gets no third one.
 
 ### A node's history
 
