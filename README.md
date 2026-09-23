@@ -7,6 +7,8 @@ This repository is the canonical home for both Canvas specifications:
 - [Product spec](https://malkovro.github.io/canvas/product-spec.html)
 - [Engineering spec](https://malkovro.github.io/canvas/engineering-spec.html)
 - [Node identity](https://malkovro.github.io/canvas/node-identity.html) — how an `id` is minted, what preserves it under each of the four verbs, and what bumps `v`
+- [Node state](https://malkovro.github.io/canvas/node-state.html) — whether a canvas may say anything about a node's state, and how much: `answered` on `<question>`, and nothing else anywhere
+- [Node naming](https://malkovro.github.io/canvas/node-naming.html) — whether what `create` mints is distinguishable inside the document itself, and where the distinction lives instead
 - [Rendering](https://malkovro.github.io/canvas/rendering.html) — what the renderer does with a `<figure>`, and how the index of open questions and the per-node marker treat a question that has been answered
 
 ## History/source
