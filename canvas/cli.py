@@ -1,6 +1,6 @@
 """The `bin/canvas` command line: the store, the read path and the four verbs.
 
-Seven subcommands, and no more:
+Eight subcommands, and no more:
 
     canvas create  <ledger_id> --problem TEXT --expected-value TEXT
     canvas read    <ledger_id>
@@ -9,22 +9,31 @@ Seven subcommands, and no more:
     canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
     canvas remove  <ledger_id> <node-id> --why TEXT [--base SHA]
     canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
+    canvas freeze  <ledger_id> --why TEXT
 
-Four editing verbs, and three reads: `create` is the only one of the other
-three that writes. `history` reads the log the four verbs write, and `read`
-reads the document they leave behind.
+Still **four editing verbs**, and now two writes that are not one of them:
+`create`, which is the birth of a canvas, and `freeze`, which is its end. A
+freeze edits no node — it records that the canvas has ended and changes not a
+byte of it — so the four that edit are still `replace`, `insert`, `remove` and
+`move`. `history` reads the log all of them write, and `read` reads the
+document they leave behind; both go on working on a frozen canvas, and every
+write verb is refused against one at exit 1.
 
 There is no `resolve`, no `collapse` and no `supersede`:
-the semantics live in the reason, not in a verb name. There is no selector of
-any kind either — addressing is by explicit node id, which is the property that
-makes IWE's `--expect` match-count guard unnecessary, and the day a selector
-exists `--expect` has to exist beside it.
+the semantics live in the reason, not in a verb name. `abandon` is not a verb
+here either, and for exactly that argument — `abandoned` and `done` are two
+things a `--why` says and not two commands. There is no selector of any kind
+either — addressing is by explicit node id, which is the property that makes
+IWE's `--expect` match-count guard unnecessary, and the day a selector exists
+`--expect` has to exist beside it. There is no `unfreeze`, no `reopen` and no
+`thaw`: a freeze is final, and a ledger row whose task comes back gets a new
+ledger row and therefore a new canvas.
 
-`--why` is required by all four, with no default and no fallback. An absent one
-is argparse's own refusal and an empty or whitespace-only one is
-`store.require_reason`'s; both exit 2 and write nothing. The rule itself lives
-in `canvas/store.py`, not here, because it is a property of the write path and
-not of this command line.
+`--why` is required by all four, and by `freeze`, with no default and no
+fallback. An absent one is argparse's own refusal and an empty or
+whitespace-only one is `store.require_reason`'s; both exit 2 and write nothing.
+The rule itself lives in `canvas/store.py`, not here, because it is a property
+of the write path and not of this command line.
 
 The read hands out the current sha and all four verbs take it back as
 `--base`: the sha the edit was decided against. It is optional, and an omitted
@@ -235,6 +244,25 @@ def _move(args):
         base=args.base,
     )
     return _edited(args, args.node_id, sha, news)
+
+
+def _freeze(args):
+    """What ending a canvas prints: the ledger row it ended, and the new sha.
+
+    The ledger id first, under `Canvas-Freeze:` — the same name the commit's
+    trailer carries, and the same idiom the editing verbs use to name what they
+    changed. A freeze changes no node, so there is no `Canvas-Node:` line: the
+    thing it is about is the canvas.
+
+    Then the sha, under the same name a read hands it out under. There is no
+    news to print after it, because a freeze declares no `--base` and so asks
+    no staleness question.
+    """
+    sha = store.freeze(args.ledger_id, args.why, author=args.author)
+    sys.stdout.write(
+        "Canvas-Freeze: %s\nCanvas-Base: %s\n" % (args.ledger_id, sha)
+    )
+    return 0
 
 
 def _add_why(parser):
@@ -669,6 +697,24 @@ def build_parser():
     _add_base(move)
     _add_author(move)
     move.set_defaults(handler=_move)
+
+    freeze = verbs.add_parser(
+        "freeze",
+        help="end the canvas: the last edit, and the reason it ended",
+        description=(
+            "Freeze the canvas for a ledger row. One commit, naming no node "
+            "and changing no byte of the document: what it records is that "
+            "the canvas has ended and why. Every write verb is refused "
+            "against a frozen canvas at exit 1, read and history go on "
+            "working, and there is no unfreeze — a ledger row whose task "
+            "comes back gets a new ledger row and a new canvas. One verb for "
+            "both endings: done and abandoned are two things a --why says."
+        ),
+    )
+    freeze.add_argument("ledger_id", help="the ledger row whose canvas has ended")
+    _add_why(freeze)
+    _add_author(freeze)
+    freeze.set_defaults(handler=_freeze)
 
     _learn_the_command_line(parser, verbs)
     return parser

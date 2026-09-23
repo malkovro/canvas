@@ -39,14 +39,31 @@ its `Canvas-Node:` trailer names is the one that differs. A whole-document
 rewrite is not a verb that was left out of `canvas/cli.py`; it is a write this
 function will not perform, for any caller, from any import path.
 
-**The supported write surface of this module is five functions**: `create`,
-`insert`, `replace`, `remove` and `move`. Each of them takes a ledger id, a
-reason and at most one node id, and each of them produces exactly one commit
-per node it changes. There is deliberately no public function that takes a
-document: a caller that hands in a whole tree is expressing a whole-document
+**The supported write surface of this module is six functions**: `create`,
+`insert`, `replace`, `remove`, `move` and `freeze`. Each of them takes a ledger
+id, a reason and at most one node id, and each of them produces exactly one
+commit per node it changes. There is deliberately no public function that takes
+a document: a caller that hands in a whole tree is expressing a whole-document
 rewrite, and the way to make that inexpressible is not to offer the parameter.
 `_write_and_commit` is private for that reason and guarded anyway, because a
 leading underscore is a convention and the guard is a refusal.
+
+**A canvas that has ended takes no more writes.** `engineering-spec.md` section
+*Lifecycle* freezes a canvas at `done` — "after it the canvas is read-only
+history" — and `abandoned` "freezes it the same way, with the reason as the
+last edit". `freeze` is that edit, and the freeze is recorded where every
+reason in this store is already recorded: in the log, as one commit carrying
+`Canvas-Freeze: <ledger-id>`, whose subject is `freeze <ledger-id>: <why>` and
+which changes no byte of the document. Nothing is added to
+`schema/canvas.rng` — the vocabulary is closed and has one home — and `read`
+and `history` go on working on a frozen canvas exactly as they did, because
+"never deleted" is the other half of the same sentence. `_refuse_if_frozen` is
+called from `_open_canvas` and from `_write_and_commit`, the two call sites
+that between them cover the command line and any caller that merely imports
+this module, and it refuses at exit `1`: the invocation is well formed and the
+tool is healthy, and the only thing wrong with the request is the store's own
+state. There is no unfreeze: a ledger row whose task comes back gets a new
+ledger row and therefore a new canvas.
 
 **No canvas is ever written against a base the writer no longer holds.** A
 write may declare the sha it was decided against, and `_check_base` then splits
@@ -821,27 +838,34 @@ def _configured(canvas_dir, key, fallback):
 _SAFE_IN_A_PATTERN = re.compile(r"\A[A-Za-z0-9_-]+\Z")
 
 #: One record per commit: sha, subject, the Canvas-Node values, the
-#: Canvas-Author values. `%x1f` between fields and `%x1e` between records, which
-#: is what `_FIELD` and `_RECORD` split on; `%x1d` between repeated values of
-#: one trailer. All three are control characters a commit message written by
-#: this store cannot contain, so a reason with colons, newlines or pipes in it
-#: cannot be mistaken for a field boundary.
+#: Canvas-Freeze values, the Canvas-Author values. `%x1f` between fields and
+#: `%x1e` between records, which is what `_FIELD` and `_RECORD` split on;
+#: `%x1d` between repeated values of one trailer. All three are control
+#: characters a commit message written by this store cannot contain, so a
+#: reason with colons, newlines or pipes in it cannot be mistaken for a field
+#: boundary.
 _FIELD = "\x1f"
 _RECORD = "\x1e"
 _LOG_FORMAT = (
     "%H%x1f%s%x1f"
     "%(trailers:key=Canvas-Node,valueonly,separator=%x1d)%x1f"
+    "%(trailers:key=Canvas-Freeze,valueonly,separator=%x1d)%x1f"
     "%(trailers:key=Canvas-Author,valueonly,separator=%x1d)%x1e"
 )
 
 
-class _Record(collections.namedtuple("_Record", "sha subject named author")):
+class _Record(collections.namedtuple("_Record", "sha subject named froze author")):
     """One commit, as `_LOG_FORMAT` prints it.
 
     The sha, the whole commit subject, the values of its `Canvas-Node:`
-    trailers, and its author line. Every log query below decodes into this, so
-    the ones that ask different questions cannot disagree about what a commit's
-    trailers say.
+    trailers, the values of its `Canvas-Freeze:` trailers, and its author line.
+    Every log query below decodes into this, so the ones that ask different
+    questions cannot disagree about what a commit's trailers say.
+
+    `Canvas-Freeze:` is read here rather than by a query of its own for that
+    reason: the freeze is a fact about a commit exactly as the node it names
+    is, and the log is decoded in one place so that a second reader cannot
+    learn a different rule for reading a trailer.
     """
 
 
@@ -892,9 +916,15 @@ def _log(canvas_dir, arguments, complaint):
         record = record.strip("\n")
         if not record:
             continue
-        sha, subject, named, authors = record.split(_FIELD)
+        sha, subject, named, froze, authors = record.split(_FIELD)
         records.append(
-            _Record(sha, subject, named.split("\x1d"), authors.replace("\x1d", ", "))
+            _Record(
+                sha,
+                subject,
+                named.split("\x1d"),
+                froze.split("\x1d"),
+                authors.replace("\x1d", ", "),
+            )
         )
     return records
 
@@ -935,6 +965,125 @@ def _commits_in(canvas_dir, since, path):
         canvas_dir,
         ["%s..HEAD" % since, "--", path],
         "cannot list what changed in %s since %s" % (path, since),
+    )
+
+
+# --------------------------------------------------------------------------
+# Whether a canvas has ended
+# --------------------------------------------------------------------------
+#
+# `engineering-spec.md` section *Lifecycle*: a canvas is frozen at `done`, and
+# `abandoned` "freezes it the same way, with the reason as the last edit". An
+# edit in this store is a commit and a reason lives in the commit subject and
+# nowhere else, so the freeze is a commit too: one commit carrying
+# `Canvas-Freeze: <ledger-id>`, subject `freeze <ledger-id>: <why>`, changing
+# no byte of the document.
+#
+# **It is not in the document, and that is the decision and not an oversight.**
+# `node-state.md` section 1 (want 4) leaves one constraint on whatever ends a
+# canvas — it is not a node state — and the vocabulary in `schema/canvas.rng`
+# is closed and written down once. A freeze recorded in the log adds nothing to
+# the grammar, so the attribute-set invariant in `tests/test_validate.py` keeps
+# passing unedited; and the refusal below has to name the freeze's *commit*,
+# which a document can never carry for the commit that wrote it. The cost,
+# stated because it is real: a frozen canvas's XML file, read on its own with
+# no repository around it, does not say it is frozen — the same price `v`,
+# authorship and every reason in this store already pay.
+#
+# **The query is repository-wide, and it has to be.** A commit that changes no
+# file is invisible to `git log -- <path>`, so path-scoping the freeze query
+# would find nothing at all. What makes a repository-wide query precise is the
+# same thing that makes `_node_commits` precise: equality on the trailer's
+# value, with the anchored `--grep` as a pre-filter that never decides.
+
+
+class Freeze(collections.namedtuple("Freeze", "sha reason author")):
+    """The commit that ended a canvas: which commit, why, and who did it.
+
+    The reason is the commit subject's, for the same reason an `Edit`'s is:
+    that is the only place a reason is recorded. A freeze is the last edit a
+    canvas takes, so the last thing in its history is the reason it ended.
+    """
+
+
+def frozen(canvas_dir, ledger_id):
+    """The freeze that ended this canvas, or None. The whole repository, once.
+
+    Oldest first, so the freeze returned is the first one — a second `freeze`
+    is refused by this very answer, and a canvas therefore has one ending and
+    names it in one commit. There is no unfreeze anywhere in this module, so
+    "frozen" is a fact and never a mode: no later commit can take it back.
+
+    A workspace with no repository in it has no canvas and therefore no freeze,
+    which is `None` and not a refusal: the callers that need a repository have
+    each already refused without one, and this is asked on the write path where
+    `create`'s own first commit has yet to make one.
+    """
+    if not is_repository(canvas_dir):
+        return None
+    arguments = []
+    if _SAFE_IN_A_PATTERN.match(ledger_id):
+        arguments += ["--extended-regexp", "--grep=^Canvas-Freeze: %s$" % ledger_id]
+    for record in _log(
+        canvas_dir,
+        arguments,
+        "cannot search the canvas history for the freeze of %s" % ledger_id,
+    ):
+        if ledger_id in record.froze:
+            return Freeze(
+                record.sha,
+                _edit_from(record.sha, record.subject, record.author).reason,
+                record.author,
+            )
+    return None
+
+
+def _refuse_if_frozen(canvas_dir, ledger_id, path, verb, node_id=None):
+    """Refuse any write against a canvas that has ended. Exit 1.
+
+    **Exit `1` and not `2`**, from `README.md` section *Exit codes* rather than
+    by preference. `1` is "the request is wrong against the store as it
+    stands", and its listed members include a node that moved since the
+    `--base` declared for it — a store that moved under a well-formed request.
+    `2` is "the tool or its environment is wrong", and its members are
+    malformed invocations and OS conditions. A `replace` against a frozen
+    canvas is a well-formed invocation of a tool in perfect health; the only
+    thing wrong with it is the store's own state, and `1`'s stock advice —
+    re-read and re-decide — is true advice here. So this is a `Refusal` and not
+    a `ToolProblem`.
+
+    The refusal names the freeze's commit, its reason and its author, because
+    those are the three things a writer needs in order to find out what ended
+    this canvas and act on it. Its next action names a diagnostic and a form,
+    both of which `README.md` section *What a refusal prints* licenses: there
+    is no repair, because a freeze is final.
+    """
+    ended = frozen(canvas_dir, ledger_id)
+    if ended is None:
+        return
+    raise Refusal(
+        "refusing to %s%s in %s: this canvas was frozen at %s — \"%s\" — and a "
+        "frozen canvas is read-only history. Nothing was applied, nothing was "
+        "committed and nothing was minted"
+        % (
+            verb,
+            " %s" % node_id if node_id is not None else "",
+            ledger_id,
+            ended.sha,
+            ended.reason,
+        ),
+        "read it with `bin/canvas read %s`; a freeze is final, so if this "
+        "row's work has restarted, make a new canvas for the new ledger row "
+        "with `bin/canvas create <new-ledger-id> --problem \"<the problem>\" "
+        "--expected-value \"<the expected value>\"` and link back to this one"
+        % ledger_id,
+        nodes=[node_id] if node_id is not None else [],
+        about=[
+            "ledger id %s" % ledger_id,
+            "canvas %s" % path,
+            "freeze %s" % ended.sha,
+            "author %s" % ended.author,
+        ],
     )
 
 
@@ -1458,6 +1607,86 @@ def _a_canvas_is_being_born(path, root):
         )
 
 
+def _a_canvas_is_being_ended(path, root):
+    """The other write that names no node: the freeze, which changes no byte.
+
+    There are exactly two writes in this store whose commit carries no
+    `Canvas-Node:` trailer, and they are the two ends of a canvas's life. The
+    birth writes a document with no nodes in it, where there is no canvas yet;
+    the freeze writes no document at all, and only where a canvas is there.
+    Between them "one edit is one node" stays literally true — the freeze edits
+    no node, so there is none for it to name.
+
+    So this guard holds the freeze to exactly that claim. The document on disk
+    and the document in hand are compared node by node, with `_one_node_only`'s
+    own comparison and no subject exempted from it, and anything that differs
+    is a whole-document rewrite arriving under the one trailer that names
+    nothing. Nothing is then written: `_write_and_commit` skips the temporary
+    file and the rename for a freeze, so "a freeze changes no byte of the
+    document" is a property of the write path and not a promise about it.
+    """
+    if not os.path.isfile(path):
+        raise Refusal(
+            "refusing to freeze %s: there is no canvas there to end. A canvas "
+            "is created by `create`, and a freeze is the last edit it takes"
+            % path,
+            "create the canvas first, with `bin/canvas create <ledger-id> "
+            "--problem \"<the problem>\" --expected-value \"<the expected "
+            "value>\"`, or re-run naming the ledger id whose canvas you meant; "
+            "nothing was written and nothing was committed",
+            about=["canvas %s" % path],
+        )
+    try:
+        stored = document.parse(path)
+    except document.NotWellFormed as error:
+        raise Refusal(
+            "%s" % error,
+            "repair the XML at the line named above — `bin/canvas-validate %s` "
+            "reports it — and freeze it again; nothing was written" % path,
+            about=["canvas %s" % path],
+        )
+    except OSError as error:
+        raise _cannot_read(path, error)
+
+    before, before_order = _shape(stored)
+    after, after_order = _shape(root)
+    changed = sorted(
+        key for key in set(before) | set(after) if before.get(key) != after.get(key)
+    )
+    reordered = sorted(
+        key
+        for key in set(before_order) | set(after_order)
+        if before_order.get(key, ()) != after_order.get(key, ())
+    )
+    if not changed and not reordered:
+        return
+
+    also = []
+    if changed:
+        also.append("changes %d node(s) (%s)" % (len(changed), ", ".join(changed)))
+    if reordered:
+        also.append(
+            "reorders the children of %s"
+            % ", ".join(
+                "the root" if key == document.ROOT else key for key in reordered
+            )
+        )
+    raise Refusal(
+        "refusing to freeze %s in a commit that also %s: a freeze names no "
+        "node and edits none — it records that the canvas has ended and "
+        "changes not a byte of it" % (path, " and ".join(also)),
+        "make each of those its own edit with its own reason, using insert, "
+        "replace, remove or move, one node at a time, and freeze the canvas "
+        "once it says what it should",
+        nodes=[
+            key
+            for key in changed + [each for each in reordered if each not in changed]
+            if key != document.ROOT
+        ],
+        about=["canvas %s" % path],
+    )
+
+
 def _inside_the_store(canvas_dir, path):
     """A canvas is written at its own path in the canvas repository, or not at all.
 
@@ -1479,7 +1708,16 @@ def _inside_the_store(canvas_dir, path):
 
 
 def _write_and_commit(
-    canvas_dir, path, root, verb, subject_name, why, author, node_id=None, base=None
+    canvas_dir,
+    path,
+    root,
+    verb,
+    subject_name,
+    why,
+    author,
+    node_id=None,
+    base=None,
+    freeze=None,
 ):
     """Validate the document, put it at `path`, commit it. Return the new sha.
 
@@ -1507,11 +1745,28 @@ def _write_and_commit(
     `_one_node_only` holds the write to it against the document already on
     disk. A caller handing in a whole rewritten tree gets a refusal naming
     every node it would have changed, whether it came through `canvas/cli.py`
-    or through `from canvas import store`. The single write that names no node
-    is the birth of a canvas, and `_a_canvas_is_being_born` is the whole of
-    what it is allowed to be.
+    or through `from canvas import store`. There are exactly two writes that
+    name no node, and they are the two ends of a canvas's life: the birth,
+    whose whole of what it may be is `_a_canvas_is_being_born`, and the freeze,
+    whose whole of what it may be is `_a_canvas_is_being_ended`.
 
-    All three checks run before the temporary file is opened, so a refused
+    **This is also where a frozen canvas stops taking writes**, and it is here
+    for the third time on the same argument. `_open_canvas` answers the freeze
+    first, so a command line hears about it before an `insert` mints an id;
+    this call site is what binds a caller that never goes near
+    `canvas/cli.py`. `freeze` is the ledger id this commit is freezing, or None
+    for every other write — the one write allowed to happen while the freeze is
+    being recorded is the one recording it, and a second `freeze` is refused by
+    the guard above like anything else.
+
+    **A freeze writes no document at all.** There is nothing to serialise,
+    nothing to validate and nothing to rename: the bytes on the canvas's path
+    are already the ones this commit records as final. So the commit is made
+    with `--allow-empty`, which is what a commit that changes no file needs,
+    and which is why the freeze is invisible to a path-scoped `git log` and
+    found by the repository-wide query `frozen` runs.
+
+    All of these checks run before the temporary file is opened, so a refused
     write leaves nothing behind — not even a rejected temporary.
     """
     why = require_reason(
@@ -1521,43 +1776,56 @@ def _write_and_commit(
         target=node_id,
     )
     _inside_the_store(canvas_dir, path)
-    if node_id is None:
+    # `_inside_the_store` has just settled that the basename is `<id>.xml`
+    # inside the canvas repository, which is what makes this the ledger id
+    # rather than a guess at one.
+    _refuse_if_frozen(
+        canvas_dir,
+        os.path.basename(path)[: -len(".xml")],
+        path,
+        verb,
+        node_id=node_id,
+    )
+    if freeze is not None:
+        _a_canvas_is_being_ended(path, root)
+    elif node_id is None:
         _a_canvas_is_being_born(path, root)
     else:
         _one_node_only(path, root, node_id)
     subject = "%s %s: %s" % (verb, subject_name, why)
-    text = document.serialise(root)
-    temporary = "%s.tmp-%d" % (path, os.getpid())
-    try:
+    if freeze is None:
+        text = document.serialise(root)
+        temporary = "%s.tmp-%d" % (path, os.getpid())
         try:
-            with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(text)
-        except OSError as error:
-            raise _cannot_write(path, error, node_id=node_id)
-        problems = _validate(temporary, path)
-        if problems:
-            raise Refusal(
-                "refusing to write an invalid canvas to %s%s"
-                % (path, "" if node_id is None else ", naming %s" % node_id),
-                "the diagnostics above name the node and what is wrong with "
-                "it; what a canvas node may be is written in "
-                "schema/canvas.rng and nowhere else, so read that for what "
-                "this position accepts, correct the payload and re-run. "
-                "Nothing was written and nothing was committed",
-                nodes=[node_id] if node_id is not None else [],
-                about=["canvas %s" % path],
-                details=problems,
-            )
-        try:
-            os.replace(temporary, path)
-        except OSError as error:
-            raise _cannot_write(path, error, node_id=node_id)
-    finally:
-        try:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-        except OSError as error:
-            raise _cannot_write(path, error, node_id=node_id)
+            try:
+                with open(temporary, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(text)
+            except OSError as error:
+                raise _cannot_write(path, error, node_id=node_id)
+            problems = _validate(temporary, path)
+            if problems:
+                raise Refusal(
+                    "refusing to write an invalid canvas to %s%s"
+                    % (path, "" if node_id is None else ", naming %s" % node_id),
+                    "the diagnostics above name the node and what is wrong with "
+                    "it; what a canvas node may be is written in "
+                    "schema/canvas.rng and nowhere else, so read that for what "
+                    "this position accepts, correct the payload and re-run. "
+                    "Nothing was written and nothing was committed",
+                    nodes=[node_id] if node_id is not None else [],
+                    about=["canvas %s" % path],
+                    details=problems,
+                )
+            try:
+                os.replace(temporary, path)
+            except OSError as error:
+                raise _cannot_write(path, error, node_id=node_id)
+        finally:
+            try:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            except OSError as error:
+                raise _cannot_write(path, error, node_id=node_id)
 
     # -f so that a stray ignore rule somewhere above cannot make `add` a silent
     # no-op and the commit a confusing failure.
@@ -1566,6 +1834,8 @@ def _write_and_commit(
     trailers = []
     if node_id is not None:
         trailers.append("Canvas-Node: %s" % node_id)
+    if freeze is not None:
+        trailers.append("Canvas-Freeze: %s" % freeze)
     trailers.append("Canvas-Author: %s" % author)
     if base is not None:
         trailers.append("Canvas-Base: %s" % base)
@@ -1574,20 +1844,27 @@ def _write_and_commit(
     # not the user's global config and not the canvas repository's — and there
     # is nothing to drift and nothing to clean up. gpgsign is turned off because
     # a global signing setting would otherwise make the store depend on a key.
+    # A freeze changes no file, which git declines to commit unless it is told
+    # that is the point. Every other write here has staged a changed document,
+    # and git refusing an accidental no-op is worth keeping for those.
+    empty = ["--allow-empty"] if freeze is not None else []
     _git_checked(
         canvas_dir,
-        "-c",
-        "user.name=%s" % _configured(canvas_dir, "user.name", "canvas"),
-        "-c",
-        "user.email=%s" % _configured(canvas_dir, "user.email", "canvas@localhost"),
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "-q",
-        "-m",
-        subject,
-        "-m",
-        "\n".join(trailers),
+        *(
+            [
+                "-c",
+                "user.name=%s" % _configured(canvas_dir, "user.name", "canvas"),
+                "-c",
+                "user.email=%s"
+                % _configured(canvas_dir, "user.email", "canvas@localhost"),
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+            ]
+            + empty
+            + ["-m", subject, "-m", "\n".join(trailers)]
+        )
     )
     sha = head_sha(canvas_dir)
     if sha is None:
@@ -1644,6 +1921,29 @@ def create(ledger_id, problem, expected_value, author=None):
     ensure_repository(canvas_dir)
 
     if os.path.exists(path):
+        # A frozen canvas is still there and still refuses a second `create`,
+        # but the advice the ordinary refusal gives — change it one node at a
+        # time — is advice that cannot work against one. A refusal here has to
+        # be true and its next action has to be one that succeeds, so the
+        # frozen case says what really happens next instead.
+        ended = frozen(canvas_dir, ledger_id)
+        if ended is not None:
+            raise Refusal(
+                "a canvas for %s already exists at %s and was frozen at %s — "
+                "\"%s\" — so it is read-only history; this command creates, it "
+                "does not overwrite" % (ledger_id, path, ended.sha, ended.reason),
+                "read it with `bin/canvas read %s`; a freeze is final, so if "
+                "this row's work has restarted, make a new canvas for the new "
+                "ledger row with `bin/canvas create <new-ledger-id> --problem "
+                "\"<the problem>\" --expected-value \"<the expected value>\"` "
+                "and link back to this one" % ledger_id,
+                about=[
+                    "ledger id %s" % ledger_id,
+                    "canvas %s" % path,
+                    "freeze %s" % ended.sha,
+                    "author %s" % ended.author,
+                ],
+            )
         raise Refusal(
             "a canvas for %s already exists at %s (Canvas-Base: %s); "
             "this command creates, it does not overwrite"
@@ -2048,7 +2348,7 @@ def _check_base(canvas_dir, path, ledger_id, node_id, head, declared):
 # one a reader of the history needs.
 
 
-def _open_canvas(ledger_id):
+def _open_canvas(ledger_id, verb, node_id=None):
     """The canvas an edit is about to change: (dir, path, root, head sha).
 
     The head is both what the edit will be applied to — the `Canvas-Base:` its
@@ -2061,6 +2361,12 @@ def _open_canvas(ledger_id):
     `ToolProblem`: the store is wrong, the tool is fine, and the answer is to
     repair the file rather than to stop touching canvases. That is the same
     call `README.md` already makes for "no canvas for this ledger id".
+
+    **A frozen canvas is answered here**, before `_check_base` runs and before
+    `insert` mints an id, so that a write against a canvas that has ended
+    leaves nothing behind at all — not a commit, not a temporary, and not a
+    gap in the id space. `verb` and `node_id` are what the refusal says it is
+    refusing; `insert` has no id yet and names none.
     """
     canvas_dir = canvas_directory()
     path = canvas_path(canvas_dir, ledger_id)
@@ -2072,6 +2378,7 @@ def _open_canvas(ledger_id):
     head = head_sha(canvas_dir)
     if head is None:
         raise _no_commits(canvas_dir, "sha to write against")
+    _refuse_if_frozen(canvas_dir, ledger_id, path, verb, node_id=node_id)
     try:
         root = document.parse(path)
     except document.NotWellFormed as error:
@@ -2239,7 +2546,7 @@ def insert(
         target=None,
     )
     _one_position(after, into, ledger_id)
-    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id, "insert")
     news = _check_base(canvas_dir, path, ledger_id, None, head, base)
     if author is None:
         author = default_author(canvas_dir)
@@ -2319,7 +2626,7 @@ def replace(
     why = require_reason(
         why, nodes=[node_id], about=["ledger id %s" % ledger_id], target=node_id
     )
-    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id, "replace", node_id)
     # Before `_addressed`, so that a node *removed* since `--base` is the hard
     # branch with its own diff, rather than the bare "no node with id X" a
     # writer working from a stale read cannot learn anything from.
@@ -2404,7 +2711,7 @@ def remove(ledger_id, node_id, why, author=None, base=None):
     why = require_reason(
         why, nodes=[node_id], about=["ledger id %s" % ledger_id], target=node_id
     )
-    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id, "remove", node_id)
     news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
     children = list(node)
@@ -2461,7 +2768,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
         target=node_id,
     )
     _one_position(after, into, ledger_id, moving=node_id)
-    canvas_dir, path, root, head = _open_canvas(ledger_id)
+    canvas_dir, path, root, head = _open_canvas(ledger_id, "move", node_id)
     news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
     node = _addressed(root, node_id, ledger_id)
 
@@ -2514,3 +2821,66 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
         base=head,
     )
     return sha, news
+
+
+# --------------------------------------------------------------------------
+# The end of a canvas
+# --------------------------------------------------------------------------
+
+
+def freeze(ledger_id, why, author=None):
+    """End a canvas. One commit, no node, no byte of the document changed.
+
+    Returns the new head sha. The commit's subject is `freeze <ledger_id>:
+    <why>` and it carries `Canvas-Freeze: <ledger_id>`, so the last thing in
+    the canvas's history is the reason it ended — which is
+    `engineering-spec.md` section *Lifecycle*'s own sentence, "`abandoned`
+    freezes it the same way, with the reason as the last edit", made true.
+
+    **One verb, not two.** `done` and `abandoned` are two things a `--why`
+    says, not two commands. The spec says `abandoned` freezes a canvas "the
+    same way": the mechanism is identical and only the reason differs, and this
+    repository has already ruled twice that the semantics live in the reason,
+    "where they can be anything, and not in a verb name, where they can only be
+    what somebody thought of in advance". Nothing in the document or the
+    trailer records *which* ending it was, deliberately — a value set for the
+    outcome is a taxonomy, and a third outcome nobody has thought of yet would
+    want a fourth verb. The convention `README.md` states, and which nothing
+    enforces, is to begin the reason with what ended it.
+
+    **It takes no `--base`, and that is not an exception to the staleness
+    rule.** `--base` is a claim about the node a write names, and a freeze
+    names no node and carries no payload that a moved document could
+    invalidate. `README.md` already documents an omitted `--base` as the
+    absence of the question, so a freeze simply declares nothing, exactly as
+    `create` does. The commit still records `Canvas-Base: <head>` truthfully.
+
+    **There is no unfreeze.** A ledger row whose task comes back gets a new
+    ledger row and therefore a new canvas, which points at this one with a
+    `<link>` node; the frozen canvas is not edited to say it was superseded,
+    because that would be a write to a frozen canvas and the pointer belongs on
+    the document that is still alive.
+    """
+    why = require_reason(
+        why,
+        about=["ledger id %s" % ledger_id],
+        # A freeze names no node, so there is no id of its own for a reason to
+        # be excused by — the back-reference guard is very slightly stricter
+        # here than on an editing verb, and that is the right way round for the
+        # one edit a canvas never gets to correct.
+        target=None,
+    )
+    canvas_dir, path, root, head = _open_canvas(ledger_id, "freeze")
+    if author is None:
+        author = default_author(canvas_dir)
+    return _write_and_commit(
+        canvas_dir,
+        path,
+        root,
+        "freeze",
+        ledger_id,
+        why,
+        author,
+        base=head,
+        freeze=ledger_id,
+    )

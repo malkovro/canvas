@@ -143,10 +143,16 @@ hand out an id another canvas already used.
     bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
     bin/canvas remove  <ledger_id> <node-id> --why TEXT [--base SHA] [--author TEXT]
     bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--author TEXT]
+    bin/canvas freeze  <ledger_id> --why TEXT [--author TEXT]
 
 The read hands out the current sha and all four verbs take it back as
 `--base`: the sha the edit was decided against. [The staleness
 rule](#--base-and-the-two-branches) is what it buys.
+
+Eight subcommands, and still **four editing verbs**. The other four are two
+reads — `read` and `history` — and the two ends of a canvas's life: `create`,
+which is its birth, and [`freeze`](#ending-a-canvas), which is its end. A
+freeze edits no node, so it is not a fifth verb in the sense the four are.
 
 ### Creating a canvas
 
@@ -284,7 +290,9 @@ on the node, because a node's reasons are its history.
 `<table>` becoming a settled decision is `replace` on the table node with
 `--type text`. The semantics live in the reason, where they can be anything,
 and not in a verb name, where they can only be what somebody thought of in
-advance.
+advance. [`freeze`](#ending-a-canvas) is not a fifth one: it edits no node and
+changes no byte of the document, and all four of these are refused against a
+canvas it has ended.
 
 **Addressing is by explicit node id.** No selector, no path, no "the first
 heading". That is the property that makes IWE's `--expect` match-count guard
@@ -599,12 +607,156 @@ with the root named by the reserved word `root`. The flags ship with the four
 verbs; the rule and the placement code are in `canvas/document.py` already, so
 that the verbs inherit an answer instead of improvising one.
 
+### Ending a canvas
+
+`engineering-spec.md` §*Lifecycle* gives a canvas a life with an end in it: born
+at `open`, grown through `executing`, **frozen at `done`** — "that artifact is a
+projection of the canvas, and after it the canvas is read-only history" — and
+**never deleted**, because "`abandoned` freezes it the same way, with the reason
+as the last edit". `freeze` is that last edit:
+
+    $ bin/canvas freeze my-task \
+                 --why "done: the done-gate artifact is the What/Why/Evidence block on PR #21, merged 2026-09-23; nodes gjxb and qrpa carry the outcome"
+    Canvas-Freeze: my-task
+    Canvas-Base: 9c1e0a7…
+
+It takes a `--why` like every other write, on exactly the same terms — required,
+no default, no fallback, no fields, no structure and no required vocabulary, and
+refused by the same [back-reference guard](#the-rule-a---why-writer-is-given).
+An absent one is exit `2` and an empty or whitespace-only one is exit `2`, and
+neither freezes anything. `--author` becomes the `Canvas-Author:` trailer, as it
+does everywhere else. There is no `--base`: a freeze names no node and carries
+no payload a moved document could invalidate, so it declares nothing, exactly as
+`create` does — an omitted `--base` [is the absence of the
+question](#what-an-omitted---base-means-and-three-ways-one-can-be-unusable) and
+not an exception to the staleness rule. The commit still records
+`Canvas-Base: <head>` truthfully.
+
+**One verb for both endings.** `done` and `abandoned` are two things a `--why`
+says, not two commands. The spec's own sentence is that `abandoned` freezes a
+canvas *the same way* — the mechanism is identical and only the reason differs —
+and this repository has already ruled twice that there is no `resolve`, no
+`collapse` and no `supersede`, because "the semantics live in the reason, where
+they can be anything, and not in a verb name, where they can only be what
+somebody thought of in advance". So there is no `abandon`, and the third outcome
+nobody has thought of yet — superseded, merged into another row, cancelled
+before it started — needs no fourth verb either. The convention is to begin the
+reason with what ended it: `--why "done: …"`, `--why "abandoned: …"`. **Nothing
+enforces that**, deliberately: a value set for the outcome is a taxonomy, and
+`--why` gains no required vocabulary here any more than anywhere else.
+
+**Where the freeze is recorded: in the log, as one commit.** Its subject is
+`freeze <ledger_id>: <why>` and it carries `Canvas-Freeze: <ledger_id>`:
+
+    freeze my-task: done: the done-gate artifact is PR #21, merged 2026-09-23
+
+    Canvas-Freeze: my-task
+    Canvas-Author: leo | by-hand
+    Canvas-Base: e4a8641…
+
+It carries no `Canvas-Node:`, because a freeze edits no node — it is the second
+and last write in this store whose commit names none, the other being the birth
+of the canvas — and it changes **not a byte of the document**. Nothing is added
+to `schema/canvas.rng`: the vocabulary is closed, it is written down once, and
+what ends a canvas is not a node state. The freeze is where every reason in this
+store already is, which is what makes it literally "the reason as the last
+edit"; an attribute would need a second home for the reason, and the refusals
+below have to name the freeze's *commit*, which a document can never carry for
+the commit that wrote it. To see it:
+
+    git -C $OPENCLAW_WORKSPACE/state/canvas log --grep='^Canvas-Freeze: my-task$'
+
+**The query is not path-scoped, and cannot be.** A commit that changes no file
+is invisible to `git log -- <path>`, so the tool matches the trailer's value for
+equality across the whole repository — the same rule, in the same place, that
+`history` already uses for `Canvas-Node:`.
+
+The cost, stated because it is real: a frozen canvas's XML file, read on its own
+with no repository around it, does not say it is frozen. That is the price of
+not putting a twelfth attribute into a closed vocabulary, and it is the same
+price `v`, authorship and every reason in this store already pay — the document
+was never the whole of a canvas here.
+
+**Every write verb is refused against a frozen canvas, at exit `1`.**
+`replace`, `insert`, `remove`, `move`, a second `freeze`, and a `create` for the
+same ledger id: all of them, with nothing applied, nothing committed and nothing
+minted. The refusal names the freeze, its reason, its commit and its author:
+
+    canvas: refusing to replace b7pk in my-task: this canvas was frozen at
+            <40-char sha> — "<the freeze's reason>" — and a frozen canvas is
+            read-only history. Nothing was applied, nothing was committed and
+            nothing was minted
+    Canvas-Node: b7pk
+    Canvas-About: ledger id my-task
+    Canvas-About: canvas /…/state/canvas/my-task.xml
+    Canvas-About: freeze <40-char sha>
+    Canvas-About: author leo | by-hand
+    Canvas-Next: read it with `bin/canvas read my-task`; a freeze is final, …
+    Canvas-Exit: 1 — the request is wrong against the store as it stands; …
+
+`1` and not `2`, worked out from [the table above](#exit-codes) rather than
+chosen: `1` is "the request is wrong against the store as it stands", and its
+members include a node that moved since the `--base` declared for it — a store
+that moved under a well-formed request. `2` is "the tool or its environment is
+wrong", and its members are malformed invocations and OS conditions. A `replace`
+against a frozen canvas is a well-formed invocation of a tool in perfect health;
+the only thing wrong with it is the store's own state, and `1`'s stock advice —
+re-read and re-decide — is true advice for it. An absent or empty `--why` is
+still `2` even against a frozen canvas: an unexplained edit is the invocation
+being wrong whatever the store's state is.
+
+**`read` and `history` go on working, unchanged.** That is the other half of
+"never deleted": a record nobody can read is deleted in every way that matters.
+Both keep working *identically* — same stdout, same exit code — and in
+particular `read` does not grow a `Canvas-Freeze:` line, because [its output's
+shape is documented](#reading-a-canvas) as one header line and then the
+document, so that `bin/canvas read my-task | tail -n +2` is the document byte
+for byte. The cost: a writer learns about the freeze when it writes, not when it
+reads. That is the same moment this store already tells a writer its `--base`
+went stale, and the refusal is the feature.
+
+#### When a frozen canvas's task reopens
+
+**A freeze is final. There is no `unfreeze`, no `thaw` and no `reopen`** — those
+are unknown verbs at exit `2`, and no verb in this tool takes a freeze back.
+What happens instead is this, and it is the answer rather than a note that the
+question exists:
+
+The frozen canvas stays exactly where it is — readable, `history`-able, never
+deleted — as the record of the work that ended. A ledger row whose task comes
+back gets **a new ledger row, and therefore a new canvas**. Make it with
+`bin/canvas create <the-new-ledger-id> --problem "…" --expected-value "…"`,
+whose first two nodes are the reopened row's problem and expected value as the
+ledger now states them, and then point it at the frozen one with a `<link>` node
+whose `--why` names the freeze:
+
+    $ bin/canvas create my-task-reopened --problem "…" --expected-value "…"
+    $ bin/canvas insert my-task-reopened --into root \
+                 --type link --href my-task.xml \
+                 --text "The canvas this row continues." \
+                 --why "my-task was frozen at 9c1e0a7… and its work has restarted here"
+
+The old canvas is **not** edited to say it was superseded. That would be a write
+to a frozen canvas, and it is refused like any other; the pointer belongs on the
+document that is still alive, which is the one a reader is going to open.
+
+The argument for taking it this way: the spec says a frozen canvas "is read-only
+history", and the whole value of that sentence is that it is unconditional. An
+`unfreeze` would make "frozen" a question no single commit answers — a reader
+would have to find the *last* lifecycle commit rather than any freeze — and
+every refusal above would have to be re-read as "frozen for now". The honest
+cost is carried here: a reopened row does not resume its old canvas, and its
+history is two documents joined by a link rather than one. For a store whose
+canvases are per-ledger-row and whose node ids are unique across the whole
+repository, that is a cheap price, and it keeps the freeze a fact rather than a
+mode.
+
 ### Exit codes
 
 | exit | meaning |
 |---|---|
 | `0` | it worked |
-| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, or the document is invalid. Re-read and re-decide |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
 | `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
@@ -868,6 +1020,18 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   refuses a write worth more than the one node the commit names. There is no
   transaction, no multi-node payload and no whole-document verb to add one to.
 - **It does not wire the ledger's `open` transition.** `create` is driven by hand.
+- **It does not unfreeze.** [`freeze`](#ending-a-canvas) ends a canvas and
+  nothing takes that back: there is no `unfreeze`, no `thaw` and no `reopen`,
+  and those are unknown verbs at exit `2`. A ledger row whose task comes back
+  gets a new ledger row and therefore a new canvas, linked to the frozen one.
+  The frozen canvas is never deleted and never edited again — `read` and
+  `history` go on working on it, and every write verb is refused at exit `1`.
+  An `unfreeze` would make "read-only history" a claim with exceptions, and a
+  reader would have to find the *last* lifecycle commit rather than any freeze.
+- **It does not wire the ledger's `done` or `abandoned` transitions either.**
+  `freeze` is driven by hand, like `create`, and nothing here reads or writes
+  `state/ledger`. Which of the two endings it was lives in the `--why` and in
+  no field: one verb, and the semantics in the reason.
 - **It does not shell out to `xmllint` and does not restate the vocabulary.**
   Every write goes through `canvas.validate.validate_file` at a temporary path
   and is renamed into place only once it validates, so an invalid canvas is
