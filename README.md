@@ -326,6 +326,44 @@ too, and say what to type:
     Canvas-Next: re-run the same command with --why TEXT (why this edit is being made; required, with no default). There is no default and no fallback: a reason a tool invented is a sentence in the history that reads like somebody decided something. Nothing was written
     Canvas-Exit: 2 — the tool or its environment is wrong; do not touch the canvas
 
+##### The rule a `--why` writer is given
+
+`docs/why-verdict/VERDICT.md` §5.1 reads the first fifty reasons written to a
+canvas and names one rule as the whole of the fix. It belongs wherever the
+`--why` writing instruction lives, so it is here verbatim, and it is also in
+the launch brief that puts it in front of a step that drives a canvas:
+**`/Users/lfigea/Projects/ledger-orchestrator/guidelines/canvas-why.md`**.
+
+> **Never point at another reason.** If the justification for this node is one you have
+> already given for a sibling or a parent, name that node's four-character id and say what
+> is *different* about this one — what it holds that the other does not, and what would
+> retire this one and not the other. The words "as above", "as before", "same as", "same
+> shape" and "matching X" are not reasons: `canvas history` prints one node's edits and
+> never the node you meant.
+>
+> **When the node you are placing holds nothing** — an empty `<table>`, an empty `<row>`, a
+> one-word header `<cell>` — the reason is not about the element. Say what the structure it
+> belongs to is for, name the container's id, and say what would make this element wrong or
+> unnecessary. Do not describe text that a later commit will put inside it.
+
+The first clause's opening phrases are the one shape the store also refuses on
+its own: a reason that contains `as above`, `as before`, `see above`, `same as
+above`, `same shape`, `ditto` or `as previously` and names no other node's
+four-character id is refused at exit `2` with nothing written, like an empty
+one. `require_reason` in `canvas/store.py` is where that lives, and its
+docstring records what it catches, what it does not, and the one reason in
+forty-one the verdict priced as its accepted false positive.
+
+##### A reason that asserts a fact about the world names its evidence
+
+Convention, not enforcement — `engineering-spec.md` says the same thing about
+the one drift this specification does not solve, and this repeats it where a
+reader with only the README will meet it. An edit whose reason asserts a fact
+about the world — that a PR merged, that a verdict ruled, that a file says
+something — should name its evidence in `--why`: a PR, a verdict, a file and
+line, so a reader can follow it. Nothing enforces that, and nothing is meant
+to: the check would have to leave the canvas to run.
+
 #### How new content is supplied
 
 Neither spec said, so this is settled here: a node type by name, and the two

@@ -985,6 +985,128 @@ class EveryVerbRequiresAReason(VerbTestCase):
         self.assertIsNone(self.node(node_id).get("why"))
 
 
+class AReasonMayNotPointAtAnotherReason(VerbTestCase):
+    """`VERDICT.md` §5.2's guard: a reason that says where the node sits
+    instead of what it is for is refused at exit 2 with nothing written, the
+    same shape as the empty-reason refusal above.
+
+    The texts are the corpus's own (`docs/why-verdict/corpus-reasons.md`), so
+    what these tests measure is the thing the verdict measured."""
+
+    #: The verdict's message, verbatim (`VERDICT.md` §5.2).
+    MESSAGE = (
+        "--why must say what this node is for, not where it sits; if the "
+        "reason is another node's, name that node's id and say what differs "
+        "here."
+    )
+
+    #: Corpus entries 23, 24 and 22 — the three of the six failing reasons
+    #: §5.2 names as caught.
+    CAUGHT = (
+        "column one, as above.",
+        "column two, as above.",
+        "the header row, matching question 1's two columns. Same shape, "
+        "same reading.",
+    )
+
+    def edits(self):
+        """One invocation of each verb, minus its --why."""
+        return (
+            ("insert", "--into", "root", "--text", "A node."),
+            ("replace", self.problem_id, "--text", "Restated."),
+            ("remove", self.problem_id),
+            ("move", self.problem_id, "--after", self.value_id),
+        )
+
+    def test_a_bare_back_reference_is_refused_at_exit_2_with_nothing_written(self):
+        for reason in self.CAUGHT:
+            for edit in self.edits():
+                before = self.state()
+                code, stdout, stderr = self.verb(*(edit + ("--why", reason)))
+                self.assertEqual(2, code, (edit, reason))
+                self.assertEqual(b"", stdout, (edit, reason))
+                self.assertIn(self.MESSAGE, stderr, (edit, reason))
+                self.assertEqual(before, self.state(), (edit, reason))
+
+    def test_the_refusal_says_what_to_do_instead(self):
+        _, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "x", "--why", "column one, as above."
+        )
+        self.assertIn("Canvas-Next: ", stderr)
+        self.assertIn("name its four-character id", stderr)
+        self.assertIn("Canvas-Exit: 2", stderr)
+
+    def test_naming_another_nodes_id_is_the_exemption_and_is_accepted(self):
+        # The rule is "no four-character node id other than the edit's own
+        # target": a writer who means "as above" and names the node they mean
+        # has done what the rule asks, so the reason goes through.
+        reason = (
+            "as above for %s, except that this one carries the price and %s "
+            "carries the decision" % (self.value_id, self.value_id)
+        )
+        code, _, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Restated.", "--why", reason
+        )
+        self.assertEqual(0, code, stderr)
+
+    def test_the_edits_own_target_id_does_not_exempt_it(self):
+        # Naming the node you are editing is not naming the node you pointed
+        # at, so the reason is still bare.
+        reason = "same shape as %s, ditto" % self.problem_id
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "replace", self.problem_id, "--text", "Restated.", "--why", reason
+        )
+        self.assertEqual(2, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn(self.MESSAGE, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_entry_21_is_refused_as_the_accepted_false_positive(self):
+        # Corpus entry 21 (`ehxj`), which the verdict judged *informative* and
+        # which this guard refuses anyway: its closing clause is "Empty for one
+        # commit, as before." and it names no other node's id. §5.2 prices this
+        # at one wrongly refused out of the forty-one that met the bar and
+        # accepts it — a writer who means "as before" and has a node id to name
+        # is told to name it. This test asserts the false positive on purpose.
+        # It is not a bug report; fixing it means deleting the guard.
+        reason = (
+            "the options for question 2 and what each costs, in the same shape "
+            "as question 1's so the two can be read the same way. Empty for one "
+            "commit, as before."
+        )
+        before = self.state()
+        code, stdout, stderr = self.verb(
+            "insert", "--into", "root", "--text", "", "--why", reason
+        )
+        self.assertEqual(2, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn(self.MESSAGE, stderr)
+        self.assertEqual(before, self.state())
+
+    def test_the_write_path_itself_refuses_a_bare_back_reference(self):
+        # Same as the empty-reason case: a caller that never goes near
+        # canvas/cli.py must not be able to write one either.
+        from canvas import store
+
+        for reason in self.CAUGHT:
+            with self.assertRaises(store.ToolProblem):
+                store.require_reason(reason, nodes=["q4rt"])
+
+    def test_a_reason_that_says_something_is_not_caught(self):
+        # What the guard does not catch, and is not meant to: §5.2 is a speed
+        # bump against one failing shape, not a tautology detector.
+        for reason in (
+            "a table of the two options, so the comparison has somewhere to go",
+            "the cost column: the decision turns on price and nothing in the "
+            "canvas holds it yet",
+        ):
+            code, _, stderr = self.verb(
+                "insert", "--into", "root", "--text", "A node.", "--why", reason
+            )
+            self.assertEqual(0, code, (reason, stderr))
+
+
 class TheVerbsAddressNodesByIdAndNothingElse(VerbTestCase):
     """Addressing is by explicit node id. An id that is not in the canvas is a
     refusal, not a silent no-op."""
