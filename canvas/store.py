@@ -560,9 +560,19 @@ def _git_checked(canvas_dir, *arguments):
                 result.returncode,
                 result.stderr.decode("utf-8", "replace").strip(),
             ),
-            "run `git %s` against %s yourself to see what it objects to, and "
-            "repair the repository; nothing was written"
-            % (" ".join(arguments), canvas_dir),
+            # A diagnostic, and not marked: the command named here is the one
+            # that just failed, so its non-zero exit is the condition rather
+            # than a repair for it, and what git said about it is in the
+            # message above already. Pinned like every other invocation in this
+            # file, so that it is asked of the repository this refusal names
+            # and not of whatever repository the caller happens to be standing
+            # in — the unpinned `git %s` this line used to print answered a
+            # different repository, and exited `0` doing it.
+            "`git --git-dir=%s --work-tree=%s status` shows what state that "
+            "repository is in, and the message above carries what git "
+            "objected to; repair the repository and re-run. Nothing was "
+            "committed"
+            % (os.path.join(canvas_dir, ".git"), canvas_dir),
             about=["canvas repository %s" % canvas_dir, "command git"],
         )
     return result.stdout.decode("utf-8", "replace")
@@ -681,9 +691,13 @@ def _cannot_read_repository(canvas_dir, wanted, error=None, complaint=None):
     return ToolProblem(
         "cannot tell %s %s: git refused the question: %s"
         % (wanted, canvas_dir, complaint or "it gave no reason"),
-        "run `git --git-dir=%s rev-parse HEAD` yourself to see what it objects "
-        "to, and repair the repository; nothing was read, written or "
-        "committed, and what that repository holds is still unknown"
+        # A diagnostic, and not marked: this is the question git has just
+        # refused, offered so that a caller can see the refusal for themselves.
+        # Running it again cannot make the refused command work, which is what
+        # the marker claims.
+        "`git --git-dir=%s rev-parse HEAD` says what git objects to; repair "
+        "the repository and re-run — nothing was read, written or committed, "
+        "and what that repository holds is still unknown"
         % os.path.join(canvas_dir, ".git"),
         about=["canvas repository %s" % canvas_dir, "command git"],
     )
@@ -749,8 +763,19 @@ def ensure_repository(canvas_dir):
         raise ToolProblem(
             "cannot initialise a git repository at %s: %s"
             % (canvas_dir, result.stderr.decode("utf-8", "replace").strip()),
-            "run `git init -b main -- %s` yourself to see what it objects to, "
-            "and re-run; no canvas was created" % canvas_dir,
+            # `git init` is never a diagnostic — it is the one git subcommand
+            # that only ever changes something — so naming it here unmarked
+            # would be the rule escaped rather than kept. It is not marked
+            # either: the command this line would mark is the command that
+            # just failed, and it fails again for as long as the condition the
+            # refusal is about holds. Measured, not assumed: against a
+            # directory this process may not write into it exits `1`, and it
+            # exits `0` only once that has been put right — which is the thing
+            # this line asks for, in the words of the `os.makedirs` arm above.
+            "`ls -ld %s` shows who owns that directory and what its mode is; "
+            "git has to be able to create `.git` inside it, and the message "
+            "above carries what it objected to. Clear that and re-run; no "
+            "canvas was created" % canvas_dir,
             about=["directory %s" % canvas_dir, "command git init"],
         )
     return True
@@ -906,8 +931,13 @@ def _log(canvas_dir, arguments, complaint):
             return []
         raise ToolProblem(
             "%s: %s" % (complaint, result.stderr.decode("utf-8", "replace").strip()),
-            "run `git log` against %s yourself to see what it objects to, and "
-            "repair the repository; nothing was written" % canvas_dir,
+            # A diagnostic, and not marked, for `_git_checked`'s reason — and
+            # pinned for `_git_checked`'s reason too: the bare `git log` this
+            # line used to print was answered by whatever repository the caller
+            # was standing in.
+            "`git --git-dir=%s --work-tree=%s log` says what git objects to; "
+            "repair the repository and re-run. Nothing was written"
+            % (os.path.join(canvas_dir, ".git"), canvas_dir),
             about=["canvas repository %s" % canvas_dir, "command git log"],
         )
 

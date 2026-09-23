@@ -1160,44 +1160,49 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   `tests/test_store.py` is where this stops being a convention.
   `assertRepairsRun` runs every command a next action marks `run`, whatever the
   command is, and requires that it exits `0` and carries no placeholder — and,
-  in the other direction, that every `chmod` a next action names is marked, so
-  that the rule cannot be escaped by dropping the word.
+  in the other direction, that every `chmod` a next action names is marked,
+  backticked or not, and that every backticked `git` it names is either marked
+  or one of the helper's declared diagnostics, so that the rule cannot be
+  escaped by dropping the word.
 
-  **Where the word does not mean this yet: four next actions in
-  `canvas/store.py`.** `grep -n 'run \`' canvas/store.py` returns exactly four
-  lines — `:546` in `_git_checked`, `:667` in `_cannot_read_repository`,
-  `:735` in `ensure_repository` and `:885` in `_log` — and every one of them
-  puts the marker in front of a *diagnostic*: “run `git …` yourself to see
-  what it objects to”. That is the opposite of what the word is settled to
-  mean here. All four predate this rule — `git blame` puts them at `f51ec57`
-  and `46f333c`, and they are already there at the revision this branch was cut
-  from — and the rule's scope when it was written was `canvas/refusal.py`'s
-  templates, so they were left standing rather than overlooked.
+  **Where the word used to not mean this: four next actions in
+  `canvas/store.py`.** `grep -n 'run \`' canvas/store.py` now returns nothing.
+  Until [todo
+  10330693749](https://app.basecamp.com/3934852/buckets/48039419/todos/10330693749)
+  it returned four lines — in `_git_checked`, in `_cannot_read_repository`'s
+  `complaint` arm, in `ensure_repository` and in `_log` — and every one of them
+  put the marker in front of a *diagnostic*: “run `git …` yourself to see what
+  it objects to”. All four predated this rule, whose scope when it was written
+  was `canvas/refusal.py`'s templates, and no test reached the branches that
+  print them, so `assertRepairsRun` never saw them and the suite was green with
+  them in it.
 
-  **The suite does not catch them, and that is why this branch is green with
-  them in it.** `assertRepairsRun` only sees a next action a test actually
-  reaches, and no test reaches any of these four branches: spliced with a probe
-  that records each one it enters, the whole suite runs 263 tests, passes, and
-  leaves the probe file uncreated. So the rule above is enforced everywhere the
-  tests go and unenforced on exactly these four lines. Two of them are
-  demonstrably wrong as marked — `:546`'s `git rev-parse HEAD` and `:667`'s
-  `git --git-dir=… rev-parse HEAD` exit `128`, not `0`, on the conditions
-  their refusals are about — and `:546`'s command carries no `--git-dir` at
-  all, so it is not even asked about the repository the refusal names.
+  **Each of the four was decided on its own, and all four lost the marker.**
+  Three of them — `_git_checked`, `_cannot_read_repository`'s `complaint` arm
+  and `_log` — name the command git has just refused. Its non-zero exit is the
+  condition the refusal exists for rather than a repair for it, and what git
+  said about it is already in the message above the next action, so the command
+  is there to look with and the line no longer claims otherwise. The fourth is
+  the one this was expected to go the other way for: `ensure_repository`'s `git
+  init -b main -- <dir>` is no diagnostic — `git init` only ever changes
+  something — and it would have kept the marker if it could be made to exit
+  `0` on the condition its refusal is about. It cannot. That condition is `git
+  init` having just failed, and against a directory this process may not write
+  into it exits `1` for as long as that holds. So that line names `ls -ld
+  <dir>` and says what has to become true instead, and it does not name `git
+  init` at all: an unmarked `git init` would be the rule escaped rather than an
+  exception to it, exactly as an unmarked `chmod` is.
 
-  **The fix is owned by [todo
-  10330693749](https://app.basecamp.com/3934852/buckets/48039419/todos/10330693749)**,
-  “Make the word `run` mean one thing in `canvas/store.py` too, and cover the
-  four refusals that print it”, and it is deliberately not made here. It is
-  not a rewording: the four have to be decided one at a time — `:735`'s `git
-  init -b main -- %s` is a genuine repair and should keep the marker if it can
-  be made to exit `0`, while the other three are looking rather than repairing
-  — and each decision only sticks once a test reaches the branch that prints
-  it. That todo scopes the string changes together with that coverage, with
-  `assertRepairsRun` extended to check the reverse direction for `git` as it
-  already does for `chmod`. Until it lands, the word means one thing in
-  `canvas/refusal.py` and these four lines in `canvas/store.py` are the
-  documented exception.
+  Two of them also stopped being about the wrong repository. `_git_checked`
+  marked a bare `git rev-parse HEAD` and `_log` a bare `git log`, neither
+  pinned with `--git-dir`, in a module whose first stated invariant is that
+  every git invocation is pinned. Run from anywhere else those two answer about
+  whatever repository the caller happens to be standing in — so they were not
+  merely failing to be repairs, they could exit `0` and be confidently about
+  something else. Both are pinned now. Four tests in `tests/test_store.py`
+  build the four conditions git refuses under, run a real entry point against
+  each, and put every one of the four answers through `assertRepairsRun`, which
+  is what stops any of this drifting back.
 
 - **`canvas/refusal.py` is where the shape lives**, and it is a structure and
   not a convention: the next action is a constructor argument with no default,
