@@ -24,6 +24,12 @@ root and carries `ledger` and `schema="1"`. `<section>` is the only container,
 carries `title`, and nests one level — two levels of section in total, a third
 is invalid. Every node except the root carries `id` and `v`.
 
+`<question>` is the one node that carries state: it may carry
+`answered="true"`, and nothing else. Absence means open, `answered="false"` is
+invalid, and no other element may carry it. That is the whole of what a canvas
+says about a node's state — [`node-state.md`](node-state.md) decides it and
+prices what it leaves in the reason.
+
 The list is closed. `<decision>`, `<risk>` and `<acceptance-criterion>` are
 rejected, and there is no way to register a twelfth element: no wildcard in the
 grammar, no plugin point, no configuration file of allowed elements. A closed
@@ -133,8 +139,8 @@ hand out an id another canvas already used.
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
     bin/canvas read    <ledger_id>
     bin/canvas history <ledger_id> <node-id>
-    bin/canvas replace <ledger_id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
-    bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--author TEXT]
+    bin/canvas replace <ledger_id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
+    bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
     bin/canvas remove  <ledger_id> <node-id> --why TEXT [--base SHA] [--author TEXT]
     bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--author TEXT]
 
@@ -316,7 +322,8 @@ too, and say what to type:
 
     $ bin/canvas replace a-row bn3x --text "We chose A."
     usage: canvas replace [-h] [--type NAME] [--text TEXT] [--title TITLE]
-                          [--href HREF] --why TEXT [--base SHA] [--author AUTHOR]
+                          [--href HREF] [--answered] --why TEXT [--base SHA]
+                          [--author AUTHOR]
                           ledger_id node-id
     canvas: replace: the following arguments are required: --why
     Canvas-Node: bn3x
@@ -404,7 +411,7 @@ the surviving id and for the stranded one.
 
 #### How new content is supplied
 
-Neither spec said, so this is settled here: a node type by name, and the two
+Neither spec said, so this is settled here: a node type by name, and the three
 attributes the closed vocabulary has that are not identity.
 
 | flag | what it sets |
@@ -413,6 +420,7 @@ attributes the closed vocabulary has that are not identity.
 | `--text TEXT` | the node's character data |
 | `--title TEXT` | the `title` a `<section>` requires |
 | `--href URL` | the `href` a `<link>` requires |
+| `--answered` | marks a `<question>` answered; absence means open. The one state a canvas carries — [node-state.md](node-state.md). Restated and not sticky: a `replace` that omits it reopens the question |
 
 Named flags rather than a general `--attr name=value`, because a general one
 could set `id` and `v` — and `insert` mints ids, so a caller cannot supply one.
@@ -459,8 +467,8 @@ is [the shape every refusal takes](#what-a-refusal-prints), and these are where
 it came from.
 
 A `replace` payload cannot express a child at all: `--type`, `--text`,
-`--title` and `--href` are four scalars, and there is no `--children`, no
-`--file`, no document body and no stdin. "One commit rewriting N children" is
+`--title`, `--href` and `--answered` are five scalars, and there is no
+`--children`, no `--file`, no document body and no stdin. "One commit rewriting N children" is
 **inexpressible** here rather than merely refused.
 
 #### There is no code path that writes more than one node

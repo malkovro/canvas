@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="bc-1" schema="1">
+  <question id="mqxd" v="1" answered="true">Answered, which a question may say.</question>
+  <text id="q4rt" v="1" answered="true">State on a node that is not a question.</text>
+</canvas>

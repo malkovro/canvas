@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="bc-1" schema="1">
+  <question id="k3xq" v="1">An open question, which says nothing.</question>
+  <question id="mqxd" v="1" answered="false">Open is spelled by absence, never by false.</question>
+  <question id="jc5v" v="2" answered="yes">Nor by yes.</question>
+  <question id="q4rt" v="3" answered="TRUE">Nor by TRUE.</question>
+</canvas>
