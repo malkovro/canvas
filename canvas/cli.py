@@ -1,9 +1,10 @@
 """The `bin/canvas` command line: the store, the read path and the four verbs.
 
-Eight subcommands, and no more:
+Nine subcommands, and no more:
 
     canvas create  <ledger_id> --problem TEXT --expected-value TEXT
     canvas read    <ledger_id>
+    canvas render  <ledger_id>
     canvas history <ledger_id> <node-id>
     canvas replace <ledger_id> <node-id> --why TEXT [--base SHA]
     canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
@@ -18,6 +19,12 @@ byte of it — so the four that edit are still `replace`, `insert`, `remove` and
 `move`. `history` reads the log all of them write, and `read` reads the
 document they leave behind; both go on working on a frozen canvas, and every
 write verb is refused against one at exit 1.
+
+`render` is the third read and is not a verb either: it prints the canvas as a
+standalone HTML page and writes nothing at all — not the page, not a file, not
+a commit. A projection is one-way, never edited and never read back, so there
+is no flag on it that writes to a canvas and no path argument that could put
+one anywhere: the page goes to stdout and the shell decides where it lands.
 
 There is no `resolve`, no `collapse` and no `supersede`:
 the semantics live in the reason, not in a verb name. `abandon` is not a verb
@@ -66,6 +73,7 @@ import os
 import sys
 
 from canvas import refusal
+from canvas import render as renderer
 from canvas import store
 
 
@@ -140,6 +148,27 @@ def _read(args):
         1,
     )
     return 1
+
+
+def _render(args):
+    """Print the canvas as a standalone HTML page, and nothing else.
+
+    stdout is the whole page, byte for byte — no `Canvas-Base:` line above it
+    and no trailer below. That is not `read`'s shape and deliberately not:
+    `read` hands out a sha its caller is going to put in the next write's
+    `--base`, and pays the documented cost that its stdout is not itself a
+    valid XML document. A rendered page has no next write to feed, and it is a
+    file somebody opens in a browser or pastes into a comment, so a line of
+    plain text above the doctype would be a defect in the artifact. The sha is
+    inside the page, in its header, where a reader of the page can see it.
+
+    So `bin/canvas render <ledger-id> > canvas.html` is how it reaches a file,
+    and where that file goes is the shell's business. There is no `--output`:
+    a projection this command could write anywhere is a projection somebody
+    eventually writes into `state/canvas`.
+    """
+    sys.stdout.write(renderer.render(args.ledger_id))
+    return 0
 
 
 def _history(args):
@@ -613,6 +642,24 @@ def build_parser():
     )
     read.add_argument("ledger_id", help="the ledger row whose canvas to print")
     read.set_defaults(handler=_read)
+
+    render = verbs.add_parser(
+        "render",
+        help="print the canvas as a standalone HTML page",
+        description=(
+            "Print the canvas for a ledger row as one standalone HTML "
+            "document: no stylesheet to fetch, no script and no image. The "
+            "page opens with an index naming every <question> in the "
+            "document, every <question> carries a marker of its own, and the "
+            "header names the sha it was rendered from — a rendered page is "
+            "pasted into a comment and has to be tellable from the canvas as "
+            "it stands now. A projection is one-way: this writes nothing, "
+            "commits nothing, initialises no repository and has no flag that "
+            "writes to a canvas. Redirect stdout to keep the page."
+        ),
+    )
+    render.add_argument("ledger_id", help="the ledger row whose canvas to render")
+    render.set_defaults(handler=_render)
 
     history = verbs.add_parser(
         "history",

@@ -5399,13 +5399,21 @@ class AFreezeIsFinal(RefusalSurface, FrozenCanvasTestCase):
     work.
     """
 
-    #: Every verb `bin/canvas` has, and all of it. A ninth added here fails
-    #: this test until somebody has classified it, which is the point: `read`
-    #: and `history` read, `create` and `freeze` are the two ends of a canvas's
-    #: life, and the four in between are the editing verbs.
+    #: Every verb `bin/canvas` has, and all of it. A tenth added here fails
+    #: this test until somebody has classified it, which is the point: `read`,
+    #: `render` and `history` read, `create` and `freeze` are the two ends of a
+    #: canvas's life, and the four in between are the editing verbs.
+    #:
+    #: `render` is in the reading group and not in a group of its own. It is a
+    #: projection — `engineering-spec.md` section *Projections*: one-way, never
+    #: edited and never read back — and what that means for this list is that
+    #: it writes no file, makes no commit, mints no id and initialises no
+    #: repository, so it is refused against nothing and works on a frozen
+    #: canvas exactly as `read` and `history` do. `tests/test_render.py`
+    #: asserts each of those.
     VERBS = (
-        "create", "read", "history", "replace", "insert", "remove", "move",
-        "freeze",
+        "create", "read", "render", "history", "replace", "insert", "remove",
+        "move", "freeze",
     )
 
     def test_the_tool_has_exactly_the_documented_verbs(self):
