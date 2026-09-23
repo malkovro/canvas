@@ -173,6 +173,69 @@ def find(root, node_id):
     return None
 
 
+def ids_in(root):
+    """Every node's id, in document order.
+
+    The root is not a node and carries none, so it is not in the list. A node
+    that carries no `id` at all is not either: this keys nodes by the thing the
+    grammar makes mandatory, and a document holding a node without one is a
+    document the validator refuses and whose diagnostics say so.
+    """
+    return [
+        element.get("id")
+        for element in root.iter()
+        if element is not root and element.get("id") is not None
+    ]
+
+
+def select(root, node_ids=(), node_types=()):
+    """The nodes any selector names, in a fresh root. Returns (selection, missing).
+
+    **Selectors union.** A node is selected if its `id` is one of `node_ids`
+    **or** its element name is one of `node_types`. Not intersection: an `id`
+    intersected with a type is either that one node or nothing, which is a
+    question nobody asks, and one rule that covers repeats and mixtures alike
+    is worth more than two.
+
+    **A selected node brings its subtree, once.** A selected node that is a
+    descendant of another selected node is printed in place, inside it, and not
+    again on its own — so the count of top-level elements in the selection is
+    never a count of matches, and reading the selection twice never reads one
+    node twice.
+
+    `missing` is the ids that named nothing, in the order they were given. An
+    id is an assertion that a node exists, so a caller that refuses on it has a
+    list to name; a type is a predicate, and "none" is its answer rather than
+    its failure, so an unmatched type is not reported here at all.
+
+    **The selection is a projection and is not claimed to validate.** Selecting
+    a `<cell>` without its `<row>` produces something the grammar refuses, and
+    that is correct: the stored file is the document and is the thing that
+    validates. This builds a view of part of it.
+    """
+    wanted_ids = set(node_ids or ())
+    wanted_types = set(node_types or ())
+    selection = ET.Element(root.tag)
+    for name, value in root.items():
+        selection.set(name, value)
+
+    found = set()
+
+    def walk(element):
+        for child in element:
+            if child.get("id") in wanted_ids or child.tag in wanted_types:
+                selection.append(child)
+                found.update(each for each in ids_in(child) if each in wanted_ids)
+                if child.get("id") in wanted_ids:
+                    found.add(child.get("id"))
+            else:
+                walk(child)
+
+    walk(root)
+    missing = [each for each in (node_ids or ()) if each not in found]
+    return selection, missing
+
+
 def place_after(root, sibling_id, node):
     """Put `node` immediately after the node named `sibling_id`."""
     if sibling_id == ROOT:

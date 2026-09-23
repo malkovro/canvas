@@ -1915,6 +1915,14 @@ def create(ledger_id, problem, expected_value, author=None):
     which is which: the vocabulary has no semantic node and inventing one is the
     `<decision>`/`<risk>` tripwire. The distinction lives in the commit subject
     and in the order, where a reader and a `git log --grep` can both find it.
+    `node-naming.md` is the ruling that settles it and says what would reopen
+    it, and the answer it takes turns on this function handing its two ids back:
+    the distinction is carried outside the document, so the caller has to be
+    told which id is which rather than made to go and look.
+
+    So the two minted ids are returned beside the path and the sha — they are
+    already in hand where they are minted, and discarding them was what made
+    every caller's first command after `create` a `read`.
     """
     canvas_dir = canvas_directory()
     path = canvas_path(canvas_dir, ledger_id)
@@ -1978,8 +1986,10 @@ def create(ledger_id, problem, expected_value, author=None):
         (problem, "the problem the ledger row states"),
         (expected_value, "the expected value the ledger row states"),
     )
+    minted = []
     for content, reason in first_nodes:
         node_id = mint(canvas_dir)
+        minted.append(node_id)
         document.place_into(root, document.ROOT, document.new_text(node_id, content))
         sha = _write_and_commit(
             canvas_dir,
@@ -1993,19 +2003,148 @@ def create(ledger_id, problem, expected_value, author=None):
             base=sha,
         )
 
-    return path, sha
+    problem_id, value_id = minted
+    return path, sha, problem_id, value_id
 
 
-def read(ledger_id):
-    """Return (sha, the bytes on disk, diagnostics) for one ledger row.
+#: What a `Canvas-Wrote:` line says of a node no commit in this canvas names.
+#: Only reachable by hand-editing the file, which the store already treats as
+#: out of band — but the line is printed all the same, so that every node
+#: printed gets exactly one of them and a caller can count lines against nodes.
+#: A silently omitted line reads as "I did not ask".
+_UNRECORDED = "unrecorded"
+
+
+def provenance(ledger_id):
+    """Who last wrote each node of this canvas, and at which commit.
+
+    Returns `{node_id: (sha, author)}`. A read: it writes nothing, commits
+    nothing and does not initialise a repository, exactly as `read` and
+    `history` do not.
+
+    **The information is only in the log, and that is the decision.** Every
+    applied edit commits one `Canvas-Node:` trailer and one `Canvas-Author:`
+    trailer, and the sha is the commit's own. None of it is in the document and
+    none of it may become an attribute or an element there: the vocabulary is
+    closed and written down once in `schema/canvas.rng`, the element set is
+    pinned to eleven names and the attribute set to seven by
+    `tests/test_validate.py`, and an `author=` on a node would be a claim the
+    log cannot check — the general form `engineering-spec.md` already rejected.
+    Provenance is a property of the read *surface* and of nothing else.
+
+    **"Last wrote" is the last commit whose `Canvas-Node:` trailer names the
+    node, whatever verb it was.** A `move` counts: it is a commit that names the
+    node and it bumps `v`, and `node-identity.md` §4 defines `v` as exactly the
+    count of those commits. Any other rule would make this disagree with the
+    number in the file.
+
+    **One query for the whole canvas, not one per node.** The log is folded
+    once, oldest first, and the last record naming an id wins — which reuses
+    `_log`'s decoding and the trailer-*equality* rule `_node_commits` and
+    `_check_base` both already use, never a substring match. A `_node_commits`
+    call per node would be one subprocess per node.
+    """
+    canvas_dir = canvas_directory()
+    path = canvas_path(canvas_dir, ledger_id)
+
+    if not os.path.isfile(path):
+        raise _no_canvas(ledger_id, path)
+    if not is_repository(canvas_dir):
+        raise _not_a_repository(canvas_dir, "provenance to report")
+
+    last = {}
+    for record in _log(
+        canvas_dir,
+        ["--", path],
+        "cannot read who wrote the canvas for %s" % ledger_id,
+    ):
+        for node_id in record.named:
+            if node_id:
+                last[node_id] = (record.sha, record.author)
+    return last
+
+
+def _tree_to_read(path, ledger_id):
+    """The document as a tree, for a read that has to look inside it.
+
+    The selector and `--provenance` both need the tree; the plain read does not
+    and does not build one. A file that is not well-formed XML has no tree at
+    all, which is a different thing from one whose tree breaks the grammar — the
+    second is the validator's verdict and arrives as diagnostics beside the
+    document. This says which, in the same shape every other refusal takes.
+    """
+    try:
+        return document.parse(path)
+    except document.NotWellFormed as error:
+        raise Refusal(
+            "%s, so there is no tree to select from or to attribute" % error,
+            "repair the XML at the line named above — `bin/canvas-validate %s` "
+            "reports it — and read again; `bin/canvas read %s` with no "
+            "selector prints the file as it stands. Nothing was written"
+            % (path, ledger_id),
+            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        )
+    except OSError as error:
+        raise _cannot_read(path, error, ledger_id=ledger_id)
+
+
+def _no_such_nodes(ledger_id, path, missing):
+    """`--id` named a node this canvas does not hold. A fact about the store.
+
+    An id is an assertion that a node exists — ids are minted and unique
+    (`node-identity.md` §1) — so a name that matches nothing is a wrong request
+    and not an empty answer. That is `history`'s rule for the same mistake, in
+    the same shape: the canvas is there; the node is not.
+
+    A `--type` that matches nothing is the other case entirely and is not a
+    refusal at all. A type is a predicate and "none" is its answer: *are there
+    any question nodes left* is the question the tool could not answer, and one
+    that refuses to say "none" has not answered it.
+    """
+    return Refusal(
+        "no node with id %s in the canvas for %s: --id names a node of this "
+        "canvas, and this one is not in it. The canvas is there; the node is "
+        "not" % (", ".join(missing), ledger_id),
+        "`bin/canvas read %s` prints the canvas and every id in it; select one "
+        "of those, or select by type with `bin/canvas read %s --type <name>`. "
+        "Nothing was written" % (ledger_id, ledger_id),
+        nodes=list(missing),
+        about=["ledger id %s" % ledger_id, "canvas %s" % path],
+    )
+
+
+def read(ledger_id, node_ids=None, node_types=None, since=None,
+         with_provenance=False):
+    """Return (sha, the bytes to print, diagnostics, header) for one ledger row.
 
     A read. It writes nothing, commits nothing, and does not initialise a
     repository: a workspace with no canvas repository has no canvas to read, and
-    creating one to say so would be a write.
+    creating one to say so would be a write. That is true of every argument
+    below — all any of them adds is `git log`, `git diff`, `git rev-parse` and
+    `git merge-base --is-ancestor`, and reading the file the caller asked for.
 
     An invalid stored document is still returned, with its diagnostics, because
     the caller has to be able to see what to repair. Refusing to show it would
     make it unrepairable.
+
+    **The sha is unchanged by any of this.** It is the repository head, handed
+    out under the one name the next write declares it under, whatever was
+    selected: the selection narrows what you see, not what you would be writing
+    against.
+
+    `node_ids` and `node_types` select part of the document; they union, and
+    what comes back is a projection of the document and not the document —
+    `canvas.document.select` says what that means. `since` asks what changed
+    between a sha this repository handed out and the head. `with_provenance`
+    asks who last wrote each node printed and at which commit.
+
+    `header` is the extra header lines, in order, for the caller to print
+    between the sha and the document: one `Canvas-Wrote:` per node printed, then
+    the `Canvas-News:` block. It is composed here for the same reason
+    `_check_base`'s news is — the lines are the store's answer and the command
+    line prints them — and the boundary is the one `README.md` states: **the
+    document begins at the `<?xml` declaration line, and everything before it is
+    the header.**
     """
     canvas_dir = canvas_directory()
     path = canvas_path(canvas_dir, ledger_id)
@@ -2024,7 +2163,29 @@ def read(ledger_id):
             body = handle.read()
     except OSError as error:
         raise _cannot_read(path, error, ledger_id=ledger_id)
-    return sha, body, _validate(path, path)
+
+    problems = _validate(path, path)
+    header = []
+
+    if node_ids or node_types or with_provenance:
+        printed = _tree_to_read(path, ledger_id)
+        if node_ids or node_types:
+            printed, missing = document.select(printed, node_ids, node_types)
+            if missing:
+                raise _no_such_nodes(ledger_id, path, missing)
+            body = document.serialise(printed).encode("utf-8")
+        if with_provenance:
+            last = provenance(ledger_id)
+            for node_id in document.ids_in(printed):
+                wrote, author = last.get(node_id, (_UNRECORDED, _UNRECORDED))
+                header.append(
+                    "Canvas-Wrote: %s %s %s" % (node_id, wrote, author)
+                )
+
+    if since is not None:
+        header.extend(_news_since(canvas_dir, path, ledger_id, sha, since))
+
+    return sha, body, problems, header
 
 
 def history(ledger_id, node_id):
@@ -2126,8 +2287,16 @@ def history(ledger_id, node_id):
 _A_SHA = re.compile(r"\A[0-9a-fA-F]{4,40}\Z")
 
 
-def _resolve_base(canvas_dir, declared, head, ledger_id, node_id):
+def _resolve_base(canvas_dir, declared, head, ledger_id, node_id, option="--base"):
     """The full sha `--base` names, or the refusal that says why it is not one.
+
+    `option` is the flag the sha arrived on, because two flags now hand one in:
+    `--base` on a write, and `--since` on a read. The three answers below are
+    one rule and stay one rule — a sha is usable or it is not, and which command
+    asked cannot change that — so the flag is interpolated rather than a second
+    copy of the function written. The one thing it does change is the next
+    action: "drop it to ask for no staleness check at all" is right for `--base`
+    and is wrong advice for a read, which asked the question on purpose.
 
     Three answers, and they are three different things:
 
@@ -2143,15 +2312,20 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id):
       it, which is a vacuous pass wearing the safe case's face. That silent
       pass is the one outcome worth spending a check to prevent.
     """
+    instead = (
+        "drop %s to ask for no staleness check at all" % option
+        if option == "--base"
+        else "re-run without %s" % option
+    )
     if not _A_SHA.match(declared):
         raise ToolProblem(
-            "not a usable --base: %r; a base is the commit sha a read handed "
-            "out, four to forty hexadecimal characters" % declared,
+            "not a usable %s: %r; it names the commit sha a read handed out, "
+            "four to forty hexadecimal characters" % (option, declared),
             "re-run with the sha `bin/canvas read %s` printed on its "
-            "Canvas-Base: line, or drop --base to ask for no staleness check "
-            "at all. Nothing was written" % ledger_id,
+            "Canvas-Base: line, or %s. Nothing was written"
+            % (ledger_id, instead),
             nodes=[node_id] if node_id is not None else [],
-            about=["ledger id %s" % ledger_id, "option --base %r" % declared],
+            about=["ledger id %s" % ledger_id, "option %s %r" % (option, declared)],
         )
     resolved = _git(
         canvas_dir, "rev-parse", "--verify", "--quiet", "%s^{commit}" % declared
@@ -2171,12 +2345,13 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id):
         )
     if resolved.returncode != 0:
         raise Refusal(
-            "no commit %s in this canvas repository: --base names the sha a "
-            "read handed out, and this one was never handed out here" % declared,
-            "read the canvas again with `bin/canvas read %s` and write against "
-            "the sha it prints. Nothing was written" % ledger_id,
+            "no commit %s in this canvas repository: %s names the sha a "
+            "read handed out, and this one was never handed out here"
+            % (declared, option),
+            "read the canvas again with `bin/canvas read %s` and use the sha "
+            "it prints. Nothing was written" % ledger_id,
             nodes=[node_id] if node_id is not None else [],
-            about=["ledger id %s" % ledger_id, "option --base %s" % declared],
+            about=["ledger id %s" % ledger_id, "option %s %s" % (option, declared)],
         )
     base = resolved.stdout.decode("utf-8", "replace").strip()
     if base != head:
@@ -2194,16 +2369,16 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id):
             )
         if ancestry.returncode != 0:
             raise Refusal(
-                "--base %s is not an ancestor of %s, this canvas repository's "
+                "%s %s is not an ancestor of %s, this canvas repository's "
                 "head: nothing that led here was decided against it, so what "
                 "changed in between is not a question this store can answer"
-                % (base, head),
-                "read the canvas again with `bin/canvas read %s` and write "
-                "against the sha it prints. Nothing was written" % ledger_id,
+                % (option, base, head),
+                "read the canvas again with `bin/canvas read %s` and use the "
+                "sha it prints. Nothing was written" % ledger_id,
                 nodes=[node_id] if node_id is not None else [],
                 about=[
                     "ledger id %s" % ledger_id,
-                    "option --base %s" % base,
+                    "option %s %s" % (option, base),
                     "sha %s, the head" % head,
                 ],
             )
@@ -2228,6 +2403,51 @@ def _patch(canvas_dir, sha, path):
 def _diff(canvas_dir, base, head, path):
     """The unified diff of this canvas's file between two commits."""
     return _git_checked(canvas_dir, "diff", base, head, "--", path).splitlines()
+
+
+def _news_since(canvas_dir, path, ledger_id, head, declared):
+    """What changed in this canvas between a sha the caller holds and the head.
+
+    The `Canvas-News:` block the soft branch already composes, verbatim — the
+    same lines, in the same order, under the same name — asked for before a
+    write instead of told after one. A writer sees identical text in both places
+    and does not have to learn a second shape.
+
+    **It writes nothing, commits nothing and initialises nothing.** All of it is
+    `git rev-parse`, `git merge-base --is-ancestor`, `git log` and `git diff`.
+
+    **It is not a whole-canvas history verb**, which `README.md` section *What
+    the store deliberately does not do* refuses and this does not overturn. It
+    is bounded below by a sha the caller names and above by the head, scoped to
+    this canvas's own file, and it cannot be spelled without a base: there is no
+    default and no "all" form, so the tool never offers whole-canvas history as
+    *the* question. The honest edge, stated rather than argued away: a caller
+    who names the canvas's own root commit gets everything since the birth of
+    the canvas, which is that history arrived at from the other end. The refused
+    thing is a verb whose *job* is whole-canvas history, one reached for without
+    holding a base; this one cannot be invoked without asserting a base.
+
+    **And it is not a lock.** The answer can be stale the moment it is printed.
+    `--base` on the next write is still the only thing that refuses.
+
+    **Nothing moved is one counted line and no diff.** The soft branch prints
+    nothing in that case, which is right there because nobody asked; here the
+    question *was* asked, and silence is indistinguishable from the flag having
+    done nothing. One counted form covers both outcomes and a caller can branch
+    on the number.
+    """
+    base = _resolve_base(
+        canvas_dir, declared, head, ledger_id, None, option="--since"
+    )
+    moved = [] if base == head else _commits_in(canvas_dir, base, path)
+    news = [
+        "Canvas-News: %d commit(s) between %s and %s" % (len(moved), base, head)
+    ]
+    if not moved:
+        return news
+    news.extend(record.subject for record in moved)
+    news.extend(_diff(canvas_dir, base, head, path))
+    return news
 
 
 def _check_base(canvas_dir, path, ledger_id, node_id, head, declared):

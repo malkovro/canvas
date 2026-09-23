@@ -3,7 +3,7 @@
 Nine subcommands, and no more:
 
     canvas create  <ledger_id> --problem TEXT --expected-value TEXT
-    canvas read    <ledger_id>
+    canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
     canvas render  <ledger_id>
     canvas history <ledger_id> <node-id>
     canvas replace <ledger_id> <node-id> --why TEXT [--base SHA]
@@ -29,12 +29,15 @@ one anywhere: the page goes to stdout and the shell decides where it lands.
 There is no `resolve`, no `collapse` and no `supersede`:
 the semantics live in the reason, not in a verb name. `abandon` is not a verb
 here either, and for exactly that argument — `abandoned` and `done` are two
-things a `--why` says and not two commands. There is no selector of any kind
-either — addressing is by explicit node id, which is the property that makes
-IWE's `--expect` match-count guard unnecessary, and the day a selector exists
-`--expect` has to exist beside it. There is no `unfreeze`, no `reopen` and no
-`thaw`: a freeze is final, and a ledger row whose task comes back gets a new
-ledger row and therefore a new canvas.
+things a `--why` says and not two commands. **No verb takes a selector**, and
+that is unchanged: addressing is by explicit node id, which is the property that
+makes IWE's `--expect` match-count guard unnecessary, and the day a *write*
+takes a selector `--expect` has to exist beside it. `read --id` and `read
+--type` are not that and do not reopen it — they apply nothing, mint nothing and
+commit nothing, and the matches are the output, so there is no unseen second
+match for a guard to catch. There is no `unfreeze`, no `reopen` and no `thaw`: a
+freeze is final, and a ledger row whose task comes back gets a new ledger row and
+therefore a new canvas.
 
 `--why` is required by all four, and by `freeze`, with no default and no
 fallback. An absent one is argparse's own refusal and an empty or
@@ -100,26 +103,69 @@ def _refuse(refused, code):
 
 
 def _create(args):
-    path, sha = store.create(
+    """What the birth of a canvas prints: the two ids it minted, then the sha.
+
+    The ids first, for the reason `_edited` already gives for `insert`: an id is
+    the thing the caller did not know, so it goes above the sha. `create` mints
+    two and used to print neither, which made every caller's first command after
+    it a `read` to find out what it had just made.
+
+    One name each, and not `Canvas-Node:` twice. Two lines differing only in
+    their position would reproduce in the terminal exactly the thing
+    `node-naming.md` rules the document does not carry — which of the two is
+    which — and the caller would be left counting. `Canvas-Problem:` and
+    `Canvas-Expected-Value:` name the two flags `create` already takes, one for
+    one. Inventing a name rather than bending `Canvas-Node:` is the move
+    `freeze` already made, and the cost is the same one `freeze` already pays: a
+    caller grepping `Canvas-Node:` across the verbs to collect minted ids does
+    not see `create`'s.
+
+    The two existing lines are unchanged and in their existing order, below.
+    """
+    path, sha, problem_id, value_id = store.create(
         args.ledger_id, args.problem, args.expected_value, args.author
     )
-    sys.stdout.write("Canvas-Base: %s\nCanvas-File: %s\n" % (sha, path))
+    sys.stdout.write(
+        "Canvas-Problem: %s\nCanvas-Expected-Value: %s\n"
+        "Canvas-Base: %s\nCanvas-File: %s\n"
+        % (problem_id, value_id, sha, path)
+    )
     return 0
 
 
 def _read(args):
-    sha, body, problems = store.read(args.ledger_id)
-    # The sha first, on one line, under the same name the next write declares it
-    # under. One name for one thing: the value a read hands out is literally the
-    # value the next write puts in `--base` and the commit records. Full 40
-    # characters — handing out an abbreviation as an identity key is a hazard as
-    # the log grows, and git will still resolve an abbreviation supplied later.
-    #
-    # The cost, stated because it is real: stdout is not itself a valid XML
-    # document. `canvas read <id> | tail -n +2` is the document alone, byte for
-    # byte what is on disk.
+    """The sha, then whatever else was asked for, then the document.
+
+    The sha first, on one line, under the same name the next write declares it
+    under, and unaffected by every flag below. One name for one thing: the value
+    a read hands out is literally the value the next write puts in `--base` and
+    the commit records. Full 40 characters — handing out an abbreviation as an
+    identity key is a hazard as the log grows, and git will still resolve an
+    abbreviation supplied later.
+
+    Then the header the store composed: one `Canvas-Wrote:` line per node
+    printed under `--provenance`, and the `Canvas-News:` block under `--since`.
+    Both are asked for and neither is on by default — the canvas goes into every
+    step's prompt and is bounded by what is affordable to send every time, so a
+    line per node on every read would be a permanent tax on the artifact.
+
+    The cost, stated because it is real: stdout is not itself a valid XML
+    document. **The document begins at the `<?xml` declaration line, and
+    everything before it is the header** — so `canvas read <id> | tail -n +2` is
+    the document alone for an unflagged read, byte for byte what is on disk, and
+    `sed -n '/^<?xml/,$p'` is the document alone under any combination of flags.
+    """
+    sha, body, problems, header = store.read(
+        args.ledger_id,
+        node_ids=args.node_ids,
+        node_types=args.node_types,
+        since=args.since,
+        with_provenance=args.provenance,
+    )
     out = sys.stdout.buffer if hasattr(sys.stdout, "buffer") else sys.stdout
     out.write(("Canvas-Base: %s\n" % sha).encode("utf-8"))
+    for line in header:
+        out.write(("%s\n" % line).encode("utf-8"))
     out.write(body)
     out.flush()
     if not problems:
@@ -357,6 +403,56 @@ def _add_position(parser):
         help=(
             "as the last child of that container, which is how the first "
             "position of an empty one is named; 'root' names the canvas itself"
+        ),
+    )
+
+
+def _add_selection(parser):
+    """`--id` and `--type` on `read`, and on nothing else.
+
+    A node by its id, and a node type by name. `--type` is the word `replace`
+    and `insert` already use for the same concept, and `--id` is the word every
+    other verb's positional `node-id` is: one name for one thing. Both are flags
+    here rather than positionals because they repeat and because they sit beside
+    each other.
+
+    **They union.** Every occurrence of either adds to one selection, and a node
+    is printed if any selector names it. Not intersection: an id intersected
+    with a type is either that one node or nothing.
+
+    **They reach `read` and no verb.** `engineering-spec.md`'s argument against
+    a selector, and `README.md`'s *Addressing is by explicit node id*, are both
+    about **addressing** — a selector on a write, which can silently touch two
+    nodes when the writer meant one, which is what IWE's `--expect` guard exists
+    to catch. A read selector applies nothing, mints nothing and commits
+    nothing, and the matches *are* the output: there is no unseen second match
+    for a guard to catch and the count is legible by reading what was printed.
+    So there is no `--expect` here, and no selector on any of the four verbs.
+
+    **An unknown type name is not refused.** Refusing it would need a list of
+    legal element names in Python, and the vocabulary is written down once, in
+    `schema/canvas.rng`, and nowhere else. `--type decision` matches nothing and
+    says so, exactly as `document.new_node` builds a `<decision>` and lets the
+    validator be the only thing that decides.
+    """
+    parser.add_argument(
+        "--id",
+        action="append",
+        dest="node_ids",
+        metavar="NODE-ID",
+        help=(
+            "print this node and its subtree; repeatable, and refused at exit "
+            "1 if the canvas holds no such node"
+        ),
+    )
+    parser.add_argument(
+        "--type",
+        action="append",
+        dest="node_types",
+        metavar="NAME",
+        help=(
+            "print every node of this type and its subtree; repeatable, and a "
+            "type that matches nothing is an empty canvas at exit 0"
         ),
     )
 
@@ -634,13 +730,42 @@ def build_parser():
 
     read = verbs.add_parser(
         "read",
-        help="print the canvas and the sha to write against",
+        help="print the canvas, or part of it, and the sha to write against",
         description=(
-            "Print the current commit sha, then the canvas document. Writes "
-            "nothing and commits nothing."
+            "Print the current commit sha, then the canvas document. With "
+            "--id or --type, print the part of it those select instead: they "
+            "union, a selected node brings its subtree, and the sha is "
+            "unchanged by the selection. With --provenance, print one "
+            "Canvas-Wrote: line per node printed, saying who last wrote it and "
+            "at which commit, read off the log the store already writes and "
+            "held nowhere in the document. With --since, print what changed "
+            "between that sha and the head, before writing anything against "
+            "it. The document begins at the <?xml line and everything above it "
+            "is the header. Writes nothing, commits nothing, initialises no "
+            "repository, and acquires nothing: the answer can be stale the "
+            "moment it is printed, and --base on the next write is still the "
+            "only thing that refuses."
         ),
     )
     read.add_argument("ledger_id", help="the ledger row whose canvas to print")
+    _add_selection(read)
+    read.add_argument(
+        "--provenance",
+        action="store_true",
+        help=(
+            "print one Canvas-Wrote: <node-id> <sha> <author> line per node "
+            "printed, in the order the nodes are printed"
+        ),
+    )
+    read.add_argument(
+        "--since",
+        metavar="SHA",
+        help=(
+            "also report what changed in this canvas between that sha and the "
+            "head, applying nothing; the same Canvas-News: block a write's "
+            "soft branch prints after the fact"
+        ),
+    )
     read.set_defaults(handler=_read)
 
     render = verbs.add_parser(
@@ -786,7 +911,11 @@ def _os_refusal(error, args):
     """
     nodes = []
     about = []
-    for attribute, label in (("ledger_id", "ledger id"), ("base", "option --base")):
+    for attribute, label in (
+        ("ledger_id", "ledger id"),
+        ("base", "option --base"),
+        ("since", "option --since"),
+    ):
         value = getattr(args, attribute, None)
         if value:
             about.append("%s %s" % (label, value))

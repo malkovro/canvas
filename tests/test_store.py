@@ -100,6 +100,41 @@ class StoreTestCase(unittest.TestCase):
     def canvas_file(self, ledger_id="a-ledger-row"):
         return os.path.join(self.canvas_dir, ledger_id + ".xml")
 
+    def header(self, stdout):
+        """A read's header: every line above the `<?xml` declaration.
+
+        README's boundary rule as the tests read it — the document begins at
+        the declaration line and everything before it is the header. A diff in
+        the header cannot be mistaken for it: a unified diff prefixes every
+        line with a space, a `+` or a `-`, so only the document's own
+        declaration starts at column zero.
+        """
+        lines = []
+        for line in stdout.decode("utf-8").splitlines():
+            if line.startswith("<?xml"):
+                break
+            lines.append(line)
+        return lines
+
+    def printed(self, stdout, name):
+        """The values of one header line, in the order they were printed."""
+        return [
+            line.split(": ", 1)[1]
+            for line in self.header(stdout)
+            if line.startswith(name + ": ")
+        ]
+
+    def document(self, stdout):
+        """The document alone, under any combination of flags."""
+        text = stdout.decode("utf-8")
+        return text[text.index("<?xml"):]
+
+    def selected(self, *args, **kwargs):
+        """Run a read that is expected to work, and parse what it printed."""
+        code, stdout, stderr = self.run_canvas("read", *args)
+        self.assertEqual(kwargs.get("code", 0), code, stderr)
+        return stdout
+
     def subjects(self):
         return self.git("log", "--reverse", "--format=%s").splitlines()
 
@@ -115,10 +150,13 @@ class CreateFromACleanWorkspace(StoreTestCase):
         code, stdout, stderr = self.create()
         self.assertEqual(0, code)
         self.assertEqual("", stderr)
-        lines = stdout.decode("utf-8").splitlines()
-        self.assertTrue(lines[0].startswith("Canvas-Base: "), lines)
-        self.assertTrue(SHA.match(lines[0].split(": ", 1)[1]), lines[0])
-        self.assertEqual("Canvas-File: %s" % self.canvas_file(), lines[1])
+        # By name and not by position: `create` now prints the ids it minted
+        # above these two, and what a caller parses is the name.
+        printed = dict(
+            line.split(": ", 1) for line in stdout.decode("utf-8").splitlines()
+        )
+        self.assertTrue(SHA.match(printed["Canvas-Base"]), printed)
+        self.assertEqual(self.canvas_file(), printed["Canvas-File"])
 
     def test_the_file_lands_beside_the_ledger_at_the_documented_path(self):
         self.create()
@@ -305,16 +343,30 @@ class TheReadPath(StoreTestCase):
         with open(self.canvas_file(), "rb") as handle:
             before_bytes = handle.read()
         before_listing = sorted(os.listdir(self.canvas_dir))
+        a_node_id = list(ElementTree.parse(self.canvas_file()).getroot())[0].get("id")
 
-        code, _, _ = self.run_canvas("read", "a-ledger-row")
-        self.assertEqual(0, code)
+        # Every flag the read path takes, and the bare read. None of them is a
+        # write, a lock, or anything that initialises: all any of them adds is
+        # git log, git diff, git rev-parse and git merge-base.
+        for flags in (
+            (),
+            ("--type", "text"),
+            ("--id", a_node_id),
+            ("--provenance",),
+            ("--since", before_sha.strip()),
+            ("--type", "question", "--provenance", "--since", before_sha.strip()),
+        ):
+            code, _, stderr = self.run_canvas("read", "a-ledger-row", *flags)
+            self.assertEqual(0, code, "%s\n%s" % (flags, stderr))
 
-        self.assertEqual(before_sha, self.git("rev-parse", "HEAD"))
-        self.assertEqual(before_log, self.git("log", "--format=%H"))
-        with open(self.canvas_file(), "rb") as handle:
-            self.assertEqual(before_bytes, handle.read())
-        self.assertEqual(before_listing, sorted(os.listdir(self.canvas_dir)))
-        self.assertEqual("", self.git("status", "--porcelain"))
+            self.assertEqual(before_sha, self.git("rev-parse", "HEAD"), flags)
+            self.assertEqual(before_log, self.git("log", "--format=%H"), flags)
+            with open(self.canvas_file(), "rb") as handle:
+                self.assertEqual(before_bytes, handle.read(), flags)
+            self.assertEqual(
+                before_listing, sorted(os.listdir(self.canvas_dir)), flags
+            )
+            self.assertEqual("", self.git("status", "--porcelain"), flags)
 
     def test_the_document_alone_is_what_is_on_disk_byte_for_byte(self):
         self.create()
@@ -339,11 +391,23 @@ class TheReadPath(StoreTestCase):
 
     def test_read_does_not_create_a_repository(self):
         # A read is a read. A workspace with no canvas repository has no canvas
-        # to read, and initialising one to say so would be a write.
-        code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
-        self.assertEqual(1, code, stderr)
-        self.assertEqual(b"", stdout)
-        self.assertFalse(os.path.exists(os.path.join(self.workspace, "state")))
+        # to read, and initialising one to say so would be a write. True under
+        # every flag: none of them is a reason to make a repository either.
+        for flags in (
+            (),
+            ("--type", "question"),
+            ("--id", "abcd"),
+            ("--provenance",),
+            ("--since", "0123456789abcdef0123456789abcdef01234567"),
+        ):
+            code, stdout, stderr = self.run_canvas(
+                "read", "a-ledger-row", *flags
+            )
+            self.assertEqual(1, code, "%s\n%s" % (flags, stderr))
+            self.assertEqual(b"", stdout, flags)
+            self.assertFalse(
+                os.path.exists(os.path.join(self.workspace, "state")), flags
+            )
 
 
 class TheRepositoryIsNeverReinitialised(StoreTestCase):
@@ -826,6 +890,543 @@ class TheFourVerbsApplyToARealCanvas(VerbTestCase):
             self.assertEqual(
                 "Canvas-Base: %s" % self.git("rev-parse", "HEAD").strip(), lines[1]
             )
+
+
+class ReadSurfaceTestCase(VerbTestCase):
+    """A canvas with something in it worth selecting: the two first nodes, a
+    `<question>` beside them, and a `<section>` with a `<text>` inside it."""
+
+    def setUp(self):
+        VerbTestCase.setUp(self)
+        self.question_id = self.inserted(
+            "--after", self.problem_id,
+            "--type", "question",
+            "--text", "Does the store re-read before it writes?",
+            "--why",
+            "the open question this canvas turns on; unlike %s, which states "
+            "the problem, this names what is unknown about it, and it is "
+            "retired when the write path has been read" % self.problem_id,
+        )
+        self.section_id = self.inserted(
+            "--into", "root",
+            "--type", "section",
+            "--title", "Findings",
+            "--why",
+            "a container for what the read path learns, distinct from the "
+            "problem node %s which only states the task; unnecessary if no "
+            "finding ever accumulates under it" % self.problem_id,
+        )
+        self.child_id = self.inserted(
+            "--into", self.section_id,
+            "--text", "The log already carries the author.",
+            "--why",
+            "the first finding under section %s; unlike the problem node %s "
+            "it records what was observed rather than what was asked"
+            % (self.section_id, self.problem_id),
+        )
+
+    def nodes_in(self, stdout):
+        """The ids of the nodes a read printed, in the order it printed them."""
+        root = ElementTree.fromstring(self.document(stdout))
+        return [
+            element.get("id")
+            for element in root.iter()
+            if element is not root and element.get("id")
+        ]
+
+
+class TheReadSelectorReturnsPartOfACanvas(ReadSurfaceTestCase):
+    """The done condition's first clause: `read` can return part of a canvas
+    selected by node id and by node type, and still names the sha it read."""
+
+    def test_an_id_returns_that_node_and_nothing_else(self):
+        stdout = self.selected("a-ledger-row", "--id", self.value_id)
+        self.assertEqual([self.value_id], self.nodes_in(stdout))
+
+    def test_a_type_returns_every_node_of_that_type(self):
+        stdout = self.selected("a-ledger-row", "--type", "text")
+        # The two first nodes and the one inside the section, in document
+        # order, and not the <question> or the <section> itself.
+        self.assertEqual(
+            [self.problem_id, self.value_id, self.child_id],
+            self.nodes_in(stdout),
+        )
+
+    def test_a_type_answers_the_question_the_whole_document_used_to(self):
+        # The literal done condition of the hand-driven task: are there any
+        # question nodes left, without piping the document through grep.
+        stdout = self.selected("a-ledger-row", "--type", "question")
+        self.assertEqual([self.question_id], self.nodes_in(stdout))
+
+    def test_the_selectors_union_rather_than_intersect(self):
+        stdout = self.selected(
+            "a-ledger-row", "--id", self.problem_id, "--type", "question"
+        )
+        self.assertEqual(
+            [self.problem_id, self.question_id], self.nodes_in(stdout)
+        )
+
+    def test_a_selected_node_brings_its_subtree(self):
+        stdout = self.selected("a-ledger-row", "--id", self.section_id)
+        self.assertEqual([self.section_id, self.child_id], self.nodes_in(stdout))
+
+    def test_a_node_selected_twice_over_is_printed_once_in_place(self):
+        stdout = self.selected(
+            "a-ledger-row", "--id", self.section_id, "--id", self.child_id
+        )
+        self.assertEqual([self.section_id, self.child_id], self.nodes_in(stdout))
+        root = ElementTree.fromstring(self.document(stdout))
+        self.assertEqual(1, len(list(root)))
+
+    def test_the_selection_keeps_the_roots_own_attributes(self):
+        stdout = self.selected("a-ledger-row", "--type", "question")
+        root = ElementTree.fromstring(self.document(stdout))
+        stored = self.tree()
+        self.assertEqual("canvas", root.tag)
+        self.assertEqual(stored.attrib, root.attrib)
+
+    def test_a_selected_read_still_names_the_sha_it_read(self):
+        head = self.git("rev-parse", "HEAD").strip()
+        for flags in (
+            ("--id", self.value_id),
+            ("--type", "question"),
+            ("--type", "text", "--id", self.question_id),
+        ):
+            stdout = self.selected("a-ledger-row", *flags)
+            self.assertEqual(
+                ["Canvas-Base: %s" % head], self.header(stdout), flags
+            )
+
+    def test_the_sha_is_the_one_an_unselected_read_hands_out(self):
+        whole = self.selected("a-ledger-row")
+        part = self.selected("a-ledger-row", "--type", "question")
+        self.assertEqual(
+            self.printed(whole, "Canvas-Base"),
+            self.printed(part, "Canvas-Base"),
+        )
+
+    def test_an_unselected_read_is_still_the_file_byte_for_byte(self):
+        code, stdout, _ = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(0, code)
+        with open(self.canvas_file(), "rb") as handle:
+            self.assertEqual(handle.read(), b"\n".join(stdout.split(b"\n")[1:]))
+
+    def test_a_type_that_matches_nothing_is_an_empty_canvas_at_exit_zero(self):
+        # A type is a predicate and "none" is its answer, not its failure.
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--type", "list"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("", stderr)
+        self.assertEqual([], self.nodes_in(stdout))
+
+    def test_a_type_name_the_vocabulary_does_not_have_is_not_refused(self):
+        # Refusing it would need a list of legal element names in Python, and
+        # the vocabulary is written down once, in schema/canvas.rng.
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--type", "decision"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual([], self.nodes_in(stdout))
+
+    def test_an_id_that_names_no_node_of_this_canvas_is_refused(self):
+        # An id is an assertion that a node exists, so a name that matches
+        # nothing is a wrong request: history's rule for the same mistake.
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--id", "zzzz"
+        )
+        self.assertEqual(1, code, stderr)
+        self.assertEqual(b"", stdout)
+        self.assertIn("Canvas-Node: zzzz", stderr)
+        self.assertIn("Canvas-Next: ", stderr)
+
+    def test_one_missing_id_refuses_the_whole_selection(self):
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--id", self.value_id, "--id", "zzzz"
+        )
+        self.assertEqual(1, code, stderr)
+        self.assertEqual(b"", stdout)
+        self.assertIn("Canvas-Node: zzzz", stderr)
+
+    def test_the_root_is_not_a_node_and_cannot_be_selected(self):
+        code, _, stderr = self.run_canvas("read", "a-ledger-row", "--id", "root")
+        self.assertEqual(1, code, stderr)
+
+    def test_a_selected_read_changes_nothing_at_all(self):
+        before = self.state()
+        listing = sorted(os.listdir(self.canvas_dir))
+        for flags in (
+            ("--id", self.value_id),
+            ("--type", "question"),
+            ("--type", "list"),
+            ("--id", "zzzz"),
+        ):
+            self.run_canvas("read", "a-ledger-row", *flags)
+            self.assertEqual(before, self.state(), flags)
+            self.assertEqual(listing, sorted(os.listdir(self.canvas_dir)), flags)
+
+    def test_no_editing_verb_takes_a_selector(self):
+        # The read selector is not addressing: no write takes one, so IWE's
+        # --expect match-count guard is still unnecessary here.
+        for verb in ("replace", "insert", "remove", "move"):
+            code, _, stderr = self.verb(verb, "--type", "text", "--why", "w")
+            self.assertEqual(2, code, stderr)
+            code, _, stderr = self.verb(verb, "--id", self.value_id, "--why", "w")
+            self.assertEqual(2, code, stderr)
+
+
+class TheReadSurfaceSaysWhoWroteEachNode(ReadSurfaceTestCase):
+    """The done condition's second clause: the read surface says who last wrote
+    each node and at which commit — derived from the log, held nowhere in the
+    document."""
+
+    def wrote(self, stdout):
+        """The Canvas-Wrote: lines, as {node id: (sha, author)}."""
+        found = {}
+        for value in self.printed(stdout, "Canvas-Wrote"):
+            node_id, sha, author = value.split(" ", 2)
+            found[node_id] = (sha, author)
+        return found
+
+    def test_every_node_printed_gets_exactly_one_line(self):
+        stdout = self.selected("a-ledger-row", "--provenance")
+        printed = self.printed(stdout, "Canvas-Wrote")
+        self.assertEqual(len(self.nodes_in(stdout)), len(printed))
+        self.assertEqual(
+            self.nodes_in(stdout),
+            [value.split(" ", 1)[0] for value in printed],
+        )
+
+    def test_it_names_the_commit_that_wrote_the_node(self):
+        stdout = self.selected("a-ledger-row", "--provenance")
+        for node_id, (sha, _) in self.wrote(stdout).items():
+            self.assertTrue(SHA.match(sha), (node_id, sha))
+            # The last commit whose Canvas-Node: trailer names that node.
+            self.assertEqual(self.history(node_id)[0], sha, node_id)
+
+    def test_it_names_the_author_the_commit_carries(self):
+        stdout = self.selected("a-ledger-row", "--provenance")
+        for node_id, (sha, author) in self.wrote(stdout).items():
+            # The author is the trailer's value verbatim, spaces and pipes and
+            # all, which is why it is last on the line and free text.
+            self.assertIn(
+                "Canvas-Author: %s" % author,
+                self.git("show", "--format=%B", "--no-patch", sha),
+                node_id,
+            )
+
+    def test_it_follows_the_last_writer_and_not_the_first(self):
+        first = self.wrote(self.selected("a-ledger-row", "--provenance"))
+        code, _, stderr = self.verb(
+            "replace", self.child_id,
+            "--text", "The log already carries the author, and the sha.",
+            "--why",
+            "sharpening finding %s: unlike its container %s it now names both "
+            "facts the read surface hands back" % (self.child_id, self.section_id),
+            "--author", "someone-else | by-hand",
+        )
+        self.assertEqual(0, code, stderr)
+        after = self.wrote(self.selected("a-ledger-row", "--provenance"))
+        self.assertNotEqual(first[self.child_id], after[self.child_id])
+        self.assertEqual("someone-else | by-hand", after[self.child_id][1])
+        # Every other node is where it was: one node moved, one line changed.
+        for node_id in first:
+            if node_id != self.child_id:
+                self.assertEqual(first[node_id], after[node_id], node_id)
+
+    def test_a_move_counts_as_having_written_the_node(self):
+        # A move is a commit that names the node and it bumps v, and v is
+        # exactly the count of those commits. Any other rule would make this
+        # disagree with the number in the file.
+        before = self.wrote(self.selected("a-ledger-row", "--provenance"))
+        code, _, stderr = self.verb(
+            "move", self.question_id, "--into", self.section_id,
+            "--why",
+            "the question %s belongs under the findings section %s now that "
+            "the findings are what would answer it" % (self.question_id, self.section_id),
+        )
+        self.assertEqual(0, code, stderr)
+        after = self.wrote(self.selected("a-ledger-row", "--provenance"))
+        self.assertNotEqual(
+            before[self.question_id][0], after[self.question_id][0]
+        )
+        self.assertEqual(
+            len(self.history(self.question_id)),
+            int(self.node(self.question_id).get("v")),
+        )
+
+    def test_it_composes_with_a_selector(self):
+        stdout = self.selected(
+            "a-ledger-row", "--type", "question", "--provenance"
+        )
+        self.assertEqual([self.question_id], list(self.wrote(stdout)))
+        self.assertEqual([self.question_id], self.nodes_in(stdout))
+
+    def test_a_node_no_commit_names_is_said_to_be_unrecorded(self):
+        # Only reachable by hand-editing the file, which the store treats as
+        # out of band. The line is printed all the same, so a caller can count
+        # lines against nodes.
+        with open(self.canvas_file(), "r", encoding="utf-8") as handle:
+            stored = handle.read()
+        with open(self.canvas_file(), "w", encoding="utf-8") as handle:
+            handle.write(
+                stored.replace(
+                    "</canvas>", '  <text id="aaaa" v="1">By hand.</text>\n</canvas>'
+                )
+            )
+        stdout = self.selected("a-ledger-row", "--provenance")
+        self.assertEqual(("unrecorded", "unrecorded"), self.wrote(stdout)["aaaa"])
+        self.assertEqual(len(self.nodes_in(stdout)), len(self.wrote(stdout)))
+
+    def test_none_of_it_reaches_the_stored_document(self):
+        # The vocabulary is closed: provenance is a property of the read
+        # surface and of nothing else.
+        self.selected("a-ledger-row", "--provenance")
+        names = set()
+        for element in self.tree().iter():
+            names.update(element.attrib)
+        self.assertTrue(
+            names <= {"ledger", "schema", "id", "v", "title", "href", "answered"},
+            names,
+        )
+
+    def test_the_default_read_prints_no_such_line(self):
+        stdout = self.selected("a-ledger-row")
+        self.assertEqual([], self.printed(stdout, "Canvas-Wrote"))
+
+    def test_asking_who_wrote_it_writes_nothing(self):
+        before = self.state()
+        self.selected("a-ledger-row", "--provenance")
+        self.selected("a-ledger-row", "--type", "question", "--provenance")
+        self.assertEqual(before, self.state())
+
+
+class WhatChangedSinceAShaWithoutApplyingAnything(ReadSurfaceTestCase):
+    """The done condition's third clause: one command reports what changed
+    since a given sha without applying anything."""
+
+    def moved_since(self, base, *flags):
+        stdout = self.selected("a-ledger-row", "--since", base, *flags)
+        news = self.printed(stdout, "Canvas-News")
+        self.assertEqual(1, len(news), news)
+        return stdout, news[0]
+
+    def test_it_reports_the_commits_and_the_diff_since_that_sha(self):
+        base = self.git("rev-parse", "HEAD").strip()
+        code, _, stderr = self.verb(
+            "replace", self.child_id,
+            "--text", "The log carries the author and the sha.",
+            "--why",
+            "sharpening finding %s: unlike its container %s it names what the "
+            "read surface hands back" % (self.child_id, self.section_id),
+        )
+        self.assertEqual(0, code, stderr)
+        stdout, news = self.moved_since(base)
+        head = self.git("rev-parse", "HEAD").strip()
+        self.assertEqual("1 commit(s) between %s and %s" % (base, head), news)
+        header = "\n".join(self.header(stdout))
+        self.assertIn("replace %s:" % self.child_id, header)
+        self.assertIn("diff --git", header)
+        self.assertIn("+", header)
+
+    def test_it_reports_zero_when_nothing_moved(self):
+        head = self.git("rev-parse", "HEAD").strip()
+        stdout, news = self.moved_since(head)
+        self.assertEqual("0 commit(s) between %s and %s" % (head, head), news)
+        self.assertEqual(
+            ["Canvas-Base: %s" % head, "Canvas-News: %s" % news],
+            self.header(stdout),
+        )
+
+    def test_it_is_scoped_to_this_canvas(self):
+        base = self.git("rev-parse", "HEAD").strip()
+        self.create(ledger_id="another-row")
+        head = self.git("rev-parse", "HEAD").strip()
+        self.assertNotEqual(base, head)
+        _, news = self.moved_since(base)
+        self.assertEqual("0 commit(s) between %s and %s" % (base, head), news)
+
+    def test_it_still_prints_the_document_and_the_sha(self):
+        head = self.git("rev-parse", "HEAD").strip()
+        stdout = self.selected("a-ledger-row", "--since", head)
+        self.assertEqual(["Canvas-Base: %s" % head], self.header(stdout)[:1])
+        with open(self.canvas_file(), "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), self.document(stdout))
+
+    def test_it_composes_with_a_selector_and_with_provenance(self):
+        head = self.git("rev-parse", "HEAD").strip()
+        stdout = self.selected(
+            "a-ledger-row", "--type", "question", "--provenance",
+            "--since", head,
+        )
+        # The order the header is composed in: the sha, then who wrote what,
+        # then the news, then the document.
+        names = [line.split(": ", 1)[0] for line in self.header(stdout)]
+        self.assertEqual(["Canvas-Base", "Canvas-Wrote", "Canvas-News"], names)
+        self.assertEqual([self.question_id], self.nodes_in(stdout))
+
+    def test_an_abbreviation_git_can_resolve_is_accepted(self):
+        base = self.git("rev-parse", "HEAD").strip()
+        _, news = self.moved_since(base[:7])
+        # Resolved to the full sha, exactly as --base is.
+        self.assertIn(base, news)
+
+    def test_a_sha_this_repository_never_handed_out_is_refused(self):
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row",
+            "--since", "0123456789abcdef0123456789abcdef01234567",
+        )
+        self.assertEqual(1, code, stderr)
+        self.assertEqual(b"", stdout)
+        self.assertIn("--since", stderr)
+        self.assertIn("Canvas-Next: ", stderr)
+
+    def test_something_that_is_not_a_sha_at_all_is_the_invocation_being_wrong(self):
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--since", "the-caching-section"
+        )
+        self.assertEqual(2, code, stderr)
+        self.assertEqual(b"", stdout)
+        self.assertIn("--since", stderr)
+
+    def test_it_never_advises_dropping_a_flag_a_read_asked_on_purpose(self):
+        # `--base`'s refusal offers "drop it to ask for no staleness check at
+        # all", which is wrong advice for a question somebody asked.
+        _, _, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--since", "the-caching-section"
+        )
+        self.assertNotIn("no staleness check", stderr)
+
+    def test_asking_writes_nothing_commits_nothing_and_initialises_nothing(self):
+        base = self.git("rev-parse", "HEAD").strip()
+        before = self.state()
+        listing = sorted(os.listdir(self.canvas_dir))
+        for flags in (
+            ("--since", base),
+            ("--since", base[:7], "--provenance"),
+            ("--since", "0123456789abcdef0123456789abcdef01234567"),
+            ("--since", "not-a-sha"),
+        ):
+            self.run_canvas("read", "a-ledger-row", *flags)
+            self.assertEqual(before, self.state(), flags)
+            self.assertEqual(listing, sorted(os.listdir(self.canvas_dir)), flags)
+
+    def test_it_cannot_be_spelled_without_a_base(self):
+        # No default and no "all" form: the tool never offers whole-canvas
+        # history as *the* question.
+        code, _, stderr = self.run_canvas("read", "a-ledger-row", "--since")
+        self.assertEqual(2, code, stderr)
+
+    def test_no_read_flag_asks_for_a_whole_canvas_history(self):
+        code, stdout, _ = self.run_canvas("read", "--help")
+        self.assertEqual(0, code)
+        printed = stdout.decode("utf-8")
+        for absent in ("--history", "--log", "--all", "--everything"):
+            self.assertNotIn(absent, printed)
+
+
+class TheSubcommandsAreStillNine(StoreTestCase):
+    """None of the read path's new answers is a new verb."""
+
+    def test_the_tool_offers_exactly_the_nine_it_documented(self):
+        code, stdout, _ = self.run_canvas("--help")
+        self.assertEqual(0, code)
+        printed = stdout.decode("utf-8")
+        for verb in (
+            "create", "read", "render", "history",
+            "replace", "insert", "remove", "move", "freeze",
+        ):
+            self.assertIn(verb, printed)
+        for absent in ("select", "provenance", "since", "changed", "diff", "log"):
+            code, _, stderr = self.run_canvas(absent, "a-ledger-row")
+            self.assertEqual(2, code, stderr)
+
+
+class CreatePrintsTheIdsItMinted(StoreTestCase):
+    """The done condition's fourth clause: `create` prints the ids it minted,
+    so a caller's first command after it is no longer a `read`."""
+
+    def minted(self, stdout):
+        return dict(
+            line.split(": ", 1) for line in stdout.decode("utf-8").splitlines()
+        )
+
+    def test_it_prints_one_id_for_each_of_its_two_arguments(self):
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        self.assertTrue(NODE_ID.match(printed["Canvas-Problem"]), printed)
+        self.assertTrue(NODE_ID.match(printed["Canvas-Expected-Value"]), printed)
+        self.assertNotEqual(
+            printed["Canvas-Problem"], printed["Canvas-Expected-Value"]
+        )
+
+    def test_the_ids_it_prints_are_the_nodes_it_made(self):
+        _, stdout, _ = self.create(problem="The problem.", value="The value.")
+        printed = self.minted(stdout)
+        root = ElementTree.parse(self.canvas_file()).getroot()
+        found = {node.get("id"): node.text for node in root}
+        self.assertEqual("The problem.", found[printed["Canvas-Problem"]])
+        self.assertEqual("The value.", found[printed["Canvas-Expected-Value"]])
+
+    def test_each_id_is_the_one_its_own_insert_commit_names(self):
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        for name, subject in (
+            ("Canvas-Problem", "the problem the ledger row states"),
+            ("Canvas-Expected-Value", "the expected value the ledger row states"),
+        ):
+            commits = self.git(
+                "log", "--grep=Canvas-Node: %s" % printed[name], "--format=%s"
+            ).splitlines()
+            self.assertEqual(
+                ["insert %s: %s" % (printed[name], subject)], commits
+            )
+
+    def test_the_caller_never_has_to_count_to_tell_them_apart(self):
+        # The finding is not only that the ids were unprinted; it is that order
+        # was the only thing telling them apart.
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        self.assertIn("Canvas-Problem", printed)
+        self.assertIn("Canvas-Expected-Value", printed)
+        self.assertEqual([], [
+            line for line in stdout.decode("utf-8").splitlines()
+            if line.startswith("Canvas-Node: ")
+        ])
+
+    def test_the_two_lines_it_already_printed_are_unchanged(self):
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        self.assertTrue(SHA.match(printed["Canvas-Base"]), printed)
+        self.assertEqual(self.canvas_file(), printed["Canvas-File"])
+        lines = stdout.decode("utf-8").splitlines()
+        self.assertLess(
+            lines.index("Canvas-Base: %s" % printed["Canvas-Base"]),
+            lines.index("Canvas-File: %s" % printed["Canvas-File"]),
+        )
+
+    def test_a_first_command_after_create_is_no_longer_a_read(self):
+        # What the round trip was for: the id is usable straight away.
+        _, stdout, _ = self.create()
+        printed = self.minted(stdout)
+        code, out, stderr = self.run_canvas(
+            "replace", "a-ledger-row", printed["Canvas-Problem"],
+            "--text", "The problem, restated.",
+            "--why",
+            "restating the problem node %s from the ledger row's own words; "
+            "unlike the expected value %s it says what is wrong rather than "
+            "what good looks like"
+            % (printed["Canvas-Problem"], printed["Canvas-Expected-Value"]),
+            "--base", printed["Canvas-Base"],
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn(
+            "Canvas-Node: %s" % printed["Canvas-Problem"], out.decode("utf-8")
+        )
+
+    def test_create_still_mints_exactly_two_ids_in_three_commits(self):
+        self.create()
+        self.assertEqual(3, len(self.subjects()))
 
 
 class ReplaceCanProduceADifferentNodeType(VerbTestCase):
@@ -2203,7 +2804,7 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
         # document, and it is the last one a canvas ever takes.
         "create", "insert", "replace", "remove", "move", "freeze",
         # Reads, lookups and pure functions.
-        "read", "history", "Edit", "canvas_directory", "canvas_path",
+        "read", "history", "provenance", "Edit", "canvas_directory", "canvas_path",
         "is_repository", "ensure_repository", "head_sha", "is_free", "mint",
         "require_reason", "history_length", "next_version", "default_author",
         "preflight", "frozen", "Freeze",

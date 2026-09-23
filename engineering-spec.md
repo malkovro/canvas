@@ -168,8 +168,16 @@ This spec does not need the flag, and the reason is worth writing down —
 addressing here is by explicit node id, so a selector can never match two. That
 is the same property bought more cheaply, and it is the argument against ever
 adding selector-based addressing: the day `canvas replace --matching "the
-caching section"` exists, `--expect` has to exist beside it. What is worth
-copying unconditionally is IWE's *error surface*. A refusal names every node it
+caching section"` exists, `--expect` has to exist beside it.
+
+That sentence is about **addressing** — a selector on a verb that applies
+something — and it is not contradicted by a selector on the read. `canvas read
+--id` and `canvas read --type` exist, and they apply nothing, mint nothing and
+commit nothing: the guard exists to catch a second match a caller never saw,
+and on a read the matches *are* the output, so there is no unseen match and the
+count is legible by reading what was printed. No editing verb takes a selector
+and none is being given one; the day one does, `--expect` still has to exist
+beside it. What is worth copying unconditionally is IWE's *error surface*. A refusal names every node it
 matched and how to narrow, because an agent can act on that and cannot act on
 the word "refused".
 

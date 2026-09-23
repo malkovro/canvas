@@ -7,6 +7,8 @@ This repository is the canonical home for both Canvas specifications:
 - [Product spec](https://malkovro.github.io/canvas/product-spec.html)
 - [Engineering spec](https://malkovro.github.io/canvas/engineering-spec.html)
 - [Node identity](https://malkovro.github.io/canvas/node-identity.html) — how an `id` is minted, what preserves it under each of the four verbs, and what bumps `v`
+- [Node state](https://malkovro.github.io/canvas/node-state.html) — whether a canvas may say anything about a node's state, and how much: `answered` on `<question>`, and nothing else anywhere
+- [Node naming](https://malkovro.github.io/canvas/node-naming.html) — whether what `create` mints is distinguishable inside the document itself, and where the distinction lives instead
 - [Rendering](https://malkovro.github.io/canvas/rendering.html) — what the renderer does with a `<figure>`, and how the index of open questions and the per-node marker treat a question that has been answered
 
 ## History/source
@@ -139,7 +141,7 @@ path filter, so a repository per canvas would path-scope it by accident and
 hand out an id another canvas already used.
 
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
-    bin/canvas read    <ledger_id>
+    bin/canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
     bin/canvas render  <ledger_id>
     bin/canvas history <ledger_id> <node-id>
     bin/canvas replace <ledger_id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
@@ -167,8 +169,22 @@ and the path:
 
     $ bin/canvas create my-task --problem "The store does not exist." \
                                 --expected-value "A writer can learn what to write against."
+    Canvas-Problem: y8dk
+    Canvas-Expected-Value: itpe
     Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
     Canvas-File: /…/state/canvas/my-task.xml
+
+**The two ids first**, because an id is the thing the caller did not know —
+`insert` prints `Canvas-Node:` for the same reason. One name each, and not
+`Canvas-Node:` twice: two lines differing only in their position would leave the
+caller counting, which is the thing [`node-naming.md`](node-naming.md) rules the
+document does not carry. `Canvas-Problem:` and `Canvas-Expected-Value:` name the
+two flags `create` takes, one for one. The price, the same one `freeze` already
+pays for `Canvas-Freeze:`: a caller grepping `Canvas-Node:` across the verbs to
+collect minted ids does not see `create`'s.
+
+The two lines below them are unchanged and in their existing order, so anything
+parsing `Canvas-Base:` or `Canvas-File:` by name is unaffected.
 
 It is **three commits, not one**:
 
@@ -190,7 +206,10 @@ against. Each `insert` bases on the commit before it.
 The two first nodes are `<text>` nodes, problem first. They carry no marker
 saying which is which: the vocabulary has no semantic node and inventing one is
 the `<decision>` / `<risk>` tripwire. The distinction lives in the commit
-subject and in the order.
+subject, in the order, and in the two lines above — and
+[`node-naming.md`](node-naming.md) is the ruling that settles it, says what would
+reopen it, and names the one thing it costs: the rendered page shows two
+unlabelled paragraphs, which the renderer is free to fix and the grammar is not.
 
 `create` refuses rather than overwrites. A canvas that already exists is exit
 `1`, with the path and its current sha, and nothing is written.
@@ -225,8 +244,135 @@ document.** The document alone, byte for byte what is on disk, is
 
     bin/canvas read my-task | tail -n +2
 
+**The boundary rule, once, so nothing added to the header ever breaks a second
+idiom: the document begins at the `<?xml` declaration line, and everything above
+it is the header.** `tail -n +2` is the document alone for a read with no flags;
+`sed -n '/^<?xml/,$p'` is the document alone under any combination of them. A
+unified diff in the header cannot be mistaken for the declaration — a diff
+prefixes every line with a space, a `+` or a `-`.
+
 A read is a read. It writes nothing, commits nothing, and does not initialise a
-repository.
+repository. That stays true of every flag below: all any of them adds is
+`git log`, `git diff`, `git rev-parse` and `git merge-base --is-ancestor`. None
+of them acquires anything either — none of this is a lock, and the answer can be
+stale the moment it is printed. `--base` on the next write is still the only
+thing that refuses.
+
+#### Part of a canvas: `--id` and `--type`
+
+The canvas goes into every step's prompt, so a read that is all-or-nothing is a
+prompt that is all-or-nothing. Two flags select part of it, by node id and by
+node type:
+
+    $ bin/canvas read my-task --type question
+    Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
+    <?xml version="1.0" encoding="UTF-8"?>
+    <canvas ledger="my-task" schema="1">
+      <question id="mqxd" v="2">Does the store re-read before it writes?</question>
+    </canvas>
+
+- **Both repeat, and they union.** Every occurrence of either adds to one
+  selection: a node is printed if any selector names it. Not intersection — an
+  `--id` intersected with a `--type` is either that one node or nothing.
+- **A selected node brings its subtree, once.** A selected node inside another
+  selected node is printed in place and not again on its own.
+- **The sha is unchanged.** `Canvas-Base:` is still the first line, still the
+  repository head, still forty characters, whatever was selected: the selection
+  narrows what you see, not what you would be writing against.
+- **What comes back is a projection of the document and not the document, and is
+  not claimed to validate.** Selecting a `<cell>` without its `<row>` produces
+  something the grammar refuses, and that is correct — the stored file is the
+  document and is the thing that validates. Nothing runs the validator over a
+  selection. A read with no selector still prints the file byte for byte.
+- **A `--type` that matches nothing is exit `0` and an empty root:**
+  `<canvas ledger="my-task" schema="1"/>`. A type is a predicate and "none" is
+  its answer, not its failure — *are there any `question` nodes left* is the
+  question this exists to answer, and a tool that refuses to say "none" has not
+  answered it. **An unknown type name is not refused either**: `--type decision`
+  matches nothing and says so, because refusing it would need a list of legal
+  element names in Python and the vocabulary is written down once, in
+  `schema/canvas.rng`, and nowhere else.
+- **An `--id` that names no node in this canvas is exit `1`**, naming the id.
+  An id is an assertion that a node exists — ids are minted and unique — so a
+  name that matches nothing is a wrong request, which is `history`'s rule for the
+  same mistake: the canvas is there; the node is not.
+
+**This is not addressing, and does not reopen the argument against it.** See
+[*Addressing is by explicit node id*](#the-four-verbs) below: that argument is
+about a selector on a **write**, which can silently touch two nodes when the
+writer meant one, and it is why IWE's `--expect` match-count guard would have to
+exist beside one. A read selector applies nothing, mints nothing and commits
+nothing, and the matches *are* the output: there is no unseen second match for a
+guard to catch. No editing verb takes a selector and none is being given one.
+
+#### Who wrote what: `--provenance`
+
+    $ bin/canvas read my-task --provenance
+    Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
+    Canvas-Wrote: y8dk 8b03f2ebb78897960b14ba0f159d7f0964969b26 leo | by-hand
+    Canvas-Wrote: itpe e4a864130afb88ad2abc17f1b4889df707b15ded claude-opus-5 | second-writer
+    <?xml version="1.0" encoding="UTF-8"?>
+    …
+
+One `Canvas-Wrote: <node-id> <sha> <author>` line per node printed, in the order
+the nodes are printed, composing with the selectors. It parses by splitting
+twice: the id is four characters, the sha is forty, and the author is last and
+free text, which it has to be — a `Canvas-Author:` value contains spaces and
+pipes.
+
+- **"Last wrote" is the last commit whose `Canvas-Node:` trailer names the
+  node**, whatever verb it was. A `move` counts: it names the node and it bumps
+  `v`, and `v` is exactly the count of those commits, so any other rule would
+  make this disagree with the number in the file.
+- **It is derived from the log and is in the document nowhere.** No node gains an
+  `author` or a `commit` attribute: the vocabulary is closed, and an attribute
+  the log cannot check is the thing `engineering-spec.md` already rejected.
+  Provenance is a property of the read surface only.
+- **It is behind a flag and not on by default**, because the canvas is bounded by
+  what is affordable to send in every prompt, and a line per node on every read
+  is a permanent tax on that. A read with no flags is byte for byte what it was.
+- **A node no commit names** — reachable only by hand-editing the file, which the
+  store treats as out of band — gets the word `unrecorded` in both fields rather
+  than no line, so a caller can count lines against nodes.
+- **`Canvas-Wrote:` is a new name and not a second spelling of an existing one.**
+  `history` prints `Canvas-Commit:` and `Canvas-Author:` on lines of their own;
+  reusing them here would be three lines per node, run together with nothing
+  separating them. This name carries the *join* of a node, a commit and an
+  author, which nothing else in the tool prints.
+
+#### What changed since a sha: `--since`
+
+Before writing against a base, ask what moved since it — and apply nothing:
+
+    $ bin/canvas read my-task --since 4f1a2c9
+    Canvas-Base: 31499cf9c2a16a4b7b5c2e7c1e8b9a0d3f6e5c4b
+    Canvas-News: 1 commit(s) between 4f1a2c9… and 31499cf…
+    replace itpe: they revised the expected value
+    diff --git a/my-task.xml b/my-task.xml
+    …
+    <?xml version="1.0" encoding="UTF-8"?>
+    …
+
+It is the `Canvas-News:` block [the soft branch](#--base-and-the-two-branches)
+already prints after a write, verbatim — the same lines, in the same order, under
+the same name — asked for beforehand instead of told afterwards. A writer sees
+identical text in both places and does not have to learn a second shape.
+
+- **When nothing moved it prints exactly one line and no diff:**
+  `Canvas-News: 0 commit(s) between <sha> and <sha>`. The soft branch prints
+  nothing in that case, which is right there because nobody asked; here the
+  question *was* asked, and silence is indistinguishable from the flag having
+  done nothing.
+- **A malformed or unusable sha answers exactly as `--base` does**, because it is
+  one rule: not a sha at all is exit `2`; a well-formed sha this repository never
+  handed out is exit `1`; known but not an ancestor of the head is exit `1`. An
+  abbreviation git can resolve is accepted. The one difference is the next
+  action — `--base`'s *"or drop it to ask for no staleness check at all"* is
+  wrong advice for a question somebody asked on purpose.
+- **It is not a lock**, and must not be read as one. The answer can be stale the
+  instant it is printed. `--base` on the next write is what refuses.
+- **It is not a whole-canvas history verb**, and the refusal below stands —
+  see [*What the store deliberately does not do*](#what-the-store-deliberately-does-not-do).
 
 ### Rendering a canvas
 
@@ -370,7 +516,15 @@ canvas it has ended.
 **Addressing is by explicit node id.** No selector, no path, no "the first
 heading". That is the property that makes IWE's `--expect` match-count guard
 unnecessary here — a selector can match two nodes, an id cannot — and it is the
-argument against ever adding one.
+argument against ever adding one **to a write**.
+
+[`read --id` and `read --type`](#part-of-a-canvas---id-and---type) are not that
+and do not reopen it. The guard exists to catch a second match a caller never
+saw, and it is needed because a write *applies* to what it matched. A read
+selector applies nothing, mints nothing and commits nothing, and the matches are
+the output — there is no unseen second match, and the count is legible by reading
+what was printed. So there is no `--expect`, and no selector reaches any of the
+four verbs.
 
 | verb | what it does | id | `v` |
 |---|---|---|---|
@@ -666,6 +820,13 @@ against, which is also why its root commit writes no `Canvas-Base:` trailer.
 An abbreviation git can still resolve is accepted. `read` hands out the full
 forty characters, but there is no reason to refuse a shorter one supplied later.
 
+The same three rows are
+[`read --since`](#what-changed-since-a-sha---since)'s, because a sha is usable or
+it is not and which command asked cannot change that. The one thing that differs
+is the next action a refusal names: *"drop `--base` to ask for no staleness check
+at all"* is right for a write and is wrong advice for a read that asked the
+question on purpose.
+
 The `Canvas-Base:` trailer the commit carries is a **different fact** and is
 written either way: it is the truthful record of the head the edit was applied
 to, not of the base the writer declared. On the soft branch those are two
@@ -829,8 +990,8 @@ mode.
 | exit | meaning |
 |---|---|
 | `0` | it worked |
-| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **the node being written moved since the `--base` declared for it**, the `--base` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **`read --id` named a node this canvas does not hold**, **the node being written moved since the `--base` declared for it**, the `--base` or `--since` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` or `--since` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
 `Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A
@@ -1088,6 +1249,19 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   canvas's history, no verb that reports a node's diffs, and none that reverts
   one: `git log`, `git show` and `git revert` are right there, and wrapping
   them would be restating git rather than using it.
+  [`read --since`](#what-changed-since-a-sha---since) is inside this refusal and
+  not against it. It is not a verb: the nine subcommands are still nine. It is
+  bounded below by a sha the caller names and above by the head, scoped to one
+  file, and it **has no default and no "all" spelling** — without it there is no
+  news at all, so the tool never offers whole-canvas history as *the* question.
+  What it adds is "what changed since the base I am holding". The honest edge,
+  stated rather than argued away: a caller who names the canvas's own root commit
+  gets everything since the birth of the canvas, which is that history arrived at
+  from the other end — but the refused thing is a verb whose *job* is
+  whole-canvas history, one reached for without holding a base, and this cannot
+  be invoked without the caller asserting a base it holds. It does not diff a
+  node structurally either: it hands back git's own unified diff of the file,
+  from the same function the soft branch already calls.
 - **It does not batch, and cannot be made to.** Nothing in it can touch two
   nodes in one commit, and the one function that puts a canvas on its path
   refuses a write worth more than the one node the commit names. There is no
