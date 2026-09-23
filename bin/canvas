@@ -6,7 +6,7 @@ document in canvas/document.py and the vocabulary in schema/canvas.rng;
 nothing here knows anything about any of them.
 
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT
-    bin/canvas read    <ledger_id>
+    bin/canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
     bin/canvas render  <ledger_id>
     bin/canvas history <ledger_id> <node-id>
     bin/canvas replace <ledger_id> <node-id> --why TEXT
@@ -18,10 +18,13 @@ nothing here knows anything about any of them.
 `--why` is required by all four editing verbs, and by `freeze`, and has no
 default. `read`, `render` and `history` are reads: they write nothing, commit
 nothing and initialise nothing — and they go on working once a canvas has been
-frozen, which every write verb is refused against at exit 1. `render` prints
-the canvas as one standalone HTML page on stdout; it is a projection, so it is
-never edited and never read back, and redirecting stdout is how it becomes a
-file.
+frozen, which every write verb is refused against at exit 1. `read`'s four
+flags are reads on the same terms and acquire nothing: `--id` and `--type`
+select part of the document, `--provenance` says who last wrote each node
+printed and at which commit, and `--since` says what changed between a sha and
+the head without applying any of it. `render` prints the canvas as one
+standalone HTML page on stdout; it is a projection, so it is never edited and
+never read back, and redirecting stdout is how it becomes a file.
 
 Exit 0 if it worked, 1 if the request is wrong against the store as it stands,
 2 if the tool or its environment is wrong.

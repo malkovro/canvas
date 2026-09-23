@@ -349,7 +349,9 @@ def render(ledger_id):
     canvas that does not exist, and it carries a sha, so it is exactly the
     artifact somebody pastes into a comment.
     """
-    sha, body, problems = store.read(ledger_id)
+    # No selector and no provenance: a projection is of the whole document,
+    # and the header a read composes is for a caller that is about to write.
+    sha, body, problems, _ = store.read(ledger_id)
     if problems:
         path = store.canvas_path(store.canvas_directory(), ledger_id)
         raise store.Refusal(
