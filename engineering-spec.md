@@ -109,7 +109,13 @@ run out. The moment somebody proposes `<decision>`, `<risk>` or
 arguing for: an open question has to be findable — the renderer has to make it
 loud, and an agent has to be told not to quietly answer it — and that is not
 derivable from shape. If it turns out to earn nothing, it folds back into
-`<text open="true">`.
+`<text open="true">` — **but that exit is closed while `answered` stands.**
+`node-state.md` closed it: `<question>` is the one element a canvas may say
+anything about the state of, which is the something it had to earn, and `open`
+is not a declared attribute in `schema/canvas.rng`, so `<text open="true">` is
+a document the validator rejects and the attribute-set invariant in
+`tests/test_validate.py` makes declaring it break a test. Taking the retirement
+means reopening `node-state.md` first.
 
 ## Edits
 
