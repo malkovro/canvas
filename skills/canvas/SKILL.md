@@ -270,14 +270,25 @@ the canvas has ended and why. One verb for both endings — *done* and *abandone
 things a `--why` says. Afterwards every write verb is refused at exit `1`; `read`, `render`
 and `history` go on working.
 
-**There is no unfreeze.** A task that comes back gets a new ledger row and a new canvas. So
-freeze when the row reaches a terminal state, not when you finish a step.
+**There is no unfreeze.** A task that comes back gets a new ledger row and a new canvas — so
+a canvas ends when its *row* reaches a terminal state, never when you finish a step.
 
-**Nothing calls `freeze` for you.** `bin/task-ledger open` runs `create`, but neither `done`
-nor `abandoned` is wired to `freeze` — this repository's `README.md` says so under *What the
-store deliberately does not do*. If you are the one closing the row, freezing the canvas is
-your step, and the `--why` is where *done* and *abandoned* are told apart. Do it in the same
-breath as the transition, or the canvas stays writable on a task that has ended.
+**Which means you almost certainly should not run it.** The ledger does it for you: `apply_transition` in `bin/task-ledger` freezes on `done` and on `abandoned`,
+both of them, composing the `--why` from the row's own gate text and authoring it
+`task-ledger | close` (ledger-orchestrator `docs/canvas-ends-at-terminal.md`).
+
+A freeze you ran first makes that one fail, because there is no second freeze. The row still
+closes — it is designed to close whether or not the freeze lands — but it records a
+`canvas:failed` event reading `freeze: exit 1`, and the row is the only thing that could have
+said the canvas ended properly. You get a defect in the record in exchange for a step that
+was already being taken for you.
+
+So run `freeze` by hand in exactly two cases:
+
+- **no ledger row is closing this canvas** — a scratch or sample canvas, or one whose row
+  predates the wiring; or
+- **the automatic freeze did not land** — the row closed carrying a `canvas:failed` event
+  whose detail starts `freeze:`, and the ledger printed the exact command to run on stderr.
 
 ## What is not yours
 
@@ -287,6 +298,8 @@ breath as the transition, or the canvas stays writable on a task that has ended.
 - **The row's Basecamp comment** — the ledger row is the single author of it.
 - **`bin/canvas-validate <file>`** — validating a file by hand, for when you are debugging
   the store rather than driving a task.
+- **The freeze at `done` and `abandoned`** — `bin/task-ledger` runs it, and running it first
+  is how you break it. See above.
 
 ## The three rules underneath all of this
 

@@ -1472,11 +1472,19 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   `history` go on working on it, and every write verb is refused at exit `1`.
   An `unfreeze` would make "read-only history" a claim with exceptions, and a
   reader would have to find the *last* lifecycle commit rather than any freeze.
-- **It does not wire the ledger's `done` or `abandoned` transitions either.**
-  `freeze` is driven by hand — and unlike `create` above, nothing calls it yet
-  — and nothing here reads or writes `state/ledger`. Which of the two endings it
+- **It does not wire the ledger's `done` or `abandoned` transitions either**,
+  and nothing here reads or writes `state/ledger`. Which of the two endings it
   was lives in the `--why` and in no field: one verb, and the semantics in the
-  reason.
+  reason. This bullet used to add that, unlike `create` above, nothing called
+  `freeze` yet. That is no longer true and was the same shape of claim as the
+  `create` one: `apply_transition` in `bin/task-ledger` now calls `freeze` on
+  both terminal transitions, authored `task-ledger | close`, with the `--why`
+  composed from the row's own gate text — `docs/canvas-ends-at-terminal.md` in
+  [`malkovro/ledger-orchestrator`](https://github.com/malkovro/ledger-orchestrator)
+  argues it. Nothing here changed for it, and if that caller goes away nothing
+  here notices. **A caller freezing by hand ahead of it makes that freeze fail**
+  — the row closes anyway and records the failure, which is why
+  [`skills/canvas/SKILL.md`](skills/canvas/SKILL.md) tells an agent not to.
 - **It does not shell out to `xmllint` and does not restate the vocabulary.**
   Every write goes through `canvas.validate.validate_file` at a temporary path
   and is renamed into place only once it validates, so an invalid canvas is
