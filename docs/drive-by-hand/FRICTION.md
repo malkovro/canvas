@@ -111,11 +111,11 @@ the canvas ends with no visible trace that anything was ever asked. The writer s
 reason itself (`f7be9ea`): *"The question node becomes the answer because the tool has no way
 to mark a question answered while leaving it standing."* That sentence is a comment about the
 document's limits, written inside the document, because the document cannot carry it.
-(`docs/why-verdict/VERDICT.md:432-434` reads this same edit the other way, as the design
-working — *"a question node becoming its own answer, legible only because a free-text reason
-said so."* Both readings stand: `node-state.md` §3 reconciles them by distinguishing the
-document from the log. The reason was in the log, which is what the verdict was reading; the
-complaint above is about the document, which is what this report was reading.)
+(**Added 2026-09-24, after this report.** `docs/why-verdict/VERDICT.md:432-434` reads this same
+edit the other way, as the design working — *"a question node becoming its own answer, legible
+only because a free-text reason said so."* Both readings stand: `node-state.md` §3 reconciles them
+by distinguishing the document from the log. The reason was in the log, which is what the verdict
+was reading; the complaint above is about the document, which is what this report was reading.)
 
 **Marking a chosen option means retyping the cell.** Commits `90907b5` (`vgke`) and `6be144a`
 (`ymcz`) both prepend one word — `CHOSEN.` — and both are full retypes of cells several
