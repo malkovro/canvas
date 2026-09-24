@@ -24,6 +24,17 @@ Every write is validated through `canvas.validate.validate_file` at a temporary
 path and only then renamed into place, so an invalid canvas is never reachable
 at the canvas's own path, let alone committed.
 
+**A refused write leaves nothing behind, git included.** The rename is what
+makes a document a canvas and it happens before git is asked for anything, so
+the stage and the commit are the two refusals that arrive with an edit already
+on the canvas's own path. `_write_and_commit` takes that edit back — the
+previous bytes, and the index with them where the edit reached it — so the
+document a `read` hands back is the document the log has, after a refused
+write as after a successful one. Putting bytes back on a filesystem that has just refused this
+process is itself fallible and is therefore never claimed: where the rollback
+is refused too, the refusal says that it tried, that it could not, and what is
+on the canvas's path now.
+
 **No canvas is ever written without a reason.** `_write_and_commit` is the
 only function that puts a canvas on its real path, and it takes the reason as
 an argument and calls `require_reason` before it writes a byte. The rule is a
@@ -550,6 +561,37 @@ def _git(canvas_dir, *arguments):
         raise _no_git(error)
 
 
+#: What to do about a git invocation that exited non-zero, with the one thing
+#: this template cannot know left to the call site.
+#:
+#: The `status` is a diagnostic, and not marked: the command that failed is
+#: named in the message already, so its non-zero exit is the condition rather
+#: than a repair for it. Pinned like every other invocation in this file, so
+#: that it is asked of the repository the refusal names and not of whatever
+#: repository the caller happens to be standing in — the unpinned `git %s`
+#: this line used to print answered a different repository, and exited `0`
+#: doing it.
+#:
+#: `%(aftermath)s` is what is still true about the store, which only the call
+#: site knows. The sites that ask git a question and write no file say
+#: "Nothing was committed" and that is the whole of it; the write path renames
+#: a document onto the canvas before git is asked for anything, so it also has
+#: to say what became of that document.
+_GIT_REFUSED_NEXT_ACTION = (
+    "`git --git-dir=%(git_dir)s --work-tree=%(work_tree)s status` shows what "
+    "state that repository is in, and the message above carries what git "
+    "objected to; repair the repository and re-run. %(aftermath)s"
+)
+
+
+def _git_refused_next_action(canvas_dir, aftermath):
+    return _GIT_REFUSED_NEXT_ACTION % {
+        "git_dir": os.path.join(canvas_dir, ".git"),
+        "work_tree": canvas_dir,
+        "aftermath": aftermath,
+    }
+
+
 def _git_checked(canvas_dir, *arguments):
     result = _git(canvas_dir, *arguments)
     if result.returncode != 0:
@@ -560,19 +602,7 @@ def _git_checked(canvas_dir, *arguments):
                 result.returncode,
                 result.stderr.decode("utf-8", "replace").strip(),
             ),
-            # A diagnostic, and not marked: the command named here is the one
-            # that just failed, so its non-zero exit is the condition rather
-            # than a repair for it, and what git said about it is in the
-            # message above already. Pinned like every other invocation in this
-            # file, so that it is asked of the repository this refusal names
-            # and not of whatever repository the caller happens to be standing
-            # in — the unpinned `git %s` this line used to print answered a
-            # different repository, and exited `0` doing it.
-            "`git --git-dir=%s --work-tree=%s status` shows what state that "
-            "repository is in, and the message above carries what git "
-            "objected to; repair the repository and re-run. Nothing was "
-            "committed"
-            % (os.path.join(canvas_dir, ".git"), canvas_dir),
+            _git_refused_next_action(canvas_dir, "Nothing was committed"),
             about=["canvas repository %s" % canvas_dir, "command git"],
         )
     return result.stdout.decode("utf-8", "replace")
@@ -1737,6 +1767,184 @@ def _inside_the_store(canvas_dir, path):
         )
 
 
+# --------------------------------------------------------------------------
+# Taking a refused write back off the canvas's own path
+# --------------------------------------------------------------------------
+#
+# The rename is what makes a document a canvas, and it happens before git is
+# asked for anything — so the two git steps that follow it are the only two
+# refusals in this module that arrive with an edit already on the canvas's own
+# path. Without the two functions below that edit stays there, and it is not
+# merely uncommitted: it carries the bumped `v`, and `node-identity.md`
+# section 4 has `v` be the number of commits whose `Canvas-Node:` trailer names
+# the node, so what a `read` hands back says `v="2"` for a node the log names
+# once. Nor does it stay put. `_one_node_only` holds the *next* write against
+# the document on disk, so the orphan is part of the baseline it compares to,
+# changes nothing by that guard's reckoning, and travels into the next commit —
+# which names a different node. One commit that changed two nodes is the thing
+# this store exists to make inexpressible, and `--base` cannot catch it,
+# because `_check_base` compares commits and an uncommitted worktree change is
+# not one.
+#
+# So the write path puts the bytes back, and the invariant the rest of this
+# module already states for itself — "a refused write leaves nothing behind" —
+# holds for these two refusals as it holds for every other. Putting bytes back
+# on a filesystem that has just refused this process is itself fallible, so it
+# is never claimed: where the rollback is refused too, the refusal says that it
+# tried, that it could not, and what the canvas's path now holds.
+
+
+def _take_back(canvas_dir, path, previous, staged):
+    """Put the canvas back as the log has it. Return what refused, or None.
+
+    `previous` is the bytes that were on the canvas's own path before the
+    rename, or None where there was no file there at all — the birth commit of
+    `create`, whose write is taken back by removing the file it made.
+
+    **This never raises.** A rollback that failed has to be reportable
+    *beside* the refusal that caused it and not instead of it: the caller is
+    holding git's refusal, and losing it to an exception raised while tidying
+    up would tell the caller about the wrong failure. So what refused comes
+    back as a value — the `OSError` where the filesystem refused it, the
+    finished `git` invocation where git did — and `None` means the store is
+    back as it was.
+
+    `staged` says whether the edit reached the index, which is true of a
+    refused commit and false of a refused stage. Where it is, the index is
+    restored too: after a refused commit `git status --porcelain` reads `M` in
+    the *first* column, and a rollback that put the worktree back and left the
+    index would leave that case half applied. `-A` is what covers the restored
+    file and the removed one with one command, and the unchecked `_git` is
+    what lets git's own refusal be returned rather than raised.
+    """
+    if previous is None:
+        try:
+            os.unlink(path)
+        except OSError as error:
+            return error
+    else:
+        temporary = "%s.back-%d" % (path, os.getpid())
+        try:
+            with open(temporary, "wb") as handle:
+                handle.write(previous)
+            os.replace(temporary, path)
+        except OSError as error:
+            # The temporary is this function's own litter, and what a caller
+            # needs named is what refused the rollback. Removing it is tried
+            # and not insisted on, so a second failure here cannot displace the
+            # first one in the refusal that is about to be built.
+            try:
+                if os.path.exists(temporary):
+                    os.unlink(temporary)
+            except OSError:
+                pass
+            return error
+    if staged:
+        result = _git(canvas_dir, "add", "-f", "-A", "--", path)
+        if result.returncode != 0:
+            return result
+    return None
+
+
+def _refused_after_the_rename(
+    refused, canvas_dir, path, head, previous, failure, node_id=None
+):
+    """Git's refusal, with what became of the renamed document added to it.
+
+    `refused` is the `ToolProblem` `_git_checked` raised, and everything a
+    caller could already act on comes through unchanged: what git said, the
+    repository, the command. What is added is the one thing `_git_checked`
+    cannot know — that this call site had already put a document on the
+    canvas's own path — and it is added where the claim about the store is
+    made, which is the aftermath its next action ends with. "Nothing was
+    committed" is true of every `_git_checked` call site and the whole truth
+    only for the two that ask git a question and write no file — `_log` and
+    `_diff`.
+
+    `failure` is what `_take_back` returned: None where the canvas is back as
+    the log has it, an `OSError` where the bytes could not be put back, or the
+    refused `git` invocation where they were and the index was not. The three
+    say three different things about the store, so they are three different
+    sentences and not one hedged one.
+    """
+    ledger_id = os.path.basename(path)[: -len(".xml")]
+    held = "at %s" % head if head is not None else "before this command"
+    message = "%s" % refused
+    about = list(refused.about) + ["canvas %s" % path]
+
+    if failure is None:
+        if previous is None:
+            aftermath = (
+                "Nothing was committed, and the write was taken back: %s was "
+                "made by this command and has been removed again, so the "
+                "store holds what the log holds" % path
+            )
+        else:
+            aftermath = (
+                "Nothing was committed, and the edit was taken back off %s, "
+                "which holds the bytes it held %s again" % (path, held)
+            )
+        next_action = _git_refused_next_action(canvas_dir, aftermath)
+    elif isinstance(failure, OSError):
+        message = "%s — and putting %s back was refused too: %s" % (
+            refused,
+            path,
+            refusal.os_condition(failure),
+        )
+        if previous is None:
+            aftermath = (
+                "nothing was committed, and %s still holds a canvas this "
+                "command made and could not remove again: the tool tried and "
+                "was refused too, so there is a canvas there that no commit "
+                "records" % path
+            )
+        else:
+            aftermath = (
+                "nothing was committed, and %s still holds the edit: the tool "
+                "tried to put back the bytes the canvas held %s and was "
+                "refused too. Re-running this same command once that is "
+                "repaired writes this edit and commits it; until then "
+                "`bin/canvas read %s` hands back an edit no commit records"
+                % (path, held, ledger_id)
+            )
+        # The rollback writes a temporary beside the canvas and renames it, so
+        # what refuses it is the directory's mode and not the file's — the same
+        # reason `_cannot_write` points its repair there.
+        next_action = refusal.os_next_action(
+            failure,
+            aftermath=aftermath,
+            paths=[os.path.dirname(path) or "."],
+            need="write",
+        )
+        about = about + refusal.os_about(failure, unless=about)
+    else:
+        message = (
+            "%s — and putting the index back was refused too: git add -f -A "
+            "exited %d: %s"
+            % (
+                refused,
+                failure.returncode,
+                failure.stderr.decode("utf-8", "replace").strip(),
+            )
+        )
+        aftermath = (
+            "Nothing was committed, and %s holds the bytes it held %s again — "
+            "but the index does not, because git refused to put it back too, "
+            "so the edit is still staged there. Re-running this same command "
+            "once the repository is repaired writes this edit and commits it"
+            % (path, held)
+        )
+        next_action = _git_refused_next_action(canvas_dir, aftermath)
+
+    return ToolProblem(
+        message,
+        next_action,
+        nodes=list(refused.nodes) + ([node_id] if node_id is not None else []),
+        about=about,
+        details=refused.details,
+    )
+
+
 def _write_and_commit(
     canvas_dir,
     path,
@@ -1798,6 +2006,25 @@ def _write_and_commit(
 
     All of these checks run before the temporary file is opened, so a refused
     write leaves nothing behind — not even a rejected temporary.
+
+    **And so does a write git refuses**, which is the one place that sentence
+    used to stop being true. `git add` and `git commit` are asked for after the
+    rename, so a refusal from either arrives with the edited document already
+    on the canvas's own path. Both are therefore taken back: the bytes the
+    canvas held go back onto it — or the file this command made is removed
+    again, for the birth commit of `create` — and the index goes back with
+    them where the edit reached it, which is a refused commit and not a refused
+    stage. The refusal git raised is what the caller still sees; what is added
+    to it is what became of the document, on the `Canvas-Next:` line where this
+    module makes its claims about the store. The one branch that can leave a
+    half-applied edit is the branch where putting it back is refused too, and
+    that is the one branch that says so: see `_take_back` and
+    `_refused_after_the_rename`.
+
+    A freeze is taken back from nothing, because it writes nothing: it changes
+    no byte of the document, so a refused stage or commit there leaves the
+    canvas exactly as the log has it and `_git_checked`'s own refusal is
+    already the whole truth about the store.
     """
     why = require_reason(
         why,
@@ -1823,7 +2050,20 @@ def _write_and_commit(
     else:
         _one_node_only(path, root, node_id)
     subject = "%s %s: %s" % (verb, subject_name, why)
+    # What the canvas's own path holds now, so that the rename below can be
+    # taken back if git refuses what follows it. None means there is no file
+    # there at all, which is the birth commit of `create` and nothing else.
+    # Read before anything is written, so a read this process is refused is a
+    # refusal raised with the canvas untouched.
+    previous = None
     if freeze is None:
+        try:
+            with open(path, "rb") as handle:
+                previous = handle.read()
+        except FileNotFoundError:
+            previous = None
+        except OSError as error:
+            raise _cannot_read(path, error, node_id=node_id)
         text = document.serialise(root)
         temporary = "%s.tmp-%d" % (path, os.getpid())
         try:
@@ -1857,45 +2097,71 @@ def _write_and_commit(
             except OSError as error:
                 raise _cannot_write(path, error, node_id=node_id)
 
-    # -f so that a stray ignore rule somewhere above cannot make `add` a silent
-    # no-op and the commit a confusing failure.
-    _git_checked(canvas_dir, "add", "-f", "--", path)
+    # Everything from here on runs with the edit already on the canvas's own
+    # path, so a refusal from either git step is the one kind this module has
+    # to take back rather than merely report. A freeze is the exception and
+    # not an oversight: it writes no document, so there is nothing on that
+    # path that this command put there, and `_git_checked`'s own "Nothing was
+    # committed" is already the whole truth about the store.
+    staged = False
+    try:
+        # -f so that a stray ignore rule somewhere above cannot make `add` a
+        # silent no-op and the commit a confusing failure.
+        _git_checked(canvas_dir, "add", "-f", "--", path)
+        staged = True
 
-    trailers = []
-    if node_id is not None:
-        trailers.append("Canvas-Node: %s" % node_id)
-    if freeze is not None:
-        trailers.append("Canvas-Freeze: %s" % freeze)
-    trailers.append("Canvas-Author: %s" % author)
-    if base is not None:
-        trailers.append("Canvas-Base: %s" % base)
+        trailers = []
+        if node_id is not None:
+            trailers.append("Canvas-Node: %s" % node_id)
+        if freeze is not None:
+            trailers.append("Canvas-Freeze: %s" % freeze)
+        trailers.append("Canvas-Author: %s" % author)
+        if base is not None:
+            trailers.append("Canvas-Base: %s" % base)
 
-    # The identity is passed per call, so the tool never writes configuration —
-    # not the user's global config and not the canvas repository's — and there
-    # is nothing to drift and nothing to clean up. gpgsign is turned off because
-    # a global signing setting would otherwise make the store depend on a key.
-    # A freeze changes no file, which git declines to commit unless it is told
-    # that is the point. Every other write here has staged a changed document,
-    # and git refusing an accidental no-op is worth keeping for those.
-    empty = ["--allow-empty"] if freeze is not None else []
-    _git_checked(
-        canvas_dir,
-        *(
-            [
-                "-c",
-                "user.name=%s" % _configured(canvas_dir, "user.name", "canvas"),
-                "-c",
-                "user.email=%s"
-                % _configured(canvas_dir, "user.email", "canvas@localhost"),
-                "-c",
-                "commit.gpgsign=false",
-                "commit",
-                "-q",
-            ]
-            + empty
-            + ["-m", subject, "-m", "\n".join(trailers)]
+        # The identity is passed per call, so the tool never writes
+        # configuration — not the user's global config and not the canvas
+        # repository's — and there is nothing to drift and nothing to clean
+        # up. gpgsign is turned off because a global signing setting would
+        # otherwise make the store depend on a key. A freeze changes no file,
+        # which git declines to commit unless it is told that is the point.
+        # Every other write here has staged a changed document, and git
+        # refusing an accidental no-op is worth keeping for those.
+        empty = ["--allow-empty"] if freeze is not None else []
+        _git_checked(
+            canvas_dir,
+            *(
+                [
+                    "-c",
+                    "user.name=%s" % _configured(canvas_dir, "user.name", "canvas"),
+                    "-c",
+                    "user.email=%s"
+                    % _configured(canvas_dir, "user.email", "canvas@localhost"),
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "-q",
+                ]
+                + empty
+                + ["-m", subject, "-m", "\n".join(trailers)]
+            )
         )
-    )
+    except ToolProblem as refused:
+        if freeze is not None:
+            raise
+        failure = _take_back(canvas_dir, path, previous, staged)
+        try:
+            head = head_sha(canvas_dir)
+        except ToolProblem:
+            # A repository refusing questions as well as writes: the sha only
+            # says what the bytes were put back *to*, and losing git's own
+            # refusal to a second one about the same repository would tell the
+            # caller about the wrong failure.
+            head = None
+        raise _refused_after_the_rename(
+            refused, canvas_dir, path, head, previous, failure, node_id=node_id
+        )
+
     sha = head_sha(canvas_dir)
     if sha is None:
         raise ToolProblem(
