@@ -152,7 +152,7 @@ document that every prompt carries, and marks one. A `state="chosen"` on a
 opposite of what the product is for.
 
 **And the friction that was actually recorded is not the friction a marker
-fixes.** `FRICTION.md:117-118` says what hurt: both commits *"are full retypes of
+fixes.** `FRICTION.md:121-122` says what hurt: both commits *"are full retypes of
 cells several hundred characters long, because `replace` takes the new text and
 not a patch of it."* The cost was retyping, not the absence of a word for
 chosen-ness — the writer had the word, and typed it. A `--chosen` flag would
@@ -611,7 +611,7 @@ from the payload, so `--text` omitted means the node's character data is
 dropped, not preserved (`store.py:2349-2355`). Marking a question answered
 therefore means passing its text again. That is the same defect that made want 2
 expensive — *"`replace` takes the new text and not a patch of it"*
-(`FRICTION.md:117-118`) — and this ruling does not fix it. It is smaller here
+(`FRICTION.md:121-122`) — and this ruling does not fix it. It is smaller here
 than there: a question is a sentence, a comparison cell was several hundred
 characters. But it is the same defect and it is named in *Still open* rather
 than quietly absorbed.
@@ -707,6 +707,11 @@ These two lists are what goes into the orchestrator's
 
 ### Known tensions — unresolved, recorded
 
+One of the five below has since been ruled on. It is kept here and marked rather
+than deleted, so that a reader who was told it was unresolved is told by the same
+place that it is not, and so that what settled it stays one link away from where
+it was recorded. The other four stand.
+
 - **`<question>`'s retirement clause now points the other way.**
   `engineering-spec.md:111-112` says `<question>` folds back into
   `<text open="true">` if it earns nothing. This ruling makes it earn something,
@@ -714,10 +719,19 @@ These two lists are what goes into the orchestrator's
   has not been edited to say so. The two documents now disagree in tone if not
   in letter, and whoever next edits `engineering-spec.md` should reconcile them.
 - **`FRICTION.md` and `VERDICT.md` still read the same event in opposite
-  directions in their own texts.** §3 reconciles them here, by distinguishing
-  the document from the log, but neither file cites the other and neither has
-  been amended. A reader who finds only one of them will get one of the two
-  readings whole.
+  directions in their own texts. — Settled 2026-09-24: both were amended, and
+  each now cites the other and this section.** §3 reconciles them here, by
+  distinguishing the document from the log; when this was written neither file
+  cited the other and neither had been amended, so a reader who found only one
+  of them got one of the two readings whole. That is no longer true of either.
+  `docs/drive-by-hand/FRICTION.md:114-118` cites `VERDICT.md:432-434` and §3;
+  `docs/why-verdict/VERDICT.md:449-455` cites `FRICTION.md:109-110` and §3.
+  Neither amendment widens this ruling — the verdict's own addition re-asserts
+  that *"`--why` still gains no fields, no structure and no required
+  vocabulary"* — and each is marked as a later addition, so both records still
+  read as what their authors wrote on the day. What is settled is the finding,
+  not the disagreement: the two readings stand as two readings, and §3 remains
+  the only thing that reconciles them. Nothing is left open in this bullet.
 - **A state claim in an attribute can go stale exactly as a state claim in prose
   can.** §5 uses this against option C, and it is equally true of `answered`:
   nothing verifies that an `answered="true"` question really was answered. The
