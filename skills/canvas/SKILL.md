@@ -194,6 +194,12 @@ overwrite an existing canvas (exit `1`).
 
     $CANVAS create <ledger-id> --problem "..." --expected-value "..."
 
+**Neither may be blank.** An absent, empty or whitespace-only `--problem` or
+`--expected-value` is exit `2` and writes nothing at all — no canvas, no commits, no
+minted ids — so the ledger id is still free. If that is why the row's `canvas:failed`
+fired, the repair is to run the command above with a problem and an expected value that
+say what they hold, not to open a second row.
+
 ### `read` — first thing in any step that touches the task
 
     $CANVAS read <ledger-id>                    # sha, then the whole document
