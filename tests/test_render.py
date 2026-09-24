@@ -1,10 +1,20 @@
-"""Tests for `bin/canvas render`: the projection, and what it has to carry.
+"""Tests for `bin/canvas render`: the projections, and what they have to carry.
 
 Everything here runs the real `bin/canvas` as a subprocess against a temporary
 directory exported as OPENCLAW_WORKSPACE, like `tests/test_store.py`, and the
 canvases the assertions are made against are built by driving the real
 `insert` — one node at a time, each with its own reason, because that is the
 only way a canvas is ever built.
+
+There are two projections and the assertions that matter are made against
+both. `--format comment` is the second — the block-level Markdown a Basecamp
+comment actually renders, which is what a ledger row carries in the one comment
+it rewrites in place — and the three claims `rendering.md` says are not free
+are pinned on it exactly as they are on the page, in
+`TheCommentIndexNamesEveryQuestionAndNothingElse` and
+`EveryQuestionInTheCommentCarriesAMarkerOfItsOwn`. That is the whole of what
+keeps a second renderer honest: a test that fails, not a discipline somebody
+has to remember.
 
 These assert behaviour and not wording, matching the standing policy in
 `tests/test_validate.py`: that a `<figure>` reaches the page carrying its
@@ -23,6 +33,7 @@ a mark another one reads. The tests that do change a workspace — a freeze, a
 corrupted document, an empty one — make their own, fresh, per test.
 """
 
+import html
 import os
 import re
 import shutil
@@ -67,6 +78,19 @@ VOCABULARY = [
 WITH_QUESTIONS = "with-open-questions"
 ONLY_ANSWERED = "only-answered-questions"
 NO_QUESTIONS = "no-questions"
+
+#: What the `basecamp` CLI decides on, extracted from the binary at
+#: `~/go/bin/basecamp`: a comment body is converted from Markdown to HTML
+#: **only when this does not match it**. So one tag anywhere in a comment turns
+#: the conversion off for the whole of it — including the ledger row's own
+#: status blocks around the canvas — which is why the comment projection emits
+#: no raw HTML at all. `orchestrator/basecamp.py` in
+#: `malkovro/ledger-orchestrator` records the same fact twice, from the failures
+#: that taught it.
+HTML_IN_BODY = re.compile(
+    r"<(p|div|span|a|strong|b|em|i|code|pre|ul|ol|li|h[1-6]|blockquote|br|hr"
+    r"|img|table|bc-attachment)\b[^>]*>"
+)
 
 #: Text with every character the page has to escape, on an ordinary node. A
 #: projection that loses a `<` has silently rewritten the canvas.
@@ -360,6 +384,42 @@ class RenderTestCase(unittest.TestCase):
         self.assertEqual(0, code, stderr)
         self.assertEqual("", stderr)
         return stdout
+
+    def comment(self, ledger_id=WITH_QUESTIONS):
+        """The second projection: what a ledger row puts in its live comment."""
+
+        code, stdout, stderr = run_canvas(
+            self.workspace, "render", ledger_id, "--format", "comment"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("", stderr)
+        return stdout
+
+    def blocks(self, body):
+        """The body as the blocks it is: text between blank lines, in order."""
+
+        return [b for b in body.split("\n\n") if b.strip()]
+
+    def comment_index(self, body):
+        """The block of index entries, as text. The heading is the block above."""
+
+        blocks = self.blocks(body)
+        heading = [b for b in blocks if b.strip() == "**Open questions**"]
+        self.assertEqual(1, len(heading), "the comment carries no question index")
+        return blocks[blocks.index(heading[0]) + 1]
+
+    def comment_indexed_ids(self, body):
+        """Every node id the comment's index names, in order."""
+
+        return re.findall(
+            r"^- `(%s)`" % NODE_ID.pattern, self.comment_index(body), re.M
+        )
+
+    def comment_markers(self, body):
+        """Every per-question marker in the comment, with the id beside it."""
+
+        return re.findall(r"\*\*(Open question|Answered question)\*\* `(%s)`"
+                          % NODE_ID.pattern, body)
 
     def document(self, ledger_id=WITH_QUESTIONS):
         path = os.path.join(self.canvas_dir, ledger_id + ".xml")
@@ -692,6 +752,10 @@ class RenderWritesNothingToTheStore(RenderTestCase):
         before, head = self.listing(), self.head()
         self.render()
         self.render(NO_QUESTIONS)
+        # Both projections, because a second form is a second surface and the
+        # property is about the command and not about one of its outputs.
+        self.comment()
+        self.comment(NO_QUESTIONS)
         self.assertEqual(head, self.head())
         self.assertEqual(before, self.listing())
 
@@ -710,13 +774,36 @@ class RenderWritesNothingToTheStore(RenderTestCase):
         self.assertEqual(b"", result.stdout)
 
     def test_render_takes_no_flag_that_could_write_anywhere(self):
-        # The page goes to stdout and the shell decides where it lands. An
-        # --output this command honoured is a projection somebody eventually
+        # The projection goes to stdout and the shell decides where it lands.
+        # An --output this command honoured is a projection somebody eventually
         # writes into state/canvas.
         code, stdout, stderr = run_canvas(self.workspace, "render", "--help")
         self.assertEqual(0, code, stderr)
         for forbidden in ("--output", "--why", "--into", "--after", "--base"):
             self.assertNotIn(forbidden, stdout)
+
+    def test_the_only_flag_it_takes_chooses_a_form_and_not_a_destination(self):
+        # `--format` is the one flag on this command, and this is the test that
+        # says what it is allowed to be: a closed set of forms, each of which
+        # is a projection printed on stdout. A form that could be a path is the
+        # thing the list above forbids under another name.
+        code, stdout, stderr = run_canvas(self.workspace, "render", "--help")
+        self.assertEqual(0, code, stderr)
+        self.assertIn("--format", stdout)
+        self.assertEqual(
+            {"page", "comment"},
+            set(re.search(r"--format \{([^}]*)\}", stdout).group(1).split(",")),
+        )
+        code, _, _ = run_canvas(
+            self.workspace, "render", WITH_QUESTIONS,
+            "--format", os.path.join(self.workspace, "somewhere.html"),
+        )
+        self.assertEqual(2, code)
+
+    def test_stdout_is_the_comment_and_nothing_but_the_comment(self):
+        body = self.comment()
+        self.assertFalse(body.startswith("Canvas-"))
+        self.assertNotIn("Canvas-Base:", body)
 
     def test_stdout_is_the_page_and_nothing_but_the_page(self):
         # Not `read`'s shape: no `Canvas-Base:` line above the doctype, because
@@ -853,6 +940,311 @@ class RenderRefusesInTheShapeEveryRefusalTakes(unittest.TestCase):
         )
         self.assertEqual(2, code)
         self.assertRefusalShape(stderr, 2)
+
+
+class TheCommentProjectionIsWhatABasecampCommentRenders(RenderTestCase):
+    """The second projection's shape, which is dictated by the transport and
+    not by taste. A Basecamp comment body is plain block-level Markdown —
+    paragraphs and bullet lists separated by blank lines — and one raw HTML tag
+    in it turns the Markdown conversion off for the entire comment."""
+
+    def test_no_raw_html_tag_reaches_the_body(self):
+        # The failure this projection exists to avoid: a page pasted into a
+        # comment trips the CLI's detector, and the ledger row's own bold
+        # labels and bullets then arrive as literal asterisks and hyphens.
+        for ledger_id in (WITH_QUESTIONS, ONLY_ANSWERED, NO_QUESTIONS):
+            body = self.comment(ledger_id)
+            self.assertIsNone(HTML_IN_BODY.search(body), body)
+
+    def test_no_less_than_sign_reaches_the_body_at_all(self):
+        # Stronger than the detector, and the rule the renderer actually
+        # follows: a tag the CLI does not know today is a tag Basecamp may
+        # still drop, and a detector is a list somebody has to keep current.
+        self.assertNotIn("<", self.comment())
+
+    def test_the_characters_a_canvas_holds_survive_as_themselves(self):
+        # The escaping is a spelling and not a rewrite: what a reader of the
+        # comment sees is what the canvas says.
+        self.assertIn(AWKWARD, html.unescape(self.comment()))
+
+    def test_a_tag_written_inside_a_canvas_does_not_escape_into_the_body(self):
+        workspace = tempfile.mkdtemp(prefix="canvas-render-tagged-")
+        self.addCleanup(shutil.rmtree, workspace, True)
+        build(workspace, "tagged", "none")
+        insert(
+            workspace,
+            "tagged",
+            type="text",
+            text="<p>a paragraph tag a writer really typed</p>",
+            into="root",
+            why=(
+                "a canvas is prose and a writer may type a tag in it; nothing "
+                "downstream may lose a comment's formatting over that, and "
+                "this node is what proves it cannot"
+            ),
+        )
+        code, body, stderr = run_canvas(
+            workspace, "render", "tagged", "--format", "comment"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIsNone(HTML_IN_BODY.search(body), body)
+        self.assertIn("<p>a paragraph tag a writer really typed</p>",
+                      html.unescape(body))
+
+    def test_every_node_of_the_document_reaches_the_comment(self):
+        # A projection that silently loses a node is worse than one that shows
+        # it plainly, and that rule is the page's and this one's alike.
+        body = html.unescape(self.comment())
+        for node in self.nodes():
+            text = (node.text or "").strip()
+            if text:
+                self.assertIn(" ".join(text.split()), " ".join(body.split()))
+            if node.tag == "section":
+                self.assertIn(node.get("title"), body)
+            if node.tag == "link":
+                self.assertIn(node.get("href"), body)
+
+    def test_a_table_is_a_header_line_and_bullets_and_never_a_table(self):
+        # The Markdown table extension is off, so a table is not parsed at all
+        # and leaks its pipes and dashes as literal text. The same repair
+        # `orchestrator/basecamp.py` performs on authored text, done here.
+        body = self.comment()
+        # Outside a fence, where the pipes of a diagram are the point.
+        prose = re.sub(r"```.*?```", "", body, flags=re.S)
+        self.assertNotIn("|", prose)
+        self.assertIn("left \u2014 right", body)
+
+    def test_a_list_is_a_bullet_list(self):
+        body = self.comment()
+        self.assertIn("- A bullet the page renders as a bullet.", body)
+        self.assertIn("- A second bullet, so the order is visible.", body)
+
+    def test_a_figure_keeps_its_source_in_a_fenced_block(self):
+        # The one block-level Markdown that keeps a diagram's columns. The
+        # figure is still the text the canvas stores; nothing is drawn.
+        body = self.comment()
+        figure = [node for node in self.nodes() if node.tag == "figure"][0]
+        fenced = re.search(r"```\n(.*?)\n```", body, re.S)
+        self.assertIsNotNone(fenced, body)
+        self.assertEqual(figure.text.strip("\n"),
+                         html.unescape(fenced.group(1)))
+
+    def test_a_link_is_a_markdown_link_and_not_an_anchor(self):
+        body = self.comment()
+        link = [node for node in self.nodes() if node.tag == "link"][0]
+        self.assertIn("[%s](%s)" % (link.text, link.get("href")), body)
+
+    def test_blocks_are_separated_by_exactly_one_blank_line(self):
+        # One separator is a block boundary and so is three; keeping it to one
+        # is what makes a comment rewritten in place diffable.
+        body = self.comment()
+        self.assertNotIn("\n\n\n", body)
+        self.assertTrue(body.endswith("\n"))
+
+    def test_the_same_canvas_renders_the_same_bytes(self):
+        self.assertEqual(self.comment(), self.comment())
+
+
+class EveryQuestionInTheCommentCarriesAMarkerOfItsOwn(RenderTestCase):
+    """`rendering.md` §3, claim three, on the second projection. Not free, and
+    so asserted here rather than left to whoever edits the renderer next."""
+
+    def assertEveryQuestionIsMarked(self, ledger_id):
+        body = self.comment(ledger_id)
+        markers = self.comment_markers(body)
+        self.assertEqual(self.question_ids(ledger_id),
+                         [node_id for _, node_id in markers])
+
+    def test_every_question_is_marked_on_a_canvas_with_open_questions(self):
+        self.assertEveryQuestionIsMarked(WITH_QUESTIONS)
+
+    def test_every_question_is_marked_on_a_canvas_with_none_open(self):
+        self.assertEveryQuestionIsMarked(ONLY_ANSWERED)
+
+    def test_a_canvas_with_no_question_at_all_carries_no_marker(self):
+        self.assertEqual([], self.comment_markers(self.comment(NO_QUESTIONS)))
+
+    def test_the_marker_says_which_state_the_question_is_in(self):
+        body = self.comment()
+        answered = {
+            node.get("id"): node.get("answered") == "true"
+            for node in self.document().iter("question")
+        }
+        for label, node_id in self.comment_markers(body):
+            self.assertEqual(
+                answered[node_id], label.lower().startswith("answered"),
+                "%s is marked %r" % (node_id, label),
+            )
+
+
+class TheCommentIndexNamesEveryQuestionAndNothingElse(RenderTestCase):
+    """`rendering.md` §3, claims one and two, on the second projection.
+
+    §2 argues the index by naming and not by omission *about a comment reader*
+    specifically: they have the projection and not the canvas, so "here is
+    every question this document has, and here is which ones are open" has to
+    be a claim they can count."""
+
+    def assertIndexNamesExactlyTheQuestions(self, ledger_id):
+        body = self.comment(ledger_id)
+        self.assertEqual(self.question_ids(ledger_id),
+                         self.comment_indexed_ids(body))
+
+    def test_the_index_names_every_question_on_a_canvas_with_open_ones(self):
+        self.assertIndexNamesExactlyTheQuestions(WITH_QUESTIONS)
+
+    def test_the_index_names_every_question_on_a_canvas_with_none_open(self):
+        # An index that silently dropped answered questions would still pass on
+        # a canvas that has none, so this is the reading that bites.
+        self.assertIndexNamesExactlyTheQuestions(ONLY_ANSWERED)
+
+    def test_the_index_names_nothing_on_a_canvas_with_no_questions(self):
+        body = self.comment(NO_QUESTIONS)
+        self.assertEqual([], self.comment_indexed_ids(body))
+        self.assertIn("nothing is open", self.comment_index(body))
+
+    def test_the_index_names_no_node_that_is_not_a_question(self):
+        body = self.comment()
+        questions = set(self.question_ids())
+        for node in self.nodes():
+            node_id = node.get("id")
+            if node.tag != "question" and node_id:
+                self.assertNotIn(node_id, self.comment_index(body))
+        self.assertEqual(questions, set(self.comment_indexed_ids(body)))
+
+    def test_the_index_says_of_each_entry_which_state_it_is_in(self):
+        entries = self.comment_index(self.comment()).splitlines()
+        answered = {
+            node.get("id"): node.get("answered") == "true"
+            for node in self.document().iter("question")
+        }
+        self.assertEqual(len(answered), len(entries))
+        for entry in entries:
+            node_id = re.search(r"`(%s)`" % NODE_ID.pattern, entry).group(1)
+            self.assertIn("answered" if answered[node_id] else "open", entry)
+
+    def test_the_comment_opens_with_the_sha_then_the_index_then_the_document(self):
+        body = html.unescape(self.comment())
+        # The first node of the document: the problem `create` wrote, which is
+        # the first child of the root in every canvas there is.
+        first = self.nodes()[0]
+        self.assertEqual("text", first.tag)
+        self.assertLess(body.index("rendered from"),
+                        body.index("**Open questions**"))
+        self.assertLess(body.index("**Open questions**"),
+                        body.index(first.text))
+
+
+class TheCommentNamesTheShaItWasRenderedFrom(RenderTestCase):
+    """The done condition's own clause, on the projection that is actually
+    carried to a comment: a reader of the row's comment can tell what they are
+    looking at from the canvas as it stands now."""
+
+    def test_the_comment_carries_the_head_sha_in_full(self):
+        code, stdout, stderr = run_canvas(self.workspace, "read", WITH_QUESTIONS)
+        self.assertEqual(0, code, stderr)
+        sha = stdout.splitlines()[0].split(": ", 1)[1]
+        self.assertTrue(SHA.match(sha), sha)
+        self.assertIn(sha, self.comment())
+
+    def test_the_sha_is_the_one_a_read_hands_out_for_that_canvas(self):
+        code, stdout, _ = run_canvas(self.workspace, "read", NO_QUESTIONS)
+        self.assertEqual(0, code)
+        self.assertIn(stdout.splitlines()[0].split(": ", 1)[1],
+                      self.comment(NO_QUESTIONS))
+
+    def test_it_is_the_same_sha_the_page_carries(self):
+        # One read, one document, one sha, walked twice. Two projections of one
+        # canvas that disagreed about which moment they are of would be two
+        # canvases as far as a reader is concerned.
+        sha = re.search(r"rendered from `([0-9a-f]{40})`", self.comment())
+        self.assertIsNotNone(sha)
+        self.assertIn(sha.group(1), self.render())
+
+    def test_the_comment_says_it_is_a_projection_of_that_moment(self):
+        body = self.comment()
+        self.assertIn("projection", body)
+        self.assertIn("never read back", body)
+
+
+class TheCommentProjectionIsAReadLikeThePage(unittest.TestCase):
+    """Picking a form is not a write and cannot become one. Its own workspace,
+    because a freeze is a write."""
+
+    def setUp(self):
+        self.workspace = tempfile.mkdtemp(prefix="canvas-render-comment-")
+        self.addCleanup(shutil.rmtree, self.workspace, True)
+
+    def test_a_frozen_canvas_still_renders_as_a_comment(self):
+        build(self.workspace, "ended", "both")
+        code, _, stderr = run_canvas(
+            self.workspace, "freeze", "ended", "--why",
+            "done: the comment projection landed and this canvas is what it "
+            "was checked against; nodes are read-only history from here",
+        )
+        self.assertEqual(0, code, stderr)
+        code, stdout, stderr = run_canvas(
+            self.workspace, "render", "ended", "--format", "comment"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn("**Canvas**", stdout)
+
+    def test_a_comment_render_does_not_initialise_a_repository(self):
+        code, _, _ = run_canvas(
+            self.workspace, "render", "never-created", "--format", "comment"
+        )
+        self.assertEqual(1, code)
+        self.assertFalse(os.path.exists(os.path.join(self.workspace, "state")))
+
+    def test_a_canvas_that_is_only_a_root_is_still_a_comment(self):
+        code, _, stderr = run_canvas(
+            self.workspace, "create", "just-born", "--problem", "P",
+            "--expected-value", "V",
+        )
+        self.assertEqual(0, code, stderr)
+        code, stdout, stderr = run_canvas(
+            self.workspace, "render", "just-born", "--format", "comment"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn("**Open questions**", stdout)
+        self.assertIn("rendered from", stdout)
+
+    def test_an_invalid_stored_canvas_is_refused_in_this_form_too(self):
+        # A projection of a document that breaks the grammar would assert a
+        # canvas that does not exist — and this is the form that lands in a
+        # comment somebody reads.
+        build(self.workspace, "broken", "none")
+        path = os.path.join(self.workspace, "state", "canvas", "broken.xml")
+        with open(path, "w") as handle:
+            handle.write(
+                '<?xml version="1.0" encoding="UTF-8"?>\n'
+                '<canvas ledger="broken" schema="1">\n'
+                '  <decision id="ab2c" v="1">Not in the vocabulary.</decision>\n'
+                "</canvas>\n"
+            )
+        code, stdout, stderr = run_canvas(
+            self.workspace, "render", "broken", "--format", "comment"
+        )
+        self.assertEqual(1, code)
+        self.assertEqual("", stdout)
+        self.assertIn("Canvas-Exit: 1 — ", stderr)
+
+    def test_no_canvas_for_that_ledger_id_is_still_one(self):
+        code, stdout, stderr = run_canvas(
+            self.workspace, "render", "no-such-row", "--format", "comment"
+        )
+        self.assertEqual(1, code)
+        self.assertEqual("", stdout)
+        self.assertIn("Canvas-About: ledger id no-such-row", stderr)
+
+    def test_a_form_this_tool_does_not_have_is_refused(self):
+        build(self.workspace, "a-row", "none")
+        code, stdout, stderr = run_canvas(
+            self.workspace, "render", "a-row", "--format", "html"
+        )
+        self.assertEqual(2, code)
+        self.assertEqual("", stdout)
+        self.assertIn("Canvas-Exit: 2 — ", stderr)
 
 
 if __name__ == "__main__":

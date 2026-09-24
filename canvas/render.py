@@ -1,4 +1,4 @@
-"""The renderer: one canvas in, one standalone HTML page out.
+"""The renderer: one canvas in, one projection out — a page, or a comment.
 
 `engineering-spec.md` section *The substrate* says what this is and what it is
 not: *"The renderer is a separate, dumb, one-way function: XML in, HTML out. It
@@ -36,9 +36,30 @@ Two questions this renderer had to settle rather than inherit, both argued in
   taken, and `rendering.md` §2 says why omission was not.
 
 The page carries the sha it was rendered from, in its own header, because a
-rendered page is pasted into a Basecamp comment and outlives the canvas it came
-from. A reader who has one has to be able to tell it from the canvas as it
-stands now, and the sha is the only thing that answers that.
+rendered page outlives the canvas it came from. A reader who has one has to be
+able to tell it from the canvas as it stands now, and the sha is the only thing
+that answers that.
+
+**Two projections, one walk of the document.** `page` is the standalone HTML
+document. `comment` is the same canvas as the block-level Markdown a Basecamp
+comment actually renders, for the ledger row that rewrites its own live comment
+in place. Both are reached through `render`, both come off one `store.read`,
+both take their sha from the same place, and the three claims `rendering.md`
+§3 says are not free — every `<question>` id in the index, only `<question>`
+ids in it, a marker on every `<question>` node — are asserted against both.
+
+`engineering-spec.md`'s *Projections* used to say the HTML page was
+*"pasteable into a Basecamp comment"*. It is not, and that sentence has been
+corrected there. Two facts about the transport kill it, and they compound: the
+`basecamp` CLI converts a comment body from Markdown to HTML only when the body
+holds no HTML at all, so one tag turns the conversion off for the *whole*
+comment — including the ledger row's own status blocks around it; and Basecamp
+then drops what its rich text does not accept, which is the doctype, `<html>`,
+`<head>`, `<style>`, `<header>`, `<nav>` and `<figure>` — most of the page, and
+every class the page's meaning is carried in. So the comment projection emits
+**no raw HTML tag of any kind**: no `<` character reaches its output, and a
+`<` in a canvas is written `&lt;`. That is the one rule everything below bends
+to.
 """
 
 from xml.etree import ElementTree as ET
@@ -59,6 +80,29 @@ ANSWERED = "answered"
 #: word beside its entry in the index cannot drift apart.
 OPEN_LABEL = "Open question"
 ANSWERED_LABEL = "Answered question"
+
+#: The two projections this module emits, named once. `PAGE` is the default
+#: everywhere — every existing invocation of `bin/canvas render` predates the
+#: second form and must keep getting the page it asked for.
+PAGE = "page"
+COMMENT = "comment"
+FORMS = (PAGE, COMMENT)
+
+#: What joins the cells of one table row once the row is a bullet, and what
+#: separates a node's marker from its text. The em dash with spaces around it,
+#: which is what the ledger row's own comment already uses to separate a thing
+#: from what is said about it.
+JOIN = " — "
+
+#: What the index is called, and what it says when there is nothing in it.
+#: Named once because both projections carry the index and a reader who has one
+#: and then the other must not have to work out whether they are the same
+#: claim.
+INDEX_HEADING = "Open questions"
+EMPTY_INDEX = (
+    "No questions in this canvas — nothing is open and nothing has been "
+    "asked."
+)
 
 #: `<section>` nests one level, so there are exactly two heading levels under
 #: the page's own `<h1>`. A third level of section is invalid and never
@@ -153,12 +197,9 @@ def _question_index(questions):
     is the question ledger and an id in it is a question's id.
     """
     out = ['<nav class="question-index" id="question-index">']
-    out.append("<h2>Open questions</h2>")
+    out.append("<h2>%s</h2>" % INDEX_HEADING)
     if not questions:
-        out.append(
-            '<p class="empty">No questions in this canvas — nothing is open '
-            "and nothing has been asked.</p>"
-        )
+        out.append('<p class="empty">%s</p>' % EMPTY_INDEX)
         out.append("</nav>")
         return out
     out.append("<ol>")
@@ -333,8 +374,245 @@ def page(ledger_id, sha, root):
     return "\n".join(out) + "\n"
 
 
-def render(ledger_id):
-    """One ledger row's canvas, as a standalone HTML page. Writes nothing.
+# --- the comment projection --------------------------------------------------
+#
+# The second projection, and the one a ledger row carries. Its shape is not a
+# taste decision: `orchestrator/basecamp.py` in `malkovro/ledger-orchestrator`
+# records what a Basecamp comment body does with what it is handed, from
+# observed failures with the todo and comment ids attached. The Markdown table
+# extension is off, so a table is not parsed at all and leaks its own pipes as
+# literal text. Hard wraps are off, so a single newline is a soft break and
+# consecutive lines fold into one paragraph. Raw HTML is dropped rather than
+# rendered — and worse, the CLI converts a body from Markdown *only* when the
+# body holds no HTML, so one tag anywhere turns the conversion off for the whole
+# comment, including the ledger row's own status blocks around this one.
+#
+# What is left is plain block-level Markdown: paragraphs and bullet lists,
+# separated by blank lines. Every block below is one of those two, and no `<`
+# reaches the output.
+
+
+def _comment_text(value):
+    """Character data, safe in a comment body. `None` is the empty string.
+
+    Two characters and no more. `&` and `<` become entities — `&` first, so an
+    `&lt;` a canvas really holds arrives as the four characters it is — because
+    a `<` in the body is what costs the *whole* comment its formatting.
+
+    Markdown's own active characters are left alone, deliberately. A `*` in a
+    canvas turning into emphasis is a cosmetic drift in one node; a `<p>` in a
+    canvas is the ledger row's status blocks arriving as literal asterisks.
+    """
+    return (value or "").replace("&", "&amp;").replace("<", "&lt;")
+
+
+def _inline(value):
+    """Character data for a block that is one line: a bullet, an index entry.
+
+    Whitespace is folded here rather than left to the converter, because a
+    newline inside a bullet is a lazy continuation of it — the one place a soft
+    break changes what a reader sees rather than only how it is spelled.
+    """
+    return " ".join(_comment_text(value).split())
+
+
+def _source(value):
+    """A `<figure>`'s source, for the fenced block that keeps its shape.
+
+    Escaped for `<` and nothing else. The CLI inspects the body and not the
+    rendering, so a `<` inside a fence is still a tag as far as it is concerned
+    — and an escaped one shows through to the reader as `&lt;`. That is the
+    cost, it is paid only by a figure that holds a `<`, and it buys the one
+    thing a diagram cannot do without: a fence is the only block-level Markdown
+    that keeps its columns. `&` is left alone for the mirror reason — it costs
+    the comment nothing and escaping it would show.
+    """
+    return (value or "").replace("<", "&lt;")
+
+
+def _fence(source):
+    """A fence long enough for this source: three backticks, or more.
+
+    A figure whose source is itself fenced code would otherwise end the block
+    early and spill the rest of the canvas into it.
+    """
+    longest = 0
+    run = 0
+    for character in source:
+        run = run + 1 if character == "`" else 0
+        longest = max(longest, run)
+    return "`" * max(3, longest + 1)
+
+
+def _comment_index(questions):
+    """The index, as the heading and the list under it. Two blocks, not one.
+
+    The same claim the page makes and for the same reason `rendering.md` §2
+    gives — and that reason is *about a comment reader*: they have the
+    projection and not the canvas, so "here is every question this document
+    has, and here is which ones are open" has to be something they can count.
+    Every `<question>` is named, answered ones included, and nothing that is
+    not a `<question>` is named at all.
+    """
+    if not questions:
+        return ["**%s**" % INDEX_HEADING, EMPTY_INDEX]
+    entries = []
+    for node in questions:
+        entries.append(
+            "- `%s`%s%s%s%s"
+            % (
+                _inline(node.get("id")),
+                JOIN,
+                "answered" if _is_answered(node) else "open",
+                JOIN,
+                _inline(node.text),
+            )
+        )
+    return ["**%s**" % INDEX_HEADING, "\n".join(entries)]
+
+
+def _comment_question(node):
+    """One `<question>`, with the marker of its own that every one carries.
+
+    The marker is the same word the page prints, bolded so it is the first
+    thing on the line, and the id is beside it so a reader can match a node to
+    its entry in the index — the page links the two and a comment cannot.
+    """
+    text = _inline(node.text)
+    return "**%s** `%s`%s" % (
+        ANSWERED_LABEL if _is_answered(node) else OPEN_LABEL,
+        _inline(node.get("id")),
+        (JOIN + text) if text else "",
+    )
+
+
+def _comment_row(node):
+    """One `<row>` as one line: its cells, joined.
+
+    Empty cells drop out rather than rendering as gaps — a trailing dash says
+    there is a column here whose value is missing, which is a claim the table
+    did not make. A row whose cells are all empty still gets a line, because a
+    repair may not change how many rows there are.
+    """
+    cells = [_inline(cell.text) for cell in node if cell.tag == "cell"]
+    return JOIN.join(cell for cell in cells if cell) or "—"
+
+
+def _comment_table(node):
+    """One `<table>`: a header line, then one bullet per row after it.
+
+    Not a Markdown table, and not because a table would be ugly: the extension
+    is off, so the pipes and dashes arrive as literal text. This is the same
+    repair `orchestrator/basecamp.py`'s `_unfold_markdown_tables` performs on
+    authored text, for the same recorded reason, and it is done here so that
+    nothing downstream has to recognise a table to fix it.
+    """
+    rows = [child for child in node if child.tag == "row"]
+    if not rows:
+        return []
+    blocks = [_comment_row(rows[0])]
+    if len(rows) > 1:
+        blocks.append("\n".join("- %s" % _comment_row(row) for row in rows[1:]))
+    return blocks
+
+
+def _comment_figure(node):
+    """One `<figure>`: its source in a fence, and the caption the page gives it.
+
+    `rendering.md` §1 again — the figure is the text the canvas stores, and
+    this renderer does not draw it either.
+    """
+    source = _source(node.text or "").strip("\n")
+    fence = _fence(source)
+    return [
+        "%s\n%s\n%s" % (fence, source, fence),
+        "figure `%s`%sthe textual source as stored"
+        % (_inline(node.get("id")), JOIN),
+    ]
+
+
+def _comment_link(node):
+    """One `<link>`: the label, or the target where there is no label yet."""
+    href = node.get("href") or ""
+    return "[%s](%s)" % (_inline(node.text) or _inline(href), _inline(href))
+
+
+def _comment_node(node, out):
+    """One node and everything under it, as blocks appended to `out`.
+
+    Same walk as the page's, and the same rule at the end of it: an element
+    this does not know is a canvas that could not exist — the validator has
+    already accepted this document — and it is still rendered, as its text,
+    because a projection that silently loses a node is worse than one that
+    shows it plainly.
+
+    What the comment cannot carry is the *depth* of a section: there are two
+    heading levels on the page and there is one weight of bold here. The order
+    of the blocks is the document's, so nothing is lost but the nesting, and
+    the page is where a reader goes for that.
+    """
+    tag = node.tag
+    if tag == "section":
+        title = _inline(node.get("title"))
+        if title:
+            out.append("**%s**" % title)
+        for child in node:
+            _comment_node(child, out)
+    elif tag == "list":
+        items = ["- %s" % _inline(child.text) for child in node
+                 if child.tag == "item"]
+        if items:
+            out.append("\n".join(items))
+        for child in node:
+            if child.tag != "item":
+                _comment_node(child, out)
+    elif tag == "item":
+        out.append("- %s" % _inline(node.text))
+    elif tag == "table":
+        out.extend(_comment_table(node))
+    elif tag == "row":
+        out.append(_comment_row(node))
+    elif tag == "figure":
+        out.extend(_comment_figure(node))
+    elif tag == "link":
+        out.append(_comment_link(node))
+    elif tag == "question":
+        out.append(_comment_question(node))
+    else:
+        out.append(_comment_text(node.text or "").strip())
+
+
+def comment(sha, root):
+    """The whole canvas as one block of a Basecamp comment.
+
+    The ledger row rewrites one comment in place on every transition and is
+    deliberately the only author on that anchor, so this is not a comment: it
+    is a block the row appends to its own, below everything it already says.
+    It therefore opens by naming itself and the moment it is of, and it names
+    the sha in full for the reason the page's header does — a projection
+    outlives the canvas it came from, and the sha is the only thing that tells
+    a reader which of the two they are holding.
+
+    The order is the page's: the sha, then the index of questions, then the
+    document. What a reader of the comment needs first is which canvas this is
+    and which moment of it.
+    """
+    blocks = [
+        "**Canvas**%srendered from `%s`" % (JOIN, _inline(sha)),
+        "A projection of the canvas at that commit, not the canvas. Never "
+        "edited and never read back; re-render to see it as it stands now.",
+    ]
+    blocks.extend(_comment_index(_questions(root)))
+    for child in root:
+        _comment_node(child, blocks)
+    # One blank line between blocks and never two: a block boundary is one
+    # separator, and the same document has to render as the same bytes for an
+    # edited-in-place comment to be diffable.
+    return "\n\n".join(block for block in blocks if block.strip()) + "\n"
+
+
+def render(ledger_id, form=PAGE):
+    """One ledger row's canvas, as a projection of it. Writes nothing.
 
     A read, on exactly `read`'s terms: it goes through `store.read`, which
     writes no file, makes no commit and does not initialise a repository, and
@@ -348,6 +626,12 @@ def render(ledger_id):
     a document that breaks the grammar is a page asserting something about a
     canvas that does not exist, and it carries a sha, so it is exactly the
     artifact somebody pastes into a comment.
+
+    `form` picks which projection: the standalone HTML page (the default, and
+    what every caller that names no form gets), or the block-level Markdown a
+    Basecamp comment renders. It is not a different read — one `store.read`,
+    one document, one sha, walked twice — and it is not a way to write: there
+    is nothing this can be set to that puts a byte anywhere.
     """
     # No selector and no provenance: a projection is of the whole document,
     # and the header a read composes is for a caller that is about to write.
@@ -367,4 +651,7 @@ def render(ledger_id):
             about=["ledger id %s" % ledger_id, "canvas %s" % path],
             details=problems,
         )
-    return page(ledger_id, sha, ET.fromstring(body))
+    root = ET.fromstring(body)
+    if form == COMMENT:
+        return comment(sha, root)
+    return page(ledger_id, sha, root)

@@ -436,26 +436,29 @@ to be — a `--why` contains spaces, colons, quotes and pipes.
 ### Rendering a canvas
 
     bin/canvas render <ledger_id> > canvas.html
+    bin/canvas render <ledger_id> --format comment
 
 `engineering-spec.md` section *Projections* gives the canvas three of them and
-this is the first: *"HTML — the renderer's output. Shareable as a file,
-viewable in a browser, pasteable into a Basecamp comment."* All of them are
+the first two are here: *"HTML — one standalone document: shareable as a file,
+viewable in a browser, openable from a `file://` path"*, and *"the ledger row's
+Basecamp comment"*, which is what `--format comment` prints. All of them are
 one-way. **A projection is never edited and never read back**, so there is no
-form, no button, no route and no flag here that writes to a canvas.
+form, no button, no route and no flag here that writes to a canvas — `--format`
+picks which projection and can be nothing else.
 
     $ bin/canvas render my-task | head -3
     <!DOCTYPE html>
     <html lang="en">
     <head>
 
-**stdout is the page, and nothing but the page.** No `Canvas-Base:` line above
-the doctype and no trailer under the closing tag: unlike `read`, whose stdout
-[is deliberately not a valid XML document](#reading-a-canvas), this output is a
-file somebody opens in a browser or pastes into a comment, and a line of plain
-text above the doctype would be a defect in the artifact. Redirecting stdout is
-how the page becomes a file, and **there is no `--output`** — a projection this
-command could write anywhere is a projection somebody eventually writes into
-`state/canvas`.
+**stdout is the projection, and nothing but the projection.** No `Canvas-Base:`
+line above the doctype and no trailer under the closing tag: unlike `read`,
+whose stdout [is deliberately not a valid XML document](#reading-a-canvas),
+this output is a file somebody opens or a block somebody puts in a comment, and
+a line of plain text above it would be a defect in the artifact. Redirecting
+stdout is how the page becomes a file, and **there is no `--output`** — a
+projection this command could write anywhere is a projection somebody
+eventually writes into `state/canvas`.
 
 **One standalone document.** No stylesheet to fetch, no script, no font and no
 image. It opens from a `file://` path and survives being pasted somewhere with
@@ -477,9 +480,9 @@ What the page carries:
   `tests/test_render.py` holds it on a canvas with open questions and on one
   with none.
 - **The sha it was rendered from**, in full, in the page's own header. A
-  rendered page outlives the canvas it came from — that is what pasting one
-  into a comment does — and this line is the only thing that tells it apart
-  from the canvas as it stands now.
+  projection outlives the canvas it came from — that is what carrying one to a
+  comment does — and this line is the only thing that tells it apart from the
+  canvas as it stands now.
 
 **A `<figure>` is its textual source, printed verbatim. This renderer does not
 draw.** Schema v1 admits a textual source only, so there is no inline SVG to
@@ -488,13 +491,49 @@ would then own — an install, a dependency and a second grammar validated by a
 binary rather than by `schema/canvas.rng`. [`rendering.md`](rendering.md) §1
 settles it, with what it costs and what would reopen it.
 
-**A render is a read**, on `read`'s terms: it writes no file, makes no commit,
-mints no id and does not initialise a repository, and it goes on working on a
-canvas that has been [frozen](#ending-a-canvas).
+#### `--format comment`: the projection a ledger row carries
+
+    $ bin/canvas render my-task --format comment | head -3
+    **Canvas** — rendered from `13ccbc7f403a9c52a05dba72194a730b730b4a97`
+
+    A projection of the canvas at that commit, not the canvas. Never edited and never read back; re-render to see it as it stands now.
+
+The ledger row rewrites **one** Basecamp comment in place on every transition
+and is deliberately the only author on that anchor, so this form is not a
+comment — it is a block the row appends to the one it already writes. It is the
+same read, the same document and the same sha as the page; what differs is the
+output, and the output is dictated by the transport:
+
+- **No raw HTML tag of any kind, and no `<` at all** — a `<` in a canvas is
+  written `&lt;`. The `basecamp` CLI converts a comment body from Markdown to
+  HTML *only when the body contains no HTML*, so one tag turns the conversion
+  off for the whole comment, including the ledger row's own status blocks
+  around this one. That is also why the HTML page is not pasteable into a
+  comment, and why `engineering-spec.md` no longer says it is.
+- **Paragraphs and bullet lists, separated by blank lines**, because that is
+  all a comment body renders. Hard wraps are off there, so a single newline is
+  a soft break and adjacent lines fold into one paragraph.
+- **A `<table>` is a header line and one bullet per row**, cells joined by
+  ` — `, because the Markdown table extension is off and a real table leaks
+  its own pipes as literal text.
+- **A `<figure>` keeps its source in a fenced block**, which is the one
+  block-level Markdown that keeps a diagram's columns.
+- **The index and the markers are the page's**, unchanged in substance: every
+  `<question>` named with its state, nothing that is not a `<question>` named,
+  and a marker on every `<question>` node. `tests/test_render.py` asserts all
+  three on this form as well as on the page.
+
+What it cannot carry is the *depth* of a section — two heading levels on the
+page, one weight of bold here. The blocks are in the document's order, so
+nothing is lost but the nesting, and the page is where a reader goes for that.
+
+**A render is a read**, on `read`'s terms, in either form: it writes no file,
+makes no commit, mints no id and does not initialise a repository, and it goes
+on working on a canvas that has been [frozen](#ending-a-canvas).
 
 | exit | meaning |
 |---|---|
-| `0` | the page is on stdout |
+| `0` | the projection is on stdout |
 | `1` | the request is wrong against the store as it stands — there is no canvas for that ledger id, or the stored document is invalid. **An invalid canvas is refused rather than rendered**, with the validator's diagnostics: `read` prints an invalid document because refusing to show it would make it unrepairable, and a projection is the other case — a page asserting a canvas that does not exist, carrying a sha, is exactly the artifact somebody pastes into a comment. Repair it with `bin/canvas read` and `bin/canvas replace`, then re-render |
 | `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or unusable, a ledger id that is not a filename, a missing or unrecognised argument, `git` or `xmllint` missing, the validator unable to run, or any other condition the operating system refuses the command with |
 

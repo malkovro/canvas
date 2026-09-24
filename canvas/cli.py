@@ -4,7 +4,7 @@ Nine subcommands, and no more:
 
     canvas create  <ledger_id> --problem TEXT --expected-value TEXT
     canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
-    canvas render  <ledger_id>
+    canvas render  <ledger_id> [--format page|comment]
     canvas history <ledger_id> <node-id>
     canvas replace <ledger_id> <node-id> --why TEXT [--base SHA]
     canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
@@ -21,10 +21,15 @@ document they leave behind; both go on working on a frozen canvas, and every
 write verb is refused against one at exit 1.
 
 `render` is the third read and is not a verb either: it prints the canvas as a
-standalone HTML page and writes nothing at all — not the page, not a file, not
-a commit. A projection is one-way, never edited and never read back, so there
-is no flag on it that writes to a canvas and no path argument that could put
-one anywhere: the page goes to stdout and the shell decides where it lands.
+projection and writes nothing at all — not the page, not a file, not a commit.
+A projection is one-way, never edited and never read back, so there is no flag
+on it that writes to a canvas and no path argument that could put one anywhere:
+the projection goes to stdout and the shell decides where it lands. `--format`
+picks which one — the standalone HTML page, which is the default, or the
+block-level Markdown a Basecamp comment renders, which is what the ledger row
+carries in the one comment it rewrites in place. Picking a form is not a write
+and cannot become one; both forms come off the same read of the same document
+and carry the same sha.
 
 There is no `resolve`, no `collapse` and no `supersede`:
 the semantics live in the reason, not in a verb name. `abandon` is not a verb
@@ -208,7 +213,7 @@ def _read(args):
 
 
 def _render(args):
-    """Print the canvas as a standalone HTML page, and nothing else.
+    """Print the canvas as the projection asked for, and nothing else.
 
     stdout is the whole page, byte for byte — no `Canvas-Base:` line above it
     and no trailer below. That is not `read`'s shape and deliberately not:
@@ -223,8 +228,13 @@ def _render(args):
     and where that file goes is the shell's business. There is no `--output`:
     a projection this command could write anywhere is a projection somebody
     eventually writes into `state/canvas`.
+
+    `--format comment` is the second projection and is the same read. It is
+    stdout too, for the same reason, and the caller that wants it — the ledger
+    row rewriting its own live comment — reads that stdout and puts it in the
+    comment it was already writing. Nothing here knows Basecamp exists.
     """
-    sys.stdout.write(renderer.render(args.ledger_id))
+    sys.stdout.write(renderer.render(args.ledger_id, getattr(args, "format", renderer.PAGE)))
     return 0
 
 
@@ -793,18 +803,31 @@ def build_parser():
         "render",
         help="print the canvas as a standalone HTML page",
         description=(
-            "Print the canvas for a ledger row as one standalone HTML "
-            "document: no stylesheet to fetch, no script and no image. The "
-            "page opens with an index naming every <question> in the "
-            "document, every <question> carries a marker of its own, and the "
-            "header names the sha it was rendered from — a rendered page is "
-            "pasted into a comment and has to be tellable from the canvas as "
-            "it stands now. A projection is one-way: this writes nothing, "
-            "commits nothing, initialises no repository and has no flag that "
-            "writes to a canvas. Redirect stdout to keep the page."
+            "Print the canvas for a ledger row as a projection of it. The "
+            "default is one standalone HTML document: no stylesheet to fetch, "
+            "no script and no image. Either projection opens with an index "
+            "naming every <question> in the document, every <question> "
+            "carries a marker of its own, and both name the sha they were "
+            "rendered from — a projection outlives the canvas it came from "
+            "and has to be tellable from the canvas as it stands now. A "
+            "projection is one-way: this writes nothing, commits nothing, "
+            "initialises no repository and has no flag that writes to a "
+            "canvas. Redirect stdout to keep it."
         ),
     )
     render.add_argument("ledger_id", help="the ledger row whose canvas to render")
+    render.add_argument(
+        "--format",
+        choices=list(renderer.FORMS),
+        default=renderer.PAGE,
+        help=(
+            "which projection to print: %s, a standalone HTML document, or "
+            "%s, the block-level Markdown a Basecamp comment renders, which "
+            "is what a ledger row carries in the one comment it rewrites in "
+            "place. Both are reads and neither writes anything"
+            % (renderer.PAGE, renderer.COMMENT)
+        ),
+    )
     render.set_defaults(handler=_render)
 
     history = verbs.add_parser(

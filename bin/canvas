@@ -7,7 +7,7 @@ nothing here knows anything about any of them.
 
     bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT
     bin/canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
-    bin/canvas render  <ledger_id>
+    bin/canvas render  <ledger_id> [--format page|comment]
     bin/canvas history <ledger_id> <node-id>
     bin/canvas replace <ledger_id> <node-id> --why TEXT
     bin/canvas insert  <ledger_id> (--after <node-id> | --into <id>) --why TEXT
@@ -22,9 +22,12 @@ frozen, which every write verb is refused against at exit 1. `read`'s four
 flags are reads on the same terms and acquire nothing: `--id` and `--type`
 select part of the document, `--provenance` says who last wrote each node
 printed and at which commit, and `--since` says what changed between a sha and
-the head without applying any of it. `render` prints the canvas as one
-standalone HTML page on stdout; it is a projection, so it is never edited and
-never read back, and redirecting stdout is how it becomes a file.
+the head without applying any of it. `render` prints the canvas as a projection
+on stdout: one standalone HTML page by default, or `--format comment` for the
+block-level Markdown a Basecamp comment renders, which is what a ledger row
+carries in the one comment it rewrites in place. Either way it is a projection,
+so it is never edited and never read back, and redirecting stdout is how it
+becomes a file.
 
 Exit 0 if it worked, 1 if the request is wrong against the store as it stands,
 2 if the tool or its environment is wrong.

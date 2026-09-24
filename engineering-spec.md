@@ -314,11 +314,34 @@ This is the canvas's highest-value use and its hardest constraint. It means:
 
 All one-way. A projection is never edited and never read back.
 
-1. **HTML** — the renderer's output. Shareable as a file, viewable in a browser,
-   pasteable into a Basecamp comment.
-2. **The ledger row's Basecamp comment** — the rendered canvas, rewritten in
-   place on change, by the row, as it already rewrites everything else.
+1. **HTML** — `bin/canvas render <ledger-id>`. One standalone document:
+   shareable as a file, viewable in a browser, openable from a `file://` path.
+   **Not pasteable into a Basecamp comment.** That is a correction: this line
+   said it was, and it is not, for two reasons about the transport that
+   compound. The `basecamp` CLI converts a comment body from Markdown to HTML
+   *only when the body contains no HTML*, so one tag turns the conversion off
+   for the whole comment — including the ledger row's own status blocks around
+   it, which then arrive as literal asterisks and hyphens. And Basecamp's rich
+   text then drops what it does not accept: the doctype, `<html>`, `<head>`,
+   `<style>`, `<header>`, `<nav>`, `<figure>` — most of the page, and every
+   class its meaning is carried in.
+2. **The ledger row's Basecamp comment** — `bin/canvas render <ledger-id>
+   --format comment`: the same canvas, off the same read, as the block-level
+   Markdown a comment actually renders — paragraphs and bullet lists, no raw
+   HTML tag of any kind, and a table unfolded into a header line and one bullet
+   per row because the Markdown table extension is off there. It carries the
+   sha it was rendered from, exactly as the page does. The row appends it to
+   the one comment it already rewrites in place on every change, so the row
+   stays the only author on that anchor and nothing new writes to Basecamp at
+   all. A row whose task has no canvas renders the comment it renders today.
 3. **`watch-runs-web`** — a canvas tab, alongside the run list.
+
+Two renderers, one document: both live in `canvas/render.py`, both walk what
+one `store.read` returned, and both take their sha from the same place. The
+three claims `rendering.md` says are not free — every `<question>` id in the
+index, only `<question>` ids in it, a marker on every `<question>` node — are
+asserted against both in `tests/test_render.py`, which is what makes "keep them
+honest" a test that fails rather than a discipline somebody must remember.
 
 ## The write path, and one honest problem
 
