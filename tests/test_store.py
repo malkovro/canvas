@@ -314,6 +314,195 @@ class OneEditIsOneCommit(StoreTestCase):
             )
 
 
+class OneCommitIsOneCanvas(StoreTestCase):
+    """A write commits its own file and nothing else.
+
+    `state/canvas` is one repository for every ledger row, which
+    `node-identity.md` section 1 settles, and one repository is one *index*.
+    The write path staged path-scoped and committed with no pathspec, so a
+    second writer that had staged its own canvas in between had that canvas
+    committed too: one commit carrying two rows' edits, under a subject, a
+    `Canvas-Node:` trailer and a reason belonging to one of them. It happened
+    once in 99 commits of the live store, at 59f6946 — see
+    `docs/unattributed-edits.md`.
+
+    Every test here dirties a second canvas's path and stages it *before* the
+    write under test, which is the concurrent writer's half of that race made
+    deterministic. There is no thread and no second process: what the race
+    produces is an index entry, and an index entry is what these put there.
+    """
+
+    OTHER = "another-ledger-row"
+
+    def two_canvases(self):
+        """Two canvases in one store, with the second one staged and dirty."""
+        self.create()
+        self.create(self.OTHER, problem="Another problem.", value="Another value.")
+        self.meddle_with(self.OTHER)
+
+    def meddle_with(self, ledger_id):
+        """Edit a canvas behind the tool's back and stage it, as a rival would.
+
+        Not through `bin/canvas`: the point is an index entry this process did
+        not put there, and a real write would commit it and leave nothing
+        staged. The edit is to the text of a node, so the file genuinely
+        differs and `git` genuinely stages a change.
+        """
+        path = self.canvas_file(ledger_id)
+        with open(path, "rb") as handle:
+            before = handle.read()
+        after = before.replace(b"Another problem.", b"Another problem, meddled with.")
+        self.assertNotEqual(before, after)
+        with open(path, "wb") as handle:
+            handle.write(after)
+        self.git("add", "-f", "--", path)
+        self.assertEqual(["M  %s.xml" % ledger_id], self.staged())
+
+    def staged(self):
+        return self.git("status", "--porcelain").splitlines()
+
+    def files_in(self, sha="HEAD"):
+        """The paths one commit changed, which is what this class is about."""
+        return self.git("show", "--name-only", "--format=", sha).split()
+
+    def commits_touching(self, ledger_id):
+        return self.git(
+            "log", "--format=%H", "--", self.canvas_file(ledger_id)
+        ).split()
+
+    def test_a_write_commits_its_own_file_and_nothing_else(self):
+        self.two_canvases()
+        code, _, stderr = self.run_canvas(
+            "insert",
+            "a-ledger-row",
+            "--into",
+            "root",
+            "--text",
+            "A node this commit is about.",
+            "--why",
+            "the node this commit is about, and the only file it may contain",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(["a-ledger-row.xml"], self.files_in())
+
+    def test_the_other_canvas_gains_no_commit(self):
+        self.two_canvases()
+        before = self.commits_touching(self.OTHER)
+        code, _, stderr = self.run_canvas(
+            "insert",
+            "a-ledger-row",
+            "--into",
+            "root",
+            "--text",
+            "A node this commit is about.",
+            "--why",
+            "the node this commit is about, and the only file it may contain",
+        )
+        self.assertEqual(0, code, stderr)
+        # The defect's visible shape: the other row's history growing a commit
+        # whose reason is about a node in a different canvas, which is what
+        # leaves an edit there that `history` can never attribute.
+        self.assertEqual(before, self.commits_touching(self.OTHER))
+
+    def test_the_other_writers_staged_edit_is_left_staged(self):
+        self.two_canvases()
+        code, _, stderr = self.run_canvas(
+            "insert",
+            "a-ledger-row",
+            "--into",
+            "root",
+            "--text",
+            "A node this commit is about.",
+            "--why",
+            "the node this commit is about, and the only file it may contain",
+        )
+        self.assertEqual(0, code, stderr)
+        # Left for the writer that staged it, to be committed by its own commit
+        # under its own reason. Stealing it and dropping it are the same defect.
+        self.assertEqual(["M  %s.xml" % self.OTHER], self.staged())
+
+    def test_every_verb_commits_its_own_file_and_nothing_else(self):
+        # All four editing verbs, in one store where a rival's canvas is staged
+        # throughout. The guard is in `_write_and_commit` and every verb goes
+        # through it, so this is the assertion that none of them found a second
+        # way out.
+        self.two_canvases()
+        problem_id, value_id = [
+            node.get("id")
+            for node in ElementTree.parse(self.canvas_file()).getroot()
+        ]
+        minted = None
+        edits = [
+            ("insert", ["--into", "root", "--text", "A fourth node."]),
+            ("replace", [None, "--text", "The problem, restated."]),
+            ("move", [None, "--after", "MINTED"]),
+            ("remove", [None]),
+        ]
+        for verb, arguments in edits:
+            arguments = list(arguments)
+            if arguments and arguments[0] is None:
+                arguments[0] = problem_id if verb == "replace" else value_id
+            arguments = [minted if a == "MINTED" else a for a in arguments]
+            code, stdout, stderr = self.run_canvas(
+                "%s" % verb,
+                "a-ledger-row",
+                *(arguments + ["--why", "one canvas per commit, for %s" % verb])
+            )
+            self.assertEqual(0, code, stderr)
+            if verb == "insert":
+                minted = stdout.decode("utf-8").splitlines()[0].split(": ", 1)[1]
+            self.assertEqual(["a-ledger-row.xml"], self.files_in(), verb)
+            self.assertEqual(["M  %s.xml" % self.OTHER], self.staged(), verb)
+
+    def test_a_birth_commits_only_the_canvas_being_born(self):
+        # `create` makes three commits and the first of them writes a file that
+        # was not tracked a moment ago, which is the one shape a pathspec on the
+        # commit could have broken. It does not: the `add` before it is what
+        # puts the path where a pathspec can name it.
+        self.create()
+        self.create(self.OTHER, problem="Another problem.", value="Another value.")
+        self.meddle_with(self.OTHER)
+        code, _, stderr = self.run_canvas(
+            "create", "a-third-ledger-row", "--problem", "P", "--expected-value", "E"
+        )
+        self.assertEqual(0, code, stderr)
+        for sha in self.git("log", "--format=%H", "-3").split():
+            self.assertEqual(["a-third-ledger-row.xml"], self.files_in(sha))
+        self.assertEqual(["M  %s.xml" % self.OTHER], self.staged())
+
+    def test_a_freeze_still_commits_no_file_at_all(self):
+        # The freeze's commit is `--allow-empty` and changes no byte of the
+        # document. A pathspec does not turn it into a commit of anything: it
+        # stays empty, and it stays unable to sweep up what is staged beside it.
+        self.two_canvases()
+        code, _, stderr = self.run_canvas(
+            "freeze", "a-ledger-row", "--why", "done: the row closed, and this ends it"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual([], self.files_in())
+        self.assertEqual(["M  %s.xml" % self.OTHER], self.staged())
+
+    def test_a_refused_write_commits_nothing_and_leaves_the_rival_staged(self):
+        # The refusal path renames a document onto the canvas's own path before
+        # git is asked for anything and takes it back when git refuses. What is
+        # asserted here is the other half of that: a write this store refuses on
+        # its own terms must not reach the rival's staged entry either.
+        self.two_canvases()
+        head = self.git("rev-parse", "HEAD").strip()
+        code, _, stderr = self.run_canvas(
+            "replace",
+            "a-ledger-row",
+            "zzzz",
+            "--text",
+            "A node that is not there.",
+            "--why",
+            "a write this store refuses on its own terms",
+        )
+        self.assertEqual(1, code, stderr)
+        self.assertEqual(head, self.git("rev-parse", "HEAD").strip())
+        self.assertEqual(["M  %s.xml" % self.OTHER], self.staged())
+
+
 class TheReadPath(StoreTestCase):
     """The done condition's second clause: a read prints both the document and
     the sha to write against."""

@@ -50,6 +50,15 @@ its `Canvas-Node:` trailer names is the one that differs. A whole-document
 rewrite is not a verb that was left out of `canvas/cli.py`; it is a write this
 function will not perform, for any caller, from any import path.
 
+**No commit ever carries more than one canvas**, which is the same claim one
+level out. `state/canvas` is one repository for every ledger row and therefore
+one *index* for every ledger row, so a commit made with no pathspec takes
+whatever a concurrent writer happens to have staged in it. `_write_and_commit`
+names the path on the commit as well as on the `add`, so git builds the commit
+from the head plus that one file and every other staged entry is left for the
+writer that staged it. A reader of this log can rely on it: one commit changes
+one canvas, and the `Canvas-Node:` trailer names the one node it changed in it.
+
 **The supported write surface of this module is six functions**: `create`,
 `insert`, `replace`, `remove`, `move` and `freeze`. Each of them takes a ledger
 id, a reason and at most one node id, and each of them produces exactly one
@@ -1988,6 +1997,16 @@ def _write_and_commit(
     whose whole of what it may be is `_a_canvas_is_being_born`, and the freeze,
     whose whole of what it may be is `_a_canvas_is_being_ended`.
 
+    **This is also where a commit is held to one canvas.** `add` below is
+    path-scoped and the commit was not, and one repository for every ledger row
+    is one *index* for every ledger row: a second writer that staged its own
+    file between this process's `add` and its `commit` had that file committed
+    here, under this commit's subject, its trailers and its reason. The commit
+    names the path too, so git builds it from the head plus this one file and
+    leaves every other staged entry for the writer that staged it. That is a
+    claim about the log — one commit, one canvas — and `README.md` section
+    *What one commit contains* is where a caller is told it may rely on it.
+
     **This is also where a frozen canvas stops taking writes**, and it is here
     for the third time on the same argument. `_open_canvas` answers the freeze
     first, so a command line hears about it before an `insert` mints an id;
@@ -2127,6 +2146,28 @@ def _write_and_commit(
         # which git declines to commit unless it is told that is the point.
         # Every other write here has staged a changed document, and git
         # refusing an accidental no-op is worth keeping for those.
+        #
+        # **The pathspec is what holds the commit to one canvas.** The `add`
+        # above names the path and this did not, and the index every writer
+        # stages into is one index — `state/canvas` is one repository for
+        # every ledger row, which `node-identity.md` section 1 settles and
+        # this does not reopen. So a second writer that staged its own file in
+        # between had that file committed here: one commit carrying two rows'
+        # edits, under a subject, a `Canvas-Node:` trailer and a reason that
+        # belong to one of them. It happened once in the live store, at
+        # 59f6946, and the node that commit did not name is
+        # `docs/unattributed-edits.md`'s whole subject. Naming the path makes
+        # git build the commit from the head plus this one file, so every
+        # other staged entry stays staged for the writer that staged it and is
+        # committed by that writer's own commit under that writer's own
+        # reason.
+        #
+        # This form commits the path's *worktree* content rather than what
+        # `add` put in the index. Here they are the same bytes: the rename
+        # above put them on the path and nothing between it and this line
+        # touches it. `add` stays for the three things it still does — force
+        # past a stray ignore rule, put a path git does not yet track where a
+        # pathspec can name it, and set `staged` for `_take_back`.
         empty = ["--allow-empty"] if freeze is not None else []
         _git_checked(
             canvas_dir,
@@ -2143,7 +2184,7 @@ def _write_and_commit(
                     "-q",
                 ]
                 + empty
-                + ["-m", subject, "-m", "\n".join(trailers)]
+                + ["-m", subject, "-m", "\n".join(trailers), "--", path]
             )
         )
     except ToolProblem as refused:
