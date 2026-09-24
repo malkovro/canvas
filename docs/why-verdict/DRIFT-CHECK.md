@@ -784,14 +784,51 @@ it — in full. Carry it verbatim; it is written to be carried, not re-drafted.
 > word, no shape a reason has to match and nothing that checks any of it: a
 > check that could tell a real citation from a plausible-looking one would have
 > to leave the canvas to run, and the freedom of the field is what
-> `VERDICT.md` §5.3 found load-bearing.
+> `docs/why-verdict/VERDICT.md` §5.3 found load-bearing.
 
 ### 6.2 The replacement text for `README.md`
 
 Replaces the `##### A reason that asserts a fact about the world names its
 evidence` subsection of `README.md`'s `--why` section — today its heading and
-the one paragraph under it — in full. It is the same text with this repository's
-own framing sentence kept, the way §5.1's rule is carried in both places.
+the one paragraph under it — in full.
+
+**What "the way §5.1's rule already is" means, measured rather than read off.**
+§5.1's rule has two homes today, and the carry is not free-hand: the heading
+differs (`## The rule, from VERDICT.md §5.1, verbatim` in the guideline,
+`##### The rule a --why writer is given` in `README.md`) and each home writes
+its own framing paragraph, but the rule text itself is one text. Pulling the
+blockquote out of `guidelines/canvas-why.md` and out of `README.md` §*The rule a
+`--why` writer is given* and stripping the `> ` markers gives eleven lines on
+both sides that sha256 to `066a493f424cba10df045094ce4b1fc8b7690374c595432a858bb08a94854eb7`,
+and `diff -u` between them is empty:
+
+```
+$ sed -n '/^## The rule, from/,/^## A reason that asserts/p' \
+      ../ledger-orchestrator/guidelines/canvas-why.md |
+      grep '^>' | sed 's/^> \{0,1\}//' | shasum -a 256
+$ sed -n '/^##### The rule a `--why` writer is given/,/^##### A reason that asserts/p' \
+      README.md | grep '^>' | sed 's/^> \{0,1\}//' | shasum -a 256
+```
+
+So the carry rule is: **heading level and the home's own framing sentence are
+local; the advice itself is byte-identical.** The text below therefore keeps
+`README.md`'s existing framing paragraph — which cites `engineering-spec.md` and
+says why the README repeats the clause at all, and has no counterpart in the
+guideline — and carries the four bolded paragraphs and the closing one from §6.1
+unchanged, down to the byte. Stripped of the framing paragraph, both homes'
+advice sha256s to
+`c2c44bf0adf4e8fe447973efcc8ede3fbb7565dd33b126c7350db6500623329d`.
+
+Two phrasings were considered and dropped, both of which would have made the two
+homes differ: naming the drift check without its repository in `README.md`
+(`` `docs/why-verdict/DRIFT-CHECK.md` read fifty-four real reasons ``, on the
+grounds that "in the canvas repository" is redundant inside that repository),
+and closing with a clause about the back-reference the store does refuse. The
+first trades a redundancy a README reader can ignore for a locator a guideline
+reader cannot resolve; the second says in the closing paragraph what the
+subsection two above it already says at length. A clause this section is about
+to tell writers to keep resolvable is the last one to shorten, and a text that
+drifts between its two homes is the failure this whole document measures.
 
 > ##### A reason that asserts a fact about the world names its evidence
 >
@@ -811,11 +848,12 @@ own framing sentence kept, the way §5.1's rule is carried in both places.
 > cannot get there from the reason, and a claim nobody can reach is a claim
 > nobody can check.
 >
-> **Prefer a name to a line number.** `docs/why-verdict/DRIFT-CHECK.md` read
-> fifty-four real reasons for whether the evidence they name still resolves:
-> every citation that was a name resolved unchanged, and both that were a bare
-> line number now point at something other than what they meant. Give the line
-> if it helps, and give something beside it that survives an edit.
+> **Prefer a name to a line number.** Fifty-four real reasons were read for
+> whether the evidence they name still resolves — `docs/why-verdict/DRIFT-CHECK.md`
+> in the canvas repository — and every citation that was a name resolved
+> unchanged, while both that were a bare line number now point at something
+> other than what they meant. Give the line if it helps, and give something
+> beside it that survives an edit.
 >
 > **Pin a claim about how the code is today.** If the reason turns on the
 > current state of something — that the tool cannot do X, that no template names
@@ -829,10 +867,10 @@ own framing sentence kept, the way §5.1's rule is carried in both places.
 > in everything else the reason names.
 >
 > None of this is a required form. There is no `Evidence:` line, no required
-> word, no shape a reason has to match and nothing that checks any of it — the
-> freedom of the field is what `docs/why-verdict/VERDICT.md` §5.3 found
-> load-bearing, and the one shape the store does refuse is the back-reference
-> above, which needs no judgment of content.
+> word, no shape a reason has to match and nothing that checks any of it: a
+> check that could tell a real citation from a plausible-looking one would have
+> to leave the canvas to run, and the freedom of the field is what
+> `docs/why-verdict/VERDICT.md` §5.3 found load-bearing.
 
 Nothing else moves. `schema/canvas.rng` gains no attribute, `require_reason`
 gains no check, `tests/` is untouched, and the `--why` interface — one required

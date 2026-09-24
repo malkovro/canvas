@@ -614,11 +614,12 @@ an artifact: a reader who does not already know which artifact you meant
 cannot get there from the reason, and a claim nobody can reach is a claim
 nobody can check.
 
-**Prefer a name to a line number.** `docs/why-verdict/DRIFT-CHECK.md` read
-fifty-four real reasons for whether the evidence they name still resolves:
-every citation that was a name resolved unchanged, and both that were a bare
-line number now point at something other than what they meant. Give the line
-if it helps, and give something beside it that survives an edit.
+**Prefer a name to a line number.** Fifty-four real reasons were read for
+whether the evidence they name still resolves — `docs/why-verdict/DRIFT-CHECK.md`
+in the canvas repository — and every citation that was a name resolved
+unchanged, while both that were a bare line number now point at something
+other than what they meant. Give the line if it helps, and give something
+beside it that survives an edit.
 
 **Pin a claim about how the code is today.** If the reason turns on the
 current state of something — that the tool cannot do X, that no template names
@@ -632,10 +633,10 @@ go and find the sentence. A paraphrase inside them costs a reader their trust
 in everything else the reason names.
 
 None of this is a required form. There is no `Evidence:` line, no required
-word, no shape a reason has to match and nothing that checks any of it — the
-freedom of the field is what `docs/why-verdict/VERDICT.md` §5.3 found
-load-bearing, and the one shape the store does refuse is the back-reference
-above, which needs no judgment of content.
+word, no shape a reason has to match and nothing that checks any of it: a
+check that could tell a real citation from a plausible-looking one would have
+to leave the canvas to run, and the freedom of the field is what
+`docs/why-verdict/VERDICT.md` §5.3 found load-bearing.
 
 ##### A merge or a split names the other node's id
 
