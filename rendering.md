@@ -252,12 +252,13 @@ the page claims rather than to how it looks.
 
 ## Known tensions
 
-- **`product-spec.md:132` and `engineering-spec.md`'s *Open* both still list the
-  `<figure>` question as open**, and both still state it as a choice between
-  drawing and passing SVG through. Neither has been edited: §1 above settles it,
-  the grammar had already settled half of it, and the two specs have not been
-  reconciled with either. Whoever next edits them should strike the item and
-  point it here.
+- **The `<figure>` item in both specs has been reconciled with §1 above, and is
+  no longer a tension.** `product-spec.md:132` and `engineering-spec.md`'s *Open*
+  each stated it as a choice between drawing and passing SVG through, and neither
+  had been edited. Both now keep the item, marked settled, naming this section as
+  what settled it; `engineering-spec.md`'s node vocabulary row for `<figure>` no
+  longer says the renderer draws or that inline SVG may be passed through. Nothing
+  here is handed forward.
 - **"Loud" is still a word two readers will rule differently.** What is enforced
   is the mechanical part — every question in the index, a marker on every
   question node — and the contrast, the border and the dimming are not enforced by
