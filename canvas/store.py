@@ -990,8 +990,23 @@ def _log(canvas_dir, arguments, complaint):
             _Record(
                 sha,
                 subject,
-                named.split("\x1d"),
-                froze.split("\x1d"),
+                # A commit with no `Canvas-Node:` trailer names no node, so it
+                # decodes to no ids — not to one empty id. `"".split("\x1d")`
+                # is `[""]`, and every reader below asks `<id> in record.named`,
+                # so that empty id made the two commits carrying no such
+                # trailer — the `create` and the `freeze` — match a query for
+                # `""`. That is how `history <ledger-id> ""` came to exit `0`
+                # and print the `create` commit: not a rule anybody wrote, but
+                # a decoding accident the matcher could not see past. Two
+                # readers had already worked around it where it reached them —
+                # `_provenance` skips a falsy id, `_news_since` guards on
+                # `node_id is not None` — and `_node_commits` had not, which is
+                # the one place it was reachable from the command line. Fixed
+                # here, where the rule belongs, so a third reader cannot
+                # inherit it. `Canvas-Freeze:` decodes by the same rule for the
+                # same reason.
+                named.split("\x1d") if named else [],
+                froze.split("\x1d") if froze else [],
                 authors.replace("\x1d", ", "),
             )
         )
@@ -1447,6 +1462,55 @@ def require_first_nodes(problem, expected_value, ledger_id):
         )
     return problem, expected_value
 
+
+def require_node_id(node_id, ledger_id):
+    """Return the node id a read was asked for, or refuse. It may not be blank.
+
+    Absent, empty and whitespace-only are the same answer: no — the answer
+    `require_reason` gives `--why` and `require_first_nodes` gives `--problem`,
+    at the same exit code and for the same reason. A blank node id is the
+    *invocation* being wrong rather than the request being wrong against the
+    store, so it is a `ToolProblem`: exit `2`, and it is decided before the
+    store is opened, so nothing is read and no repository is initialised.
+
+    **Why `2` and not `1`.** `1` is what `history` gives an id that names no
+    node in this canvas, and the temptation is to call `""` one more of those.
+    It is not. An id in this store is four characters
+    (`node-identity.md` section 1), so `""` is not an id that happens to be
+    absent from this canvas — it is not an id at all, and no canvas that could
+    ever exist would hold one. The exit codes divide on exactly that: `1` says
+    the request is wrong *against the store as it stands* and its advice is
+    re-read and re-decide, and a caller whose variable came out empty can
+    re-read this canvas forever without finding a node named `""`. `2` says the
+    command was not well formed, which is what this is, and its advice is to
+    fix the invocation, which is the advice that works. README.md's exit-code
+    table already puts every blank argument this tool has met under `2`.
+
+    **What it costs, stated because it is real.** A caller that builds the id
+    from a variable and gets an empty one is told its invocation is wrong
+    rather than told the node is not there. That is the intended trade: the
+    invocation *is* wrong, and the refusal that says so names the variable's
+    emptiness instead of sending the caller to look for a node in a canvas.
+
+    This is the argument surface only. The reason the old answer was `0` and
+    the `create` commit was a decoding accident in `_log`, fixed there — so
+    even a caller that reaches `_node_commits` with `""` now gets nothing back
+    rather than the two commits that name no node. Neither `is_free` nor
+    `history_length` changes: both are only ever asked about a minted
+    four-character id, and for one of those the decoding fix is a no-op.
+    """
+    if node_id is None or not node_id.strip():
+        raise ToolProblem(
+            "a node id is required and must not be empty: a node id is four "
+            "characters, so an empty one names no node and never could — this "
+            "is the invocation being wrong, not the node being absent",
+            "re-run `bin/canvas history %s <node-id>` with the id you meant; "
+            "if it came from a variable, that variable was empty. "
+            "`bin/canvas read %s` prints the canvas and every id in it"
+            % (ledger_id, ledger_id),
+            about=["argument node-id", "ledger id %s" % ledger_id],
+        )
+    return node_id
 
 
 def preflight(path, ledger_id, contents):
@@ -2660,7 +2724,15 @@ def history(ledger_id, node_id):
 
     Refuses when there is no canvas for that ledger id, and — separately, and
     saying which — when no commit in that canvas names the node.
+
+    **A blank node id is refused before any of that**, at exit `2`, as a
+    malformed argument rather than as a node that is not there —
+    `require_node_id` is where that is argued. It runs first, before the store
+    is opened, for the same reason `create` runs `require_first_nodes` first:
+    an invocation that cannot be right should not cost a read.
     """
+    require_node_id(node_id, ledger_id)
+
     canvas_dir = canvas_directory()
     path = canvas_path(canvas_dir, ledger_id)
 

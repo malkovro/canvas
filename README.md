@@ -707,6 +707,46 @@ id that starts with it, and a reason quoting the trailer text are all excluded.
 `v` is counted through the same matcher, which is what keeps the number in the
 file equal to the number of commits the history shows.
 
+**A commit that names no node matches no node id.** Two commits in this store
+carry no `Canvas-Node:` trailer — the `create` and the
+[`freeze`](#ending-a-canvas) — and neither is an edit to anything, so neither
+is ever an answer here. This is the matcher's rule and not a case beside it:
+a commit with no trailer decodes to no ids, rather than to one empty id.
+
+**An empty node id is exit `2`, a malformed argument** — not exit `1`, "no
+such node". An id is four characters, so `''` is not an id this canvas happens
+not to hold; it is not an id at all, and no canvas that could exist would hold
+one. That is the line the two codes already draw: `1` says the request is wrong
+against the store as it stands and its advice is to re-read and re-decide, and
+a caller whose variable came out empty can re-read this canvas forever without
+finding a node named `''`. `2` says the command was not well formed, and its
+advice — fix the invocation — is the one that works. It is the same answer an
+empty `--why` and a blank `--problem` already get, and it is decided before the
+store is opened, so a blank id costs no read:
+
+    $ bin/canvas history my-task ''
+    canvas: a node id is required and must not be empty: a node id is four characters, so an empty one names no node and never could — this is the invocation being wrong, not the node being absent
+    Canvas-About: argument node-id
+    Canvas-About: ledger id my-task
+    Canvas-Next: re-run `bin/canvas history my-task <node-id>` with the id you meant; if it came from a variable, that variable was empty. `bin/canvas read my-task` prints the canvas and every id in it
+    Canvas-Exit: 2 — the tool or its environment is wrong; do not touch the canvas
+
+Whitespace-only is the same answer, as it is for `--why`. What this costs,
+stated because it is real: a caller that builds the id from a variable and gets
+an empty one is told its invocation is wrong rather than told the node is not
+there. That is the trade — the invocation *is* wrong, and the refusal names the
+empty variable instead of sending the caller looking for a node.
+
+It used to exit `0` and print the `create` commit, which is neither of the two
+answers above and was nobody's decision: the trailer-less `create` commit
+decoded to one empty id, so `''` matched it. The `freeze` commit did not show
+up beside it only because `history` path-scopes its query and a freeze changes
+no byte of any file — so the old answer was half of a canvas-level history
+form, arrived at by accident. **This is not that form**, and does not reopen
+the argument against one: *[What the store deliberately does not
+do](#what-the-store-deliberately-does-not-do)* still refuses a verb that
+reports a whole canvas's history, and `history` still takes a node id.
+
 ### The four verbs
 
 Four editing verbs, and no more:
@@ -1265,8 +1305,8 @@ mode.
 | exit | meaning |
 |---|---|
 | `0` | it worked |
-| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **`read --id` named a node this canvas does not hold**, **the node being written moved since the `--base` declared for it**, the `--base` or `--since` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, an absent or blank `--problem` or `--expected-value` on [`create`](#creating-a-canvas), and a `--base` or `--since` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history (a *blank* node id is `2`, not this — it is not an id at all; see [a node's history](#a-nodes-history)), **`read --id` named a node this canvas does not hold**, **the node being written moved since the `--base` declared for it**, the `--base` or `--since` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, an absent or blank `--problem` or `--expected-value` on [`create`](#creating-a-canvas), a blank node id on [`history`](#a-nodes-history), and a `--base` or `--since` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
 `Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A
