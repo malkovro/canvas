@@ -35,6 +35,7 @@ VALIDATE = os.path.join(ROOT, "bin", "canvas-validate")
 sys.path.insert(0, ROOT)
 
 from canvas import document  # noqa: E402
+from canvas import refusal, store  # noqa: E402
 from canvas.validate import validate_file  # noqa: E402
 
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
@@ -5675,6 +5676,229 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
         finally:
             for directory, mode in original:
                 os.chmod(directory, mode)
+
+    # ------------------------------------------------------------------
+    # And what the store looks like after the two of them that renamed a
+    # document onto the canvas before git was asked for anything
+    # ------------------------------------------------------------------
+    #
+    # `assertActionable` holds a refusal to what it *says*. The three below
+    # hold the two git refusals in the write path to what they *leave*, which
+    # is the other half of the same rule: `canvas/store.py` says a refused
+    # write leaves nothing behind, and the stage and the commit are the two
+    # refusals that arrive with an edit already on the canvas's own path and
+    # so are the only two that can make that sentence false.
+    #
+    # Not merely "uncommitted". The document the rename put there carries the
+    # bumped `v`, and `node-identity.md` section 4 has `v` be the number of
+    # commits whose `Canvas-Node:` trailer names the node — so each of the two
+    # asserts that count directly, because it is the invariant a half-applied
+    # edit breaks and the reason this is a defect rather than a tidiness.
+
+    def object_directories(self):
+        """`.git/objects` and every two-hex subdirectory already in it.
+
+        The fixture `test_a_stage_git_refuses_names_the_repository_that_refused_it`
+        records above, and its comment is where the reason lives: sealing
+        `objects` alone leaves `git add` succeeding whenever the blob lands in
+        a subdirectory the earlier commits already made, and the refusal then
+        arrives one step later from `git commit`.
+        """
+        objects = os.path.join(self.canvas_dir, ".git", "objects")
+        return [objects] + [
+            os.path.join(objects, name)
+            for name in sorted(os.listdir(objects))
+            if len(name) == 2
+            and all(character in "0123456789abcdef" for character in name)
+            and os.path.isdir(os.path.join(objects, name))
+        ]
+
+    def sealed(self, directories):
+        """Set each directory to mode 500. Returns what to put back."""
+        original = [
+            (directory, stat.S_IMODE(os.stat(directory).st_mode))
+            for directory in directories
+        ]
+        for directory in directories:
+            os.chmod(directory, 0o500)
+        return original
+
+    def assertTheLogHasIt(self, node_id, text, msg):
+        """The store holds what the log holds, and holds nothing else.
+
+        Everything a half-applied edit changes: the worktree against `HEAD`,
+        the index, the head itself, the node's `v` against the number of
+        commits that name it, what a `read` hands back, and whether a
+        temporary was left beside the canvas.
+        """
+        self.assertEqual("", self.git("status", "--porcelain"), msg)
+        self.assertEqual("", self.git("diff", "--cached", "--name-only"), msg)
+        with open(self.canvas_file(), "rb") as handle:
+            self.assertEqual(
+                self.git("show", "HEAD:a-ledger-row.xml").encode("utf-8"),
+                handle.read(),
+                msg,
+            )
+        # node-identity.md section 4. The half-applied document said `v="2"`
+        # for a node one commit names.
+        self.assertEqual("1", self.node(node_id).get("v"), msg)
+        self.assertEqual(1, len(self.history(node_id)), msg)
+        self.assertEqual(
+            [".git", "a-ledger-row.xml"],
+            sorted(os.listdir(self.canvas_dir)),
+            msg,
+        )
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(text.encode("utf-8"), stdout, msg)
+
+    def test_a_refused_stage_leaves_the_canvas_as_the_log_has_it(self):
+        """`git add` is asked for after the rename, so its refusal has an
+        edited document on the canvas's own path to take back.
+
+        Same fixture as the test above — the whole of `.git/objects` sealed —
+        and where that one asks what the refusal says, this one asks what it
+        left. Before the write path took the edit back, `git status
+        --porcelain` here read ` M a-ledger-row.xml` and `bin/canvas read`
+        handed back `v="2"` for a node one commit names, under the sha the
+        canvas was at before the command.
+        """
+        before = self.state()
+        head = self.git("rev-parse", "HEAD").strip()
+        original = self.sealed(self.object_directories())
+        try:
+            code, _, stderr = self.verb(
+                "replace", self.problem_id,
+                "--text", "The problem restated.",
+                "--why", "the restatement that carries this test to the stage",
+            )
+            self.assertEqual(2, code, stderr)
+            trailers = self.assertActionable(
+                code, stderr, "a refused stage", nodes=[self.problem_id]
+            )
+            # Refused at the stage, and not one step later at the commit.
+            self.assertIn("git add -f --", stderr)
+            # The refusal says which file was put back, and to what.
+            next_action = trailers["Canvas-Next"][0]
+            self.assertIn(self.canvas_file(), next_action)
+            self.assertIn(head, next_action)
+        finally:
+            for directory, mode in original:
+                os.chmod(directory, mode)
+
+        self.assertEqual(head, self.git("rev-parse", "HEAD").strip())
+        self.assertEqual(before, self.state())
+        self.assertTheLogHasIt(
+            self.problem_id, "The problem stated.", "a refused stage"
+        )
+
+    def test_a_refused_commit_leaves_the_canvas_and_the_index_as_the_log_has_them(self):
+        """`git commit` is the second of the two, and the one that has an
+        index to put back as well as a file.
+
+        `.git/refs/heads` sealed rather than `.git/objects`, so the `add`
+        succeeds and the commit is what cannot lock the ref. That is the whole
+        difference and it is the point: before the write path took the edit
+        back, `git status --porcelain` here read `M ` in the *first* column —
+        staged — so a rollback that restored the worktree and forgot the index
+        leaves exactly this case half applied, and that is what the index
+        assertions in `assertTheLogHasIt` are for.
+        """
+        before = self.state()
+        head = self.git("rev-parse", "HEAD").strip()
+        original = self.sealed(
+            [os.path.join(self.canvas_dir, ".git", "refs", "heads")]
+        )
+        try:
+            code, _, stderr = self.verb(
+                "replace", self.value_id,
+                "--text", "The value restated.",
+                "--why", "the restatement that carries this test past the stage",
+            )
+            self.assertEqual(2, code, stderr)
+            trailers = self.assertActionable(
+                code, stderr, "a refused commit", nodes=[self.value_id]
+            )
+            # Refused at the commit, and known to have got past the stage.
+            self.assertIn("commit -q", stderr)
+            self.assertNotIn("git add -f --", stderr)
+            next_action = trailers["Canvas-Next"][0]
+            self.assertIn(self.canvas_file(), next_action)
+            self.assertIn(head, next_action)
+        finally:
+            for directory, mode in original:
+                os.chmod(directory, mode)
+
+        self.assertEqual(head, self.git("rev-parse", "HEAD").strip())
+        self.assertEqual(before, self.state())
+        self.assertTheLogHasIt(
+            self.value_id, "The value expected.", "a refused commit"
+        )
+
+    def test_a_rollback_that_is_itself_refused_says_so_and_names_the_file(self):
+        """The one branch that can leave a half-applied edit, and it admits it.
+
+        Putting bytes back on a filesystem that has just refused this process
+        is itself fallible, so `_take_back` returns what refused it instead of
+        raising — a rollback that failed has to be reportable beside the
+        refusal that caused it, not instead of it — and the refusal built from
+        the two names both.
+
+        Reached by calling the helper rather than through `bin/canvas`, because
+        end to end it is unreachable: `os.replace` needs the canvas directory
+        writable, so any mode that would refuse the restore would have refused
+        the rename first, and nothing outside the process can change the mode
+        between them. Nothing is mocked for it — a real directory at mode
+        `500` refuses a real write, and the `git add` below really is refused.
+        The class's own rule is why it is here at all: a branch no test enters
+        is a branch the rule is not applied to.
+        """
+        path = self.canvas_file()
+        with open(path, "rb") as handle:
+            previous = handle.read()
+        head = self.git("rev-parse", "HEAD").strip()
+
+        os.chmod(self.canvas_dir, 0o500)
+        try:
+            failure = store._take_back(
+                self.canvas_dir, path, previous, staged=False
+            )
+        finally:
+            os.chmod(self.canvas_dir, 0o700)
+        # Returned, not raised. Everything else here rests on that.
+        self.assertIsInstance(failure, PermissionError)
+
+        try:
+            store._git_checked(
+                self.canvas_dir, "add", "-f", "--",
+                os.path.join(self.canvas_dir, "no-such-canvas.xml"),
+            )
+            self.fail("git staged a file that is not there")
+        except store.ToolProblem as error:
+            refused = error
+
+        problem = store._refused_after_the_rename(
+            refused, self.canvas_dir, path, head, previous, failure,
+            node_id=self.problem_id,
+        )
+        stderr = "\n".join(
+            refusal.lines(
+                "canvas", problem, 2,
+                "the tool or its environment is wrong; do not touch the canvas",
+            )
+        )
+        trailers = self.assertActionable(
+            2, stderr, "a rollback that was refused too", nodes=[self.problem_id]
+        )
+        # Both failures, in the message: git's, and the one putting it back.
+        self.assertIn("git add -f --", stderr)
+        self.assertIn("was refused too", stderr)
+        # And the one branch that leaves a half-applied edit says so, names
+        # the file it is on, and says what re-running does about it.
+        next_action = trailers["Canvas-Next"][0]
+        self.assertIn(path, next_action)
+        self.assertIn("still holds the edit", next_action)
+        self.assertIn(head, next_action)
 
     def test_a_question_git_refuses_says_it_cannot_tell_and_names_the_question(self):
         """`_cannot_read_repository`'s `complaint` arm: git declined to answer.
