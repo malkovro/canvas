@@ -3237,6 +3237,9 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
         # same way: it takes `create`'s two strings and refuses a blank one.
         # It takes no document and writes nothing.
         "require_first_nodes",
+        # The third of the same family, classified the same way: it takes
+        # `history`'s node id and refuses a blank one. No document, no write.
+        "require_node_id",
         "preflight", "frozen", "Freeze",
         # Imported modules, not API.
         "collections", "errno", "os", "re", "secrets", "stat", "subprocess",
@@ -3720,6 +3723,111 @@ class TheHistoryCommandRefusesWhatIsNotThere(VerbTestCase):
         )
         self.assertEqual(2, result.returncode, result.stderr)
         self.assertIn("git", result.stderr.decode("utf-8", "replace"))
+
+
+class AnEmptyNodeIdIsAMalformedArgument(VerbTestCase):
+    """`history <ledger-id> ''` is the invocation being wrong, not the node
+    being absent: exit `2`, decided before the store is opened.
+
+    It used to exit `0` and print the `create` commit, which names no node —
+    so a verb whose contract is "every edit that named this node" answered a
+    request that named none. That was not a rule anybody wrote: a commit with
+    no `Canvas-Node:` trailer decoded to `['']`, and the empty string matched
+    it. Both halves are pinned here — the refusal, and the fact that the
+    `create` commit is no longer a match for anything."""
+
+    def test_an_empty_node_id_exits_two_and_prints_nothing(self):
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", "")
+        self.assertEqual(2, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn("a node id is required and must not be empty", stderr)
+        self.assertIn("argument node-id", stderr)
+
+    def test_a_whitespace_only_node_id_is_the_same_answer(self):
+        # `require_reason` and `require_first_nodes` both treat absent, empty
+        # and whitespace-only as one answer. This is the third of that family.
+        code, stdout, stderr = self.run_canvas("history", "a-ledger-row", "   ")
+        self.assertEqual(2, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn("a node id is required and must not be empty", stderr)
+
+    def test_it_is_told_apart_from_a_node_that_is_not_there(self):
+        # The whole decision: `zzzz` is a well-formed id this canvas does not
+        # hold and stays `1`; `''` is not an id at all and is `2`. A caller
+        # that cannot tell them apart cannot tell "re-read the canvas" from
+        # "your variable was empty".
+        _, _, blank = self.run_canvas("history", "a-ledger-row", "")
+        _, _, absent = self.run_canvas("history", "a-ledger-row", "zzzz")
+        self.assertNotIn("no node with id", blank)
+        self.assertIn("Canvas-Exit: 2", blank)
+        self.assertIn("no node with id zzzz", absent)
+        self.assertIn("Canvas-Exit: 1", absent)
+
+    def test_it_no_longer_answers_with_the_create_commit(self):
+        # The regression this fixes, named by its sha so the test fails for
+        # the right reason if the old answer ever comes back.
+        create = self.git("log", "--format=%H %s").splitlines()[-1].split()[0]
+        code, stdout, _ = self.run_canvas("history", "a-ledger-row", "")
+        self.assertEqual(2, code)
+        self.assertNotIn(create.encode("utf-8"), stdout)
+
+    def test_it_is_decided_before_the_store_is_opened(self):
+        # `create` runs `require_first_nodes` before it touches the store, and
+        # this runs first for the same reason: an invocation that cannot be
+        # right should not cost a read. A workspace with no canvas at all still
+        # answers with the argument, not with the missing canvas, and nothing
+        # is initialised to say so.
+        clean = tempfile.mkdtemp(prefix="canvas-store-test-")
+        self.addCleanup(shutil.rmtree, clean, True)
+        code, _, stderr = self.run_canvas(
+            "history", "a-ledger-row", "", workspace=clean
+        )
+        self.assertEqual(2, code)
+        self.assertIn("a node id is required and must not be empty", stderr)
+        self.assertNotIn("no canvas for ledger id", stderr)
+        self.assertEqual([], os.listdir(clean))
+
+    def test_a_real_node_id_still_answers(self):
+        # The guard refuses blankness and nothing else.
+        code, stdout, stderr = self.run_canvas(
+            "history", "a-ledger-row", self.problem_id
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIn(self.problem_id.encode("utf-8"), stdout)
+
+
+class ACommitThatNamesNoNodeMatchesNoNodeId(VerbTestCase):
+    """The decoding rule the refusal above rests on, checked through the two
+    public functions that share the matcher.
+
+    A commit with no `Canvas-Node:` trailer names no node, so it decodes to no
+    ids rather than to one empty id. `is_free` and `history_length` are the
+    other two callers of `_node_commits`, and the todo that settled this
+    required the change be checked against both: neither is ever asked about a
+    blank id in practice, and both now answer the truth if they are."""
+
+    def test_history_length_counts_no_commit_for_a_blank_id(self):
+        from canvas import store
+
+        # Before the fix this was 1: the `create` commit, which names no node.
+        self.assertEqual(0, store.history_length(self.canvas_dir, ""))
+
+    def test_a_blank_id_is_free_because_no_commit_names_it(self):
+        from canvas import store
+
+        # Before the fix this was False — the `create` commit was read as
+        # having taken the id `''`.
+        self.assertTrue(store.is_free(self.canvas_dir, ""))
+
+    def test_both_still_answer_correctly_for_a_real_id(self):
+        from canvas import store
+
+        # The other half of "checked against both": the matcher still matches.
+        # `v` equals the number of commits naming the node, and the problem
+        # node has been written exactly once.
+        self.assertEqual(1, store.history_length(self.canvas_dir, self.problem_id))
+        self.assertFalse(store.is_free(self.canvas_dir, self.problem_id))
+        self.assertTrue(store.is_free(self.canvas_dir, "zzzz"))
 
 
 class TheHistoryCommandOnlyReads(VerbTestCase):

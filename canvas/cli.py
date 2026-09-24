@@ -50,6 +50,12 @@ whitespace-only one is `store.require_reason`'s; both exit 2 and write nothing.
 The rule itself lives in `canvas/store.py`, not here, because it is a property
 of the write path and not of this command line.
 
+`history`'s node id is required and not blank, on the same terms and in the
+same place — `store.require_node_id`, exit 2, decided before the store is
+opened. A blank id is the invocation being wrong, not a node that is missing:
+an id is four characters, so an empty one names no node and no canvas could
+hold one. An id this canvas does not hold is the other answer, exit 1.
+
 The read hands out the current sha and all four verbs take it back as
 `--base`: the sha the edit was decided against. It is optional, and an omitted
 one asks for no staleness check rather than standing for the current head. What
@@ -838,13 +844,17 @@ def build_parser():
             "sha, the author, the verb and the reason. The reason lives in "
             "the commit subject and nowhere else, which is why this reads the "
             "log. Edits made before a move are included — a move keeps the "
-            "node's id. Writes nothing, commits nothing, and does not "
-            "initialise a repository."
+            "node's id. An id this canvas does not hold is exit 1; a blank one "
+            "is exit 2, a malformed argument, because an id is four characters "
+            "and an empty one names no node. Writes nothing, commits nothing, "
+            "and does not initialise a repository."
         ),
     )
     history.add_argument("ledger_id", help="the ledger row this canvas belongs to")
     history.add_argument(
-        "node_id", metavar="node-id", help="the node whose history to print"
+        "node_id",
+        metavar="node-id",
+        help="the node whose history to print; required, and not blank",
     )
     history.set_defaults(handler=_history)
 
