@@ -180,8 +180,19 @@ An agent working a step gives its model and its step or role:
     --author "claude-opus-5 | step:implement | run:ship-the-flag-3"
 
 This matters beyond bookkeeping: the orchestrator's sweep calls a canvas **untouched** when
-every `Canvas-Author` in its log is `task-ledger | open` — that is, born and never written
-by anything that ran. Writing as yourself is what takes the row out of that state.
+no step id of any run linked to that row appears as a `Canvas-Author` in its log — that is,
+nothing that ran ever wrote to it. So what takes a row out of that state is a **step
+authoring as its own step id**, which is exactly what the protocol in its prompt hands it.
+An author that is not one of that row's step ids — a person, or an agent naming its model
+and its role — is a real edit and a real trailer, and it is deliberately not one of the
+writes that predicate counts: a person keeping a canvas up by hand does not make the runs'
+silence something else.
+
+It used to read *every* `Canvas-Author` is `task-ledger | open`. That was reversed in
+ledger-orchestrator `docs/canvas-in-prompts.md` §2, which carries the argument and the
+alternatives it rejected: a `create` that **failed** never writes `task-ledger | open` at
+all, so a canvas made by hand afterwards could never be called untouched, however long its
+row ran without a single step writing to it.
 
 ## When to do what, over a ledger-backed task's life
 
