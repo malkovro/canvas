@@ -823,6 +823,26 @@ class ACanvasIsNotBornBlank(StoreTestCase):
             "  padded  ", list(document.parse(self.canvas_file()))[0].text
         )
 
+    def test_a_node_may_still_be_inserted_blank(self):
+        # The boundary of the decision, pinned so it is not read as wider than
+        # it is. An `insert` carries a `--why` saying what the node is for, so
+        # a reader who finds it blank can ask `history`. `create`'s two nodes
+        # get the two fixed reasons the tool writes, so a blank one would
+        # arrive under a reason describing content it does not have.
+        self.create()
+        code, _, stderr = self.run_canvas(
+            "insert",
+            "a-ledger-row",
+            "--into",
+            "root",
+            "--text",
+            "",
+            "--why",
+            "a placeholder this row will fill once the reduction has been run",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIsNone(list(document.parse(self.canvas_file()))[-1].text)
+
 
 class CharacterDataTheStoreCannotTellApart(StoreTestCase):
     """`None` and `""` are one state, so no guard may report them as two.

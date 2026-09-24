@@ -304,6 +304,15 @@ lost. There is no third thing for a reader to conclude, so there is no third
 thing for the tool to record. Content that is not blank is stored verbatim:
 this refusal is about whether there is content, not about what it looks like.
 
+**This does not make a blank node inexpressible**, and it is not meant to.
+`insert … --text ""` still makes one, because an `insert` carries a `--why`
+that says what the node is for, and a reader who finds it blank can ask
+[`history`](#a-nodes-history) what it was for. `create`'s two nodes get the two
+fixed reasons the tool writes — *the problem the ledger row states*, *the
+expected value the ledger row states* — so a blank one arrives with a reason
+that describes content it does not have. That is the difference, and it is the
+whole of it.
+
 It used to be two different answers to the same mistake, and neither was one a
 reader of this page could have predicted. An empty `--expected-value` exited
 `0` and made all three commits, leaving a blank second node that rendered as
