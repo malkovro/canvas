@@ -117,7 +117,7 @@ Four things we will copy rather than invent: IWE's error surface (a refusal name
 
 | Risk | Why it matters | Where it lands |
 | --- | --- | --- |
-| A model may write a useless reason | No product anywhere ships a mandatory reason field, so there is no evidence either way. Per-node history is what the whole design rests on | Tested in step 1, before anything else is built |
+| A model may write a useless reason | No product anywhere shipped a mandatory reason field, so there was no evidence either way. Per-node history is what the whole design rests on | **Answered.** Tested in step 1 as planned: fifty real reasons graded in [docs/why-verdict/VERDICT.md](docs/why-verdict/VERDICT.md), 41 of 50 meet the bar, and the reason stays free text |
 | Node identity breaks on restructure | Ids must be stable for history to mean anything, and a restructure is exactly when somebody renumbers. en-quire shipped without solving this and its history silently attaches to the wrong text | The hardest open item. Unsolved |
 | The canvas drifts from reality | It says we chose A; the branch implements B. Reading the canvas cannot catch this, and it is dangerous precisely because the canvas is what you steer by | Not solved. Convention only: a reason should name its evidence |
 | The closed node vocabulary grows | A fixed list of node types is a topology, and topologies fall through — the same failure we already have in how step failures are categorised | Tripwire: the day somebody proposes a "decision" or "risk" node type, the taxonomy has started growing |
@@ -125,12 +125,12 @@ Four things we will copy rather than invent: IWE's error surface (a refusal name
 
 **Already decided — not reopening these.** The canvas replaces the Basecamp task as the input a step works from. It is editable in `watch-runs-web`, which means that page becomes a writer and its stated read-only invariant has to be updated honestly rather than quietly falsified. The agent commits edits directly; there is no propose-and-approve step, because provenance is what makes that safe.
 
-**Genuinely open:**
+**Genuinely open — all three have since been answered.** They are kept here and marked rather than deleted, so that a reader who was told they were open is told by the same place that they are not, and each names what settled it and where to read it:
 
-- [ ] Should a step be required to write to the canvas, or is an untouched canvas after a run a legitimate outcome the sweep should flag?
-- [ ] What the size budget actually is, once it goes into every prompt
-- [ ] Whether the renderer draws diagrams from a textual source or only passes inline SVG through — SVG diffs badly, a textual source needs a drawing step the tool would own
+- [x] Should a step be required to write to the canvas, or is an untouched canvas after a run a legitimate outcome the sweep should flag? — **Settled 2026-09-23: it must not be required to.** An untouched canvas is a legitimate outcome, and the sweep flags it rather than the tool forbidding it. The unit is the ledger row, not the step: a row that stalls gains one clause on its reason, `executing with no activity for 3h — canvas never written by any run`. Section 2 of [`ledger-orchestrator/docs/canvas-in-prompts.md`](https://github.com/malkovro/ledger-orchestrator/blob/main/docs/canvas-in-prompts.md).
+- [x] What the size budget actually is, once it goes into every prompt — **Settled 2026-09-23: 20,000 characters** of the canvas document as `bin/canvas read` prints it, about 4,800 tokens at the ratio measured on real canvases. `BUDGET_CHARS` in `orchestrator/canvas.py` is the only place the number is written down. A canvas over the budget goes into the prompt whole, with a notice that makes resolving it the step's first work — nothing pruned, summarised or truncated. Section 1 of the [same document](https://github.com/malkovro/ledger-orchestrator/blob/main/docs/canvas-in-prompts.md).
+- [x] Whether the renderer draws diagrams from a textual source or only passes inline SVG through — SVG diffs badly, a textual source needs a drawing step the tool would own — **Settled 2026-09-23 in [rendering.md](rendering.md) section 1: the stored text, verbatim, in a monospaced block.** No drawing step, no toolchain and no new dependency; and there is no inline SVG to pass through, because the grammar admits a textual source in a `<figure>` and taking the other side is a schema v2 change. Implemented at `canvas/render.py:206`.
 
-The two hard unknowns — node identity across a restructure, and whether a model writes a useful reason — are in the table above rather than here, because neither is settled by a decision. One is a design problem and the other is an experiment.
+Of the two hard unknowns, node identity across a restructure is in the table above rather than here because it is a design problem rather than a decision. The other — whether a model writes a useful reason — was an experiment, and the experiment has since been run: fifty real reasons graded, 41 of them meeting the bar, in [docs/why-verdict/VERDICT.md](docs/why-verdict/VERDICT.md).
 
 The full [engineering spec](engineering-spec.md), with the storage format, verb semantics, and node vocabulary, is canonical in this repository.

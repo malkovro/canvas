@@ -89,7 +89,7 @@ Deliberately tiny, deliberately generic.
 | `<text>` | a paragraph |
 | `<list>` / `<item>` | bullets |
 | `<table>` / `<row>` / `<cell>` | anything with two or more columns, including a comparison of options |
-| `<figure>` | a diagram: inline SVG, or a textual source the renderer draws |
+| `<figure>` | a diagram, as the textual source `schema/canvas.rng` admits for it; printed verbatim rather than drawn ([rendering.md](rendering.md) section 1) |
 | `<link>` | a pointer out: a PR, a file and line, a Basecamp todo, a run id |
 | `<question>` | something open |
 
@@ -451,6 +451,12 @@ them to.
 
 ## Open
 
+Every item below has since been ruled on: the last four outright, and the first
+except for the remainder its own bullet names. They are kept here and marked
+rather than deleted, so that a reader who was told they were open is told by the
+same place that they are not, and so that what settled each one stays one link
+away from where the question was asked.
+
 - **How a node's `id` survives a restructure — decided, remainder included.**
   The survey promoted this from a footnote to the hardest open item: ids have to
   be stable for history to mean anything, and a restructure is exactly when
@@ -469,11 +475,53 @@ them to.
   in [docs/merge-and-split/](docs/merge-and-split/), whose transcript holds the
   `bin/canvas history` output for the surviving id and the stranded one. What is
   still open in that document is its third item, that nothing here ages.
-- **Whether a model writes a useful `--why`.** Untested by anyone, because
-  nobody ships a mandatory reason field. See step 1 of *The path*.
-- Whether a step that writes to the canvas should have to, or whether an empty
-  canvas after a run is a legitimate outcome that the sweep should notice.
-- What the size budget actually is, once the canvas is in every prompt.
-- Whether the renderer should draw `<figure>` from a textual source or only pass
-  through inline SVG. Inline SVG diffs badly; a textual source needs a drawing
-  step the canvas tool would have to own.
+- **Whether a model writes a useful `--why`. — Settled 2026-09-22 in
+  [docs/why-verdict/VERDICT.md](docs/why-verdict/VERDICT.md), and the answer is
+  yes.** It was untested by anyone, because nobody ships a mandatory reason
+  field, so step 1 of *The path* was run to find out: fifty reasons written on a
+  canvas driven by hand, graded one by one against the bar `product-spec.md:42`
+  sets — that a node's reasons are its history, so you can ask what the current
+  text was *for*. **41 of the 50 meet it.** The fifty are in
+  [docs/why-verdict/corpus-reasons.md](docs/why-verdict/corpus-reasons.md), one
+  row each with its grade, so the grading can be read and disagreed with rather
+  than taken on trust; section 4 rules on it, and per-node history is sound
+  enough to build the rest on. The field itself is unchanged by that verdict and
+  deliberately so — section 5.3 weighs a length floor, required fields and a
+  structured form, and refuses all three. Nothing is left open in this bullet.
+- **Whether a step that writes to the canvas should have to, or whether an empty
+  canvas after a run is a legitimate outcome that the sweep should notice. —
+  Settled 2026-09-23, and the answer is that it must not be required to.** An
+  untouched canvas after a run is a legitimate outcome, and the sweep is where it
+  is noticed rather than the tool being the thing that forbids it: the unit is
+  the ledger row and not the step, and a row that stalls has one clause appended
+  to its reason — `executing with no activity for 3h — canvas never written by
+  any run`. Decided in section 2 of
+  [`ledger-orchestrator/docs/canvas-in-prompts.md`](https://github.com/malkovro/ledger-orchestrator/blob/main/docs/canvas-in-prompts.md),
+  which is where the canvas became the input a step works from. Nothing is left
+  open in this bullet.
+- **What the size budget actually is, once the canvas is in every prompt. —
+  Settled 2026-09-23: 20,000 characters.** That is 20,000 characters of the
+  canvas document as `bin/canvas read` prints it — the `Canvas-Base:` header line
+  plus the XML — which at the 4.2 characters per token measured on real canvases
+  is about 4,800 tokens. `BUDGET_CHARS` in `orchestrator/canvas.py` is that
+  number and the only place it is written down. A canvas over the budget still
+  goes into the prompt whole, with a notice that makes resolving it the step's
+  first work: nothing is pruned, summarised or truncated, because a prompt that
+  quietly drops part of a canvas produces exactly the confidently wrong step the
+  canvas exists to prevent. Section 1 of the
+  [same document](https://github.com/malkovro/ledger-orchestrator/blob/main/docs/canvas-in-prompts.md).
+  Nothing is left open in this bullet.
+- **Whether the renderer should draw `<figure>` from a textual source or only
+  pass through inline SVG. — Settled 2026-09-23 in
+  [rendering.md](rendering.md) section 1.** Inline SVG diffs badly; a textual
+  source needs a drawing step the canvas tool would have to own. Neither side as
+  posed survived. Half of it was never the renderer's to take: `schema/canvas.rng`
+  had already shipped, admitting character data in a `<figure>`, so there is no
+  inline SVG for a renderer to pass through and putting it there is a schema v2
+  change with its own reasoning. The half that was left — the drawing step — is
+  refused: a `<figure>` is rendered as its own source, the stored text verbatim
+  in a monospaced block, with no drawing step, no diagram toolchain, no
+  subprocess and no new dependency, implemented at `canvas/render.py:206`. What
+  that costs is stated there and not argued away: a figure in a rendered page is
+  text in a box and nobody gets a picture. What would reopen it is stated there
+  too. Nothing is left open in this bullet.
