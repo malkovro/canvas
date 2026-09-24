@@ -62,6 +62,37 @@ def _trigger_record(canvas_dir, trigger):
     }
 
 
+def _require_trigger_for_canvas(canvas_dir, path, trigger, record):
+    """Refuse a repository HEAD that is not a primary write to ``path``."""
+    changed = store._git_checked(
+        canvas_dir,
+        "diff-tree",
+        "--root",
+        "--no-commit-id",
+        "--name-only",
+        "-r",
+        trigger,
+    ).splitlines()
+    expected = os.path.relpath(path, canvas_dir)
+    if (
+        changed != [expected]
+        or record["verb"] not in {"insert", "replace", "remove", "move"}
+        or record["node_id"] is None
+        or not record["author"]
+    ):
+        raise store.Refusal(
+            "the coherence trigger %s is not a successful primary write to "
+            "the canvas for %s" % (trigger, os.path.basename(path)[:-4]),
+            "pass the full head sha returned by the successful write to this "
+            "ledger; no model was called and nothing was written",
+            about=[
+                "trigger commit %s" % trigger,
+                "expected canvas path %s" % expected,
+                "changed paths %s" % (", ".join(changed) if changed else "none"),
+            ],
+        )
+
+
 def _node_context(ledger_id, root):
     nodes = []
     for node in root.iter():
@@ -116,6 +147,9 @@ def build_request(ledger_id, trigger):
             ],
         )
 
+    trigger_record = _trigger_record(canvas_dir, trigger)
+    _require_trigger_for_canvas(canvas_dir, path, trigger, trigger_record)
+
     read_sha, body, problems, _ = store.read(ledger_id)
     if problems:
         raise store.Refusal(
@@ -134,7 +168,6 @@ def build_request(ledger_id, trigger):
             about=["ledger id %s" % ledger_id, "canvas head %s" % read_sha],
         )
 
-    trigger_record = _trigger_record(canvas_dir, trigger)
     if trigger_record["author"].startswith("canvas-coherence | trigger:"):
         raise store.Refusal(
             "refusing to run a coherence check recursively for checker-authored "

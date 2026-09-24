@@ -124,11 +124,12 @@ Canvas commands. The complete version-1 request and response contract is in
 [`coherence.md`](coherence.md).
 
 The trigger must be the full forty-character current head produced by the
-successful primary write. A stale trigger or frozen canvas is refused before
-the adapter starts at exit `1`. The adapter failing to start, timing out,
-exiting non-zero or returning invalid UTF-8/JSON/schema is exit `2`. In every
-case the primary write is already committed and is never rolled back or turned
-into a failed write.
+successful primary write to that ledger's XML file. A repository head belonging
+to another canvas, a stale trigger or a frozen canvas is refused before the
+adapter starts at exit `1`. The adapter failing to start, timing out, exiting
+non-zero or returning invalid UTF-8/JSON/schema is exit `2`. In every case the
+primary write is already committed and is never rolled back or turned into a
+failed write.
 
 The common response is `{"schema": 1, "findings": []}`. It exits `0` and
 writes nothing: no node, reason, temporary or commit. Each actual contradiction

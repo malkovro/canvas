@@ -40,9 +40,12 @@ invoke it for `<question>` inserts authored by `canvas-coherence`.
 
 The trigger is the full forty-character head returned by the successful write.
 Before starting the adapter, the checker uses the store's write preflight to
-refuse a frozen canvas and requires that trigger to still be the current head.
-It checks the head again before writing findings. A frozen canvas or stale
-trigger is exit `1`, with no model call and no write.
+refuse a frozen canvas, requires that trigger to still be the current head, and
+requires the commit to be a one-node Canvas write whose only changed path is
+the requested ledger's XML file. Repository HEAD alone is insufficient because
+one store contains multiple canvases. It checks the head again before writing
+findings. A frozen canvas, stale trigger, or trigger belonging to another
+canvas is exit `1`, with no model call and no write.
 
 ## Adapter contract
 

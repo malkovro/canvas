@@ -267,6 +267,26 @@ class ACoherenceWriteIsRefusedAgainstAFrozenCanvas(CoherenceTestCase):
         self.assertFalse(os.path.exists(marker))
         self.assertEqual(before, self.state())
 
+    def test_a_head_from_another_canvas_is_not_a_trigger_for_this_canvas(self):
+        self.create(
+            ledger_id="another-ledger-row",
+            problem="A different problem.",
+            value="A different expected value.",
+        )
+        other_canvas_trigger = self.head()
+        before = self.state()
+        marker = os.path.join(self.workspace, "adapter-was-called")
+
+        result = self.run_coherence(
+            other_canvas_trigger,
+            self.adapter({"schema": 1, "findings": []}, marker=marker),
+        )
+
+        self.assertEqual(1, result.returncode)
+        self.assertIn("not a successful primary write", result.stderr.decode())
+        self.assertFalse(os.path.exists(marker))
+        self.assertEqual(before, self.state())
+
 
 class TheAdapterReceivesGroundedContext(CoherenceTestCase):
     def test_request_names_the_trigger_and_carries_node_history(self):
