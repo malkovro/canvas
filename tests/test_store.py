@@ -709,6 +709,242 @@ class CreateRefusesRatherThanCorrupts(StoreTestCase):
         self.assertEqual([], leftovers)
 
 
+class ACanvasIsNotBornBlank(StoreTestCase):
+    """`create` refuses a blank `--problem` or `--expected-value`, writing nothing.
+
+    The two first nodes are the whole of what a canvas understands at birth,
+    and the store cannot hold "deliberately blank" and say so: `_render` writes
+    `<text id="…" v="1"/>` for `None` and for `""` alike, and the renderer
+    prints nothing for it. So a blank one reads exactly like a lost one, and
+    the answer is the one `--why` already gets — absent, empty and
+    whitespace-only alike, at exit 2, before the store is opened.
+
+    It used to be two different answers for the same mistake. An empty
+    `--problem` landed two of the three commits and had the third refused by
+    the tool's own one-edit-is-one-node guard, naming a node the caller had
+    never edited, and `create` refuses to overwrite — so the canvas existed,
+    had no expected-value node, and could not be retried. An empty
+    `--expected-value` exited 0 and made all three, because the blank node was
+    the last one written and the one its commit named.
+    """
+
+    BLANK = ("", "   ", "\n\t ")
+
+    def blank_create(self, flag, blank, ledger_id="a-ledger-row"):
+        arguments = {"--problem": "A problem.", "--expected-value": "A value."}
+        arguments[flag] = blank
+        return self.run_canvas(
+            "create",
+            ledger_id,
+            "--problem",
+            arguments["--problem"],
+            "--expected-value",
+            arguments["--expected-value"],
+        )
+
+    def test_a_blank_problem_is_refused_at_exit_two(self):
+        for blank in self.BLANK:
+            with self.subTest(blank=repr(blank)):
+                code, stdout, stderr = self.blank_create("--problem", blank)
+                self.assertEqual(2, code, stderr)
+                self.assertEqual(b"", stdout)
+                self.assertIn("--problem is required and must not be empty", stderr)
+
+    def test_a_blank_expected_value_is_refused_at_exit_two(self):
+        for blank in self.BLANK:
+            with self.subTest(blank=repr(blank)):
+                code, stdout, stderr = self.blank_create("--expected-value", blank)
+                self.assertEqual(2, code, stderr)
+                self.assertEqual(b"", stdout)
+                self.assertIn(
+                    "--expected-value is required and must not be empty", stderr
+                )
+
+    def test_the_refusal_names_the_flag_the_ledger_id_and_the_exit_code(self):
+        _, _, stderr = self.blank_create("--problem", "")
+        self.assertIn("Canvas-About: option --problem", stderr)
+        self.assertIn("Canvas-About: ledger id a-ledger-row", stderr)
+        self.assertIn("Canvas-Exit: 2", stderr)
+        self.assertIn("nothing was written, committed or minted", stderr)
+
+    def test_a_blank_create_leaves_no_store_at_all(self):
+        # Not merely no canvas: the guard runs before `ensure_repository`, so
+        # a refused create does not even initialise the repository. This is
+        # the half-made canvas made impossible at its source.
+        for flag in ("--problem", "--expected-value"):
+            with self.subTest(flag=flag):
+                self.blank_create(flag, "")
+                self.assertFalse(
+                    os.path.exists(os.path.join(self.workspace, "state"))
+                )
+
+    def test_the_ledger_id_is_still_free_after_a_blank_create(self):
+        # The whole of what went wrong before: the canvas existed, so it could
+        # not be created again, and it had no expected-value node.
+        self.blank_create("--problem", "")
+        self.create()
+        self.assertEqual([], validate_file(self.canvas_file()))
+        self.assertEqual(
+            [
+                "create a-ledger-row: born at open, root only",
+                "insert %s: the problem the ledger row states" % self.minted(0),
+                "insert %s: the expected value the ledger row states" % self.minted(1),
+            ],
+            self.subjects(),
+        )
+
+    def minted(self, index):
+        """The id of one of the two nodes in the canvas, in document order."""
+        return [node.get("id") for node in document.parse(self.canvas_file())][index]
+
+    def test_a_blank_create_over_an_existing_canvas_touches_nothing(self):
+        # The invocation is wrong whatever the store holds, so the flag is
+        # what the refusal is about — and the canvas that is there is neither
+        # read nor written on the way to saying so.
+        self.create(problem="The original problem.")
+        with open(self.canvas_file(), "rb") as handle:
+            before = handle.read()
+        before_log = self.git("log", "--format=%H")
+
+        code, stdout, stderr = self.blank_create("--expected-value", "")
+
+        self.assertEqual(2, code)
+        self.assertEqual(b"", stdout)
+        self.assertIn("--expected-value is required", stderr)
+        with open(self.canvas_file(), "rb") as handle:
+            self.assertEqual(before, handle.read())
+        self.assertEqual(before_log, self.git("log", "--format=%H"))
+        self.assertEqual("", self.git("status", "--porcelain"))
+
+    def test_content_that_is_not_blank_is_stored_verbatim(self):
+        # The guard decides whether there is content, not what it looks like.
+        self.create(problem="  padded  ", value="A value.")
+        self.assertEqual(
+            "  padded  ", list(document.parse(self.canvas_file()))[0].text
+        )
+
+    def test_a_node_may_still_be_inserted_blank(self):
+        # The boundary of the decision, pinned so it is not read as wider than
+        # it is. An `insert` carries a `--why` saying what the node is for, so
+        # a reader who finds it blank can ask `history`. `create`'s two nodes
+        # get the two fixed reasons the tool writes, so a blank one would
+        # arrive under a reason describing content it does not have.
+        self.create()
+        code, _, stderr = self.run_canvas(
+            "insert",
+            "a-ledger-row",
+            "--into",
+            "root",
+            "--text",
+            "",
+            "--why",
+            "a placeholder this row will fill once the reduction has been run",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIsNone(list(document.parse(self.canvas_file()))[-1].text)
+
+
+class CharacterDataTheStoreCannotTellApart(StoreTestCase):
+    """`None` and `""` are one state, so no guard may report them as two.
+
+    `document._render` writes `<tag/>` for both and `document.parse` reads that
+    one spelling back as `None`, so a document held in memory with `""` and the
+    same document read off disk are the same bytes. `_shape` compared them raw,
+    which is how the one-edit-is-one-node guard came to refuse a write for
+    "also changing" a node whose character data nobody had touched.
+
+    Reached through `_write_and_commit` rather than a command line: `create`
+    now refuses the blank content that used to get there, so this is the layer
+    the defect actually lived at, exercised as `create` exercised it — one root
+    held in memory across successive writes.
+    """
+
+    AUTHOR = "audit | by-hand"
+
+    def written(self, root, verb, subject, why, node_id=None, base=None):
+        return store._write_and_commit(
+            self.canvas_dir,
+            self.canvas_file(),
+            root,
+            verb,
+            subject,
+            why,
+            self.AUTHOR,
+            node_id=node_id,
+            base=base,
+        )
+
+    def test_the_shape_records_none_and_the_empty_string_alike(self):
+        absent = document.new_canvas("a-ledger-row")
+        document.place_into(absent, document.ROOT, document.new_text("qqqq", None))
+        empty = document.new_canvas("a-ledger-row")
+        document.place_into(empty, document.ROOT, document.new_text("qqqq", ""))
+        self.assertEqual(store._shape(absent), store._shape(empty))
+
+    def test_a_root_held_across_writes_completes_its_third_commit(self):
+        # Exactly `create`'s sequence: three writes off one in-memory root,
+        # whose first node's character data is the empty string. The third
+        # write used to be refused — "refusing to write a commit naming pppp
+        # that also changes 1 other node(s) (qqqq)" — because `qqqq` read `""`
+        # in memory and `None` off disk.
+        os.makedirs(self.canvas_dir)
+        store.ensure_repository(self.canvas_dir)
+        root = document.new_canvas("a-ledger-row")
+        sha = self.written(root, "create", "a-ledger-row", "born at open, root only")
+
+        document.place_into(root, document.ROOT, document.new_text("qqqq", ""))
+        sha = self.written(
+            root, "insert", "qqqq", "a node with no text in it", node_id="qqqq",
+            base=sha,
+        )
+
+        document.place_into(root, document.ROOT, document.new_text("pppp", "x"))
+        self.written(
+            root, "insert", "pppp", "the node this commit is about", node_id="pppp",
+            base=sha,
+        )
+
+        self.assertEqual(
+            [
+                "create a-ledger-row: born at open, root only",
+                "insert qqqq: a node with no text in it",
+                "insert pppp: the node this commit is about",
+            ],
+            self.subjects(),
+        )
+        self.assertEqual([], validate_file(self.canvas_file()))
+
+    def test_the_guard_still_refuses_a_real_change_to_another_node(self):
+        # The control the normalisation must not break: text that genuinely
+        # differs is still a second node changed, and still refused.
+        self.create()
+        tree = document.parse(self.canvas_file())
+        first, second = list(tree)
+        first.text = "rewritten behind the trailer's back"
+        document.place_into(tree, document.ROOT, document.new_text("pppp", "x"))
+        with self.assertRaises(store.Refusal) as caught:
+            self.written(
+                tree, "insert", "pppp", "one node too many", node_id="pppp"
+            )
+        self.assertIn("one edit is one node", str(caught.exception))
+        self.assertIn(first.get("id"), str(caught.exception))
+        self.assertNotIn(second.get("id"), str(caught.exception))
+
+    def test_emptying_a_node_is_still_that_node_changing(self):
+        # And the other control: `""` and `None` being one state says nothing
+        # about `"x"` and `""`, which is an edit like any other.
+        self.create()
+        tree = document.parse(self.canvas_file())
+        first, second = list(tree)
+        second.text = ""
+        with self.assertRaises(store.Refusal) as caught:
+            self.written(
+                tree, "replace", first.get("id"), "emptying somebody else's node",
+                node_id=first.get("id"),
+            )
+        self.assertIn(second.get("id"), str(caught.exception))
+
+
 class ReadRefusesWhatIsNotThere(StoreTestCase):
     def test_reading_a_ledger_id_with_no_canvas_exits_one(self):
         self.create(ledger_id="a-row-that-exists")
@@ -2997,6 +3233,10 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
         "read", "history", "provenance", "Edit", "canvas_directory", "canvas_path",
         "is_repository", "ensure_repository", "head_sha", "is_free", "mint",
         "require_reason", "history_length", "next_version", "default_author",
+        # A pure argument guard beside `require_reason`, and classified the
+        # same way: it takes `create`'s two strings and refuses a blank one.
+        # It takes no document and writes nothing.
+        "require_first_nodes",
         "preflight", "frozen", "Freeze",
         # Imported modules, not API.
         "collections", "errno", "os", "re", "secrets", "stat", "subprocess",

@@ -290,6 +290,43 @@ unlabelled paragraphs, which the renderer is free to fix and the grammar is not.
 `create` refuses rather than overwrites. A canvas that already exists is exit
 `1`, with the path and its current sha, and nothing is written.
 
+**Neither first node may be blank.** A `--problem` or an `--expected-value`
+that is absent, empty or whitespace-only is exit `2` — the same code and the
+same answer an empty `--why` gets — and it is decided before the store is
+opened, so nothing is written, nothing is committed, nothing is minted and the
+repository is not even initialised. The ledger id is left free to try again.
+
+The reason is that the store cannot hold *deliberately blank* and say so. A
+node with no character data is written `<text id="…" v="1"/>` whether it was
+given `None` or `""`, and [`render`](#rendering-a-canvas) prints nothing for
+it, so a canvas whose problem is blank reads exactly like one whose problem was
+lost. There is no third thing for a reader to conclude, so there is no third
+thing for the tool to record. Content that is not blank is stored verbatim:
+this refusal is about whether there is content, not about what it looks like.
+
+**This does not make a blank node inexpressible**, and it is not meant to.
+`insert … --text ""` still makes one, because an `insert` carries a `--why`
+that says what the node is for, and a reader who finds it blank can ask
+[`history`](#a-nodes-history) what it was for. `create`'s two nodes get the two
+fixed reasons the tool writes — *the problem the ledger row states*, *the
+expected value the ledger row states* — so a blank one arrives with a reason
+that describes content it does not have. That is the difference, and it is the
+whole of it.
+
+It used to be two different answers to the same mistake, and neither was one a
+reader of this page could have predicted. An empty `--expected-value` exited
+`0` and made all three commits, leaving a blank second node that rendered as
+nothing. An empty `--problem` landed the first two commits and had the third
+refused by the tool's own one-edit-is-one-node guard — `create` holds one
+document in memory across its three writes, and the empty string it put in the
+problem node came back from disk as `None`, so the third write looked like it
+also changed the problem node. That left a canvas that existed, had no
+expected-value node, and could not be created again. `_shape` no longer draws
+that distinction — `None` and `""` are one state, because the store writes one
+spelling for both — so the guard can no longer name a node the caller did not
+edit; refusing blank content is the separate decision about what an empty
+argument *means*, and the answer is that it is not one.
+
 `--author` becomes the `Canvas-Author:` trailer and is used verbatim, which is
 how a run passes `leo | step:implement | run:ship-the-flag-3`. Driven by hand it
 defaults to `<user> | by-hand` — not a synthesised `step:`/`run:`, because a run
@@ -1092,6 +1129,13 @@ reason with what ended it: `--why "done: …"`, `--why "abandoned: …"`. **Noth
 enforces that**, deliberately: a value set for the outcome is a taxonomy, and
 `--why` gains no required vocabulary here any more than anywhere else.
 
+**There is no verb that removes a canvas, and that question has now been
+asked.** A canvas made by a probe, or by a mistake, or by a row that turned out
+not to be a row is the third outcome above and is frozen like any other — one
+of them, `probe-empty-problem-20260924`, is in the live store and was.
+[`docs/a-canvas-is-never-removed.md`](docs/a-canvas-is-never-removed.md) is the
+ruling, what was done with that one, and the one thing that would reopen it.
+
 **Where the freeze is recorded: in the log, as one commit.** Its subject is
 `freeze <ledger_id>: <why>` and it carries `Canvas-Freeze: <ledger_id>`:
 
@@ -1222,7 +1266,7 @@ mode.
 |---|---|
 | `0` | it worked |
 | `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history, **`read --id` named a node this canvas does not hold**, **the node being written moved since the `--base` declared for it**, the `--base` or `--since` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, and a `--base` or `--since` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, an absent or blank `--problem` or `--expected-value` on [`create`](#creating-a-canvas), and a `--base` or `--since` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
 `Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A

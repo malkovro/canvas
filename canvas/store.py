@@ -1395,6 +1395,60 @@ def _validate(path, reported_as):
 _PREFLIGHT_ID = "aaaa"
 
 
+def require_first_nodes(problem, expected_value, ledger_id):
+    """Return `create`'s two first nodes, or refuse. Neither one may be blank.
+
+    Absent, empty and whitespace-only are the same answer: no — the answer
+    `require_reason` already gives `--why`, for the same reason and with the
+    same exit code. A blank problem is the *invocation* being wrong rather than
+    the request being wrong against the store, so it is a `ToolProblem`: exit
+    `2`, nothing written, nothing committed, nothing minted, and no repository
+    initialised, because this runs before `create` touches the store at all.
+
+    Why blank is refused rather than stored. A canvas is the shared
+    understanding of one task, and these two nodes are the whole of what it
+    understands at birth. The store cannot hold "deliberately blank" and say so:
+    `document._render` writes `<text id="…" v="1"/>` for both `None` and `""`,
+    and `render` prints nothing for it — so a canvas whose problem is blank
+    reads exactly like one whose problem was lost. There is no third thing for a
+    reader to conclude, which is why there is no third thing for the tool to
+    record.
+
+    It also makes the two arguments behave alike, which they did not. An empty
+    `--problem` used to leave two commits on disk and refuse the third — the
+    in-memory `""` and the `None` a round trip through `<text/>` gives back
+    compared unequal in `_shape`, so the third write looked like it also changed
+    the problem node — and `create` refuses to overwrite, so the canvas could
+    not be retried. An empty `--expected-value` exited `0` and made all three,
+    because the blank node was the last one written and the one the commit
+    named. `_shape` no longer draws that distinction (see *One write is one
+    node* below), so the crash is gone either way; this is the separate question
+    of what an empty argument *means*, and the answer is that it is not one.
+
+    The content of a node that is not blank is stored verbatim. This guard
+    decides whether there is content, not what it looks like — unlike
+    `require_reason`, which returns a stripped reason because a commit subject
+    is a line and not a document.
+    """
+    for flag, content in (
+        ("--problem", problem),
+        ("--expected-value", expected_value),
+    ):
+        if content is not None and content.strip():
+            continue
+        raise ToolProblem(
+            "%s is required and must not be empty: a canvas is born holding "
+            "the problem and the expected value, and a blank one is "
+            "indistinguishable from a lost one" % flag,
+            "re-run `bin/canvas create %s` with %s saying what it holds; "
+            "nothing was written, committed or minted, and no canvas exists "
+            "yet" % (ledger_id, flag),
+            about=["option %s" % flag, "ledger id %s" % ledger_id],
+        )
+    return problem, expected_value
+
+
+
 def preflight(path, ledger_id, contents):
     """Validate the document `create` is going to end up with, before committing.
 
@@ -1461,6 +1515,10 @@ def _shape(root):
       what makes moving a populated container one node's edit — every child's
       parent is the moved node before the move and the moved node after it, so
       not one of their records has changed.
+      Character data is normalised to `""`: the store writes `<tag/>` for
+      `None` and for `""` alike and reads only `None` back, so they are one
+      state and not two, and a guard that told them apart would be refusing a
+      difference the store cannot hold.
     - **order** — each container's children, in order. A rewrite that shuffles
       two siblings changes no record at all, so this is the second half of the
       comparison rather than a decoration.
@@ -1508,7 +1566,19 @@ def _shape(root):
         records[node_id] = (
             element.tag,
             tuple(sorted(element.items())),
-            element.text,
+            # `element.text or ""`, because the store cannot tell the two
+            # apart. `document._render` writes `<text id="…" v="1"/>` for a
+            # node whose character data is `None` *and* for one whose
+            # character data is `""`, and `document.parse` reads that one
+            # spelling back as `None` — so a document held in memory with `""`
+            # and the same document read back off disk are the same bytes and
+            # differ here. Comparing them raw made the guard report a change to
+            # a node nobody had edited: `create` holds one root across its
+            # three commits, so an empty `--problem` left `""` in `after` and
+            # `None` in `before` and the third write was refused for "also
+            # changing" the problem node. A guard may only refuse a difference
+            # the store can actually hold.
+            element.text or "",
             parent_id,
         )
         children = list(element)
@@ -2260,7 +2330,14 @@ def create(ledger_id, problem, expected_value, author=None):
     So the two minted ids are returned beside the path and the sha — they are
     already in hand where they are minted, and discarding them was what made
     every caller's first command after `create` a `read`.
+
+    **Neither first node may be blank.** `require_first_nodes` refuses an
+    absent, empty or whitespace-only `--problem` or `--expected-value` at exit
+    `2` before the store is opened, so nothing is written, committed, minted or
+    initialised. Its docstring is where that is argued.
     """
+    problem, expected_value = require_first_nodes(problem, expected_value, ledger_id)
+
     canvas_dir = canvas_directory()
     path = canvas_path(canvas_dir, ledger_id)
     ensure_repository(canvas_dir)
