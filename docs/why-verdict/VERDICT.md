@@ -436,6 +436,12 @@ back the fixed vocabulary the four verbs were shrunk to avoid.
 all three of its sections read *"Not yet filled in."*, so it does not speak to this. The
 specs do, in their own words, and this review treats that as the deliberate part. Filling
 that file in with this entry is worth doing and is not in this review's scope.)
+(`docs/drive-by-hand/FRICTION.md:109-110` reads entry **37**'s edit the other way, as the
+document's failure — *"the canvas ends with no visible trace that anything was ever asked."*
+Both readings stand: `node-state.md` §3 reconciles them by distinguishing the document from
+the log. This review was reading the log, where the reason is; the friction report was reading
+the rendered document, where it is not. §3 leaves the recommendation above untouched — `--why`
+still gains no fields, no structure and no required vocabulary.)
 
 **Do not relax one-node-per-commit to let a table arrive in one edit.** It is the rule that
 manufactured all six failures and it is still the rule that bought everything else here —
