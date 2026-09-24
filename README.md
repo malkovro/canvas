@@ -1482,3 +1482,46 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   and is renamed into place only once it validates, so an invalid canvas is
   never reachable as a canvas. `EnvironmentProblem` is "the validator cannot
   run" — exit `2` — and never "the document is invalid".
+
+## The agent-facing skill
+
+`bin/canvas --help` says what each verb takes. It does not say *when* to reach
+for one, which is the part an agent gets wrong: writing status into a canvas,
+omitting `--base`, rewriting a document one node at a time because a full
+rewrite is inexpressible and nobody said so. That belongs in an instruction an
+agent loads before it touches the store, not in a README it reads afterwards.
+
+[`skills/canvas/SKILL.md`](skills/canvas/SKILL.md) is that instruction — the
+Claude Code skill for driving a canvas over a ledger-backed task's whole life:
+where the tool is (`CANVAS_BIN`, `OPENCLAW_WORKSPACE`), the read–decide–write
+loop and what `--base` does on each of its two branches, one-node edits, the
+`--why` rule, what not to write, resolution against the prompt budget, and
+`freeze` at `done` and `abandoned`. It says in its own words that `create` is
+almost never the agent's — `bin/task-ledger open` makes the canvas — and that
+the rendered comment belongs to the ledger row, which is its only author.
+
+**Registration is a symlink**, so the merged file and the loaded file are one
+file:
+
+    ln -s "$PWD/skills/canvas" ~/.claude/skills/canvas
+
+Claude Code discovers a skill by the presence of `~/.claude/skills/<name>/SKILL.md`.
+Nothing here installs it, and nothing here checks that it is installed: this
+repository does not manage another tool's configuration directory.
+
+**It duplicates three facts from the code, and a test holds each one to its
+source.** `tests/test_skill.py` checks that every verb `cli.build_parser()`
+exposes is named in the skill, that the seven phrases in
+`store._BACK_REFERENCE_PHRASES` are the seven the skill lists — in both
+directions, because a skill that invents an eighth teaches a writer to avoid a
+reason the store would have accepted — and that both codes in `cli.EXIT_MEANING`
+are explained. It checks no prose: wording is the author's, and a test that
+pinned it would break on every improvement. A tenth verb now fails the suite
+until the skill names it.
+
+The `--why` rule itself is **not** duplicated. The skill points at
+`ledger-orchestrator/guidelines/canvas-why.md` by path, because that file is
+owned and maintained by Leo and says of itself: *"Copy it into a step prompt
+verbatim. Do not paraphrase it."* What the skill carries beside the pointer is
+the half the store *enforces* — which is in this repository, and is what the
+test pins.
