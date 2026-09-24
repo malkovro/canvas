@@ -268,14 +268,19 @@ Two different problems wear this name and only one is cheap.
 
 **Inside the canvas** — node 4 now says writes are synchronous, node 9 still
 says the queue absorbs write bursts. This is a reading problem on a small
-document, and a model does it well. It belongs *in the canvas tool*, not as an
-orchestration step: after a write, the tool can ask a model whether the edit
-contradicts any other node, or any other node's recorded reason.
+document, and a model does it well. The model call belongs in the separate,
+synchronous post-write checker defined by [`coherence.md`](coherence.md), not
+in `bin/canvas`: after a successful write has committed, orchestration invokes
+that checker with the resulting head. This preserves the store command's
+standard-library-only, no-install, no-network rule while still reporting the
+check before orchestration advances. A model failure cannot roll back or turn
+the already-successful primary write into a failure.
 
-The output of that check is written **as a `<question>` node in the canvas
-itself**. Not a log line, not a warning on stderr that scrolls past. It lands on
-the blackboard, where the whole point is that you will see it. No new concept is
-needed to carry it.
+Each actual contradiction found by that check is written **as its own open
+`<question>` node in the same canvas**, through the existing store. Not a log
+line, not a warning on stderr that scrolls past. It lands on the blackboard,
+where the whole point is that you will see it. No new concept is needed to
+carry it, and no finding is the ordinary result and writes nothing.
 
 **Between the canvas and reality** — the canvas says we chose A; the branch
 implements B. No amount of reading the canvas catches this, and it is the more

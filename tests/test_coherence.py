@@ -14,6 +14,8 @@ from xml.etree import ElementTree
 
 from tests.test_store import SHA, StoreTestCase
 
+from canvas import coherence
+
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COHERENCE = os.path.join(ROOT, "bin", "canvas-coherence")
@@ -146,6 +148,25 @@ class ARealWriteCanProduceAQuestion(CoherenceTestCase):
         self.assertIn("Canvas-Base: %s" % trigger, first_body)
         self.assertIn("Canvas-Base: %s" % commits[0], second_body)
 
+    def test_a_checker_authored_question_cannot_trigger_a_recursive_check(self):
+        conflicting_id, trigger = self.primary_write()
+        problem_id = self.nodes()[0].get("id")
+        first = self.run_coherence(
+            trigger,
+            self.adapter({"schema": 1, "findings": [self.finding(problem_id, conflicting_id)]}),
+        )
+        self.assertEqual(0, first.returncode, first.stderr.decode())
+        finding_commit = self.head()
+        before = self.state()
+        marker = os.path.join(self.workspace, "adapter-was-called")
+        recursive = self.run_coherence(
+            finding_commit,
+            self.adapter({"schema": 1, "findings": []}, marker=marker),
+        )
+        self.assertEqual(1, recursive.returncode)
+        self.assertFalse(os.path.exists(marker))
+        self.assertEqual(before, self.state())
+
 
 class TheCommonAndFailureCasesWriteNothing(CoherenceTestCase):
     def test_no_finding_changes_no_byte_head_or_commit_count(self):
@@ -175,6 +196,40 @@ class TheCommonAndFailureCasesWriteNothing(CoherenceTestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("response", result.stderr.decode().lower())
         self.assertEqual(before, self.state())
+
+    def test_adapter_launch_failure_preserves_the_successful_primary_write(self):
+        _, trigger = self.primary_write()
+        before = self.state()
+        result = self.run_coherence(
+            trigger, os.path.join(self.workspace, "no-such-adapter")
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("start", result.stderr.decode().lower())
+        self.assertEqual(before, self.state())
+
+    def test_adapter_timeout_is_a_model_failure(self):
+        with self.assertRaises(coherence.ModelFailure) as caught:
+            coherence.call_model(
+                [sys.executable, "-c", "import time; time.sleep(1)"],
+                {"schema": 1},
+                timeout=0.01,
+            )
+        self.assertIn("timed out", str(caught.exception))
+
+    def test_the_adapter_does_not_receive_the_canvas_workspace(self):
+        _, trigger = self.primary_write()
+        adapter = os.path.join(self.workspace, "environment.py")
+        with open(adapter, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/usr/bin/env python3\n"
+                "import json, os, sys\n"
+                "json.load(sys.stdin)\n"
+                "assert 'OPENCLAW_WORKSPACE' not in os.environ\n"
+                "json.dump({'schema': 1, 'findings': []}, sys.stdout)\n"
+            )
+        os.chmod(adapter, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        result = self.run_coherence(trigger, adapter)
+        self.assertEqual(0, result.returncode, result.stderr.decode())
 
 
 class ACoherenceWriteIsRefusedAgainstAFrozenCanvas(CoherenceTestCase):
@@ -253,4 +308,3 @@ class TheCommandSurfaceIsFixed(CoherenceTestCase):
         self.assertEqual(2, result.returncode)
         self.assertFalse(os.path.exists(marker))
         self.assertTrue(SHA.match(trigger))
-
