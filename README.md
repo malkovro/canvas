@@ -700,9 +700,41 @@ Convention, not enforcement — `engineering-spec.md` says the same thing about
 the one drift this specification does not solve, and this repeats it where a
 reader with only the README will meet it. An edit whose reason asserts a fact
 about the world — that a PR merged, that a verdict ruled, that a file says
-something — should name its evidence in `--why`: a PR, a verdict, a file and
-line, so a reader can follow it. Nothing enforces that, and nothing is meant
-to: the check would have to leave the canvas to run.
+something — should name its evidence in `--why`, so a reader can follow it.
+Nothing enforces that, and nothing is meant to: the check would have to leave
+the canvas to run.
+
+**Name something a reader can resolve without already knowing the answer.** A
+path, a commit sha, a pull request, a titled section, a report file, or an
+identifier they can grep for. *"The ENOENT template"*, *"the staleness
+check"*, *"the launch brief"* and *"the ledger row"* name a role rather than
+an artifact: a reader who does not already know which artifact you meant
+cannot get there from the reason, and a claim nobody can reach is a claim
+nobody can check.
+
+**Prefer a name to a line number.** Fifty-four real reasons were read for
+whether the evidence they name still resolves — `docs/why-verdict/DRIFT-CHECK.md`
+in the canvas repository — and every citation that was a name resolved
+unchanged, while both that were a bare line number now point at something
+other than what they meant. Give the line if it helps, and give something
+beside it that survives an edit.
+
+**Pin a claim about how the code is today.** If the reason turns on the
+current state of something — that the tool cannot do X, that no template names
+Y — name the sha you looked at, or say what would retire the claim. Two
+reasons in that corpus rested on *"the tool has no way to mark a question
+answered while leaving it standing"*; a merge on another branch made it false
+seven hours later, and neither reason says what a reader should re-check.
+
+**Quote verbatim, or do not use quotation marks.** They are an invitation to
+go and find the sentence. A paraphrase inside them costs a reader their trust
+in everything else the reason names.
+
+None of this is a required form. There is no `Evidence:` line, no required
+word, no shape a reason has to match and nothing that checks any of it: a
+check that could tell a real citation from a plausible-looking one would have
+to leave the canvas to run, and the freedom of the field is what
+`docs/why-verdict/VERDICT.md` §5.3 found load-bearing.
 
 ##### A merge or a split names the other node's id
 
