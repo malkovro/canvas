@@ -10,6 +10,7 @@ This repository is the canonical home for both Canvas specifications:
 - [Node state](https://malkovro.github.io/canvas/node-state.html) — whether a canvas may say anything about a node's state, and how much: `answered` on `<question>`, and nothing else anywhere
 - [Node naming](https://malkovro.github.io/canvas/node-naming.html) — whether what `create` mints is distinguishable inside the document itself, and where the distinction lives instead
 - [Rendering](https://malkovro.github.io/canvas/rendering.html) — what the renderer does with a `<figure>`, and how the index of open questions and the per-node marker treat a question that has been answered
+- [Coherence checking](https://malkovro.github.io/canvas/coherence.html) — why model checking is a separate synchronous post-write process, and how each contradiction becomes one open question
 
 ## History/source
 
@@ -106,6 +107,39 @@ Standard library only. It needs `xmllint`, which ships with macOS and with
 GitHub's `ubuntu-latest` image, and `git`, because the store tests exercise the
 real repository the tool builds. Every test points `$OPENCLAW_WORKSPACE` at its
 own temporary directory; none of them touches a live workspace.
+
+### Checking a successful write for coherence
+
+`bin/canvas` remains local, deterministic and network-free. The orchestrator
+may synchronously check a successful content write in a separate process:
+
+    bin/canvas-coherence <ledger-id> --trigger <full-head-sha> \
+        --model-command <adapter> [<adapter-argument> ...]
+
+`--model-command` is the final option. The adapter receives one UTF-8 JSON
+object on stdin and emits one UTF-8 JSON object on stdout. It does not inherit
+`OPENCLAW_WORKSPACE`, choose an author or receive Canvas flags. Provider SDKs,
+credentials, network access and retries belong to that adapter, outside both
+Canvas commands. The complete version-1 request and response contract is in
+[`coherence.md`](coherence.md).
+
+The trigger must be the full forty-character current head produced by the
+successful primary write to that ledger's XML file. A repository head belonging
+to another canvas, a stale trigger or a frozen canvas is refused before the
+adapter starts at exit `1`. The adapter failing to start, timing out, exiting
+non-zero or returning invalid UTF-8/JSON/schema is exit `2`. In every case the
+primary write is already committed and is never rolled back or turned into a
+failed write.
+
+The common response is `{"schema": 1, "findings": []}`. It exits `0` and
+writes nothing: no node, reason, temporary or commit. Each actual contradiction
+in a non-empty response is inserted through the existing store as one open
+`<question>` at the root, with a minted id, its own evidence-bearing reason,
+the independent `Canvas-Author: canvas-coherence | trigger:<sha>`, and the
+current head as its declared base. Two findings therefore mean two inserts and
+two commits. The production orchestrator invokes the checker after `create` or
+a successful `insert`, `replace`, `remove` or `move`, never after a read,
+render, history, freeze, or a question inserted by the checker itself.
 
 ### What the schema deliberately does not check
 
