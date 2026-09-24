@@ -195,6 +195,48 @@ ends of a canvas's life: `create`, which is its birth, and
 is not a fifth verb in the sense the four are, and a projection is not one
 either: `render` writes nothing at all.
 
+### What one commit contains
+
+One repository for every ledger row is also one **index** for every ledger row,
+so what a commit contains is a thing this store has to decide rather than
+inherit. It decides it this way, and a caller may rely on all three:
+
+- **One commit changes one canvas.** Never two, whatever else is staged in the
+  shared index at the moment it is made.
+- **One commit changes one node in it**, named in its `Canvas-Node:` trailer —
+  except at the two ends of a canvas's life. `create`'s birth commit names no
+  node and writes a root with nothing in it; `freeze` names no node, carries
+  `Canvas-Freeze: <ledger-id>`, and changes no file at all.
+- **The reason in its subject is about that node**, because the write path
+  composes the subject and the trailer together and will not write one without
+  the other.
+
+It holds because the commit names its path, exactly as the `add` before it
+does: `git commit … -- <path>` builds the commit from the head plus that one
+file, so a second writer's staged entry stays staged and is committed by that
+writer's own commit under that writer's own reason. Two things follow for a
+reader. `git log -- <ledger-id>.xml` is that canvas's whole history and nothing
+else's; and [`history`](#a-nodes-history) — the commits whose `Canvas-Node:`
+trailer names the node — is that node's whole history, rather than most of it.
+
+**One commit in the live store predates this and it has not been rewritten.**
+`59f6946` carries an insert into one canvas and an unnamed full rewrite of node
+`ihfu` in another, made before the commit named its path. `history` cannot
+report that rewrite and never will: a node's history is the commits that name
+it, and loosening that match to recover one edit would make every node's
+history a guess. What the store can still say about it, what is recoverable
+from outside it, and what is permanently gone are written down in
+[`docs/unattributed-edits.md`](docs/unattributed-edits.md).
+
+**What a caller may not read into it.** A write does not leave the index empty
+— another writer's staged canvas may be sitting in it, untouched and
+deliberately so — so `git status` in `state/canvas` is not a report on the
+write that just finished. And the sha a read hands out is still the
+repository's head and not one file's version number: that is what makes it an
+identity key every `--base` can be compared against, and
+[the staleness rule](#--base-and-the-two-branches) is what scopes it back down
+to the caller's own canvas.
+
 ### Creating a canvas
 
 `create` makes the canvas for a ledger row with its first nodes — the problem
@@ -610,6 +652,13 @@ sharpened, and then filed under a section still answers for all three.
 It names the canvas as well as the node, like every other verb, because
 `state/canvas` holds one file per ledger row. And it is a read: it writes no
 file, makes no commit, and does not initialise a repository.
+
+**The list is a node's whole history and not most of it**, which is a property
+of the write path rather than of this command: one commit changes one canvas
+and names the one node it changed there, so there is no edit for this query to
+miss. [*What one commit contains*](#what-one-commit-contains) is that guarantee,
+and the one edit in the live store made before it held is recorded in
+[`docs/unattributed-edits.md`](docs/unattributed-edits.md).
 
 **The match is on the trailer's value, for equality** — not the substring match
 `git log --grep='Canvas-Node: b7'` performs. Ids are four characters, so asking
