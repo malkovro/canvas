@@ -3,7 +3,7 @@
 Nine subcommands, and no more:
 
     canvas create  <ledger_id> --problem TEXT --expected-value TEXT
-    canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
+    canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
     canvas render  <ledger_id>
     canvas history <ledger_id> <node-id>
     canvas replace <ledger_id> <node-id> --why TEXT [--base SHA]
@@ -143,11 +143,21 @@ def _read(args):
     identity key is a hazard as the log grows, and git will still resolve an
     abbreviation supplied later.
 
-    Then the header the store composed: one `Canvas-Wrote:` line per node
-    printed under `--provenance`, and the `Canvas-News:` block under `--since`.
-    Both are asked for and neither is on by default — the canvas goes into every
-    step's prompt and is bounded by what is affordable to send every time, so a
-    line per node on every read would be a permanent tax on the artifact.
+    Then the header the store composed: the `Canvas-Frozen:` line under
+    `--frozen`, one `Canvas-Wrote:` line per node printed under `--provenance`,
+    and the `Canvas-News:` block under `--since`. All three are asked for and
+    none is on by default — the canvas goes into every step's prompt and is
+    bounded by what is affordable to send every time, so a line per node on
+    every read would be a permanent tax on the artifact.
+
+    `--frozen` is the one non-destructive way to ask whether a canvas has
+    ended. It prints `Canvas-Frozen: <sha> <the freeze's reason>` when it has
+    and `Canvas-Frozen: none` when it has not, and **both are exit `0`**: `none`
+    is an answer and not a failure, exactly as a `--type` that matches nothing
+    is exit `0` and an empty root. The unflagged shape is unchanged — a read
+    with no flags prints one header line and then the document, frozen canvas
+    or not, so `canvas read <id> | tail -n +2` is not falsified by anybody
+    freezing anything.
 
     The cost, stated because it is real: stdout is not itself a valid XML
     document. **The document begins at the `<?xml` declaration line, and
@@ -161,6 +171,7 @@ def _read(args):
         node_types=args.node_types,
         since=args.since,
         with_provenance=args.provenance,
+        with_freeze=args.frozen,
     )
     out = sys.stdout.buffer if hasattr(sys.stdout, "buffer") else sys.stdout
     out.write(("Canvas-Base: %s\n" % sha).encode("utf-8"))
@@ -740,7 +751,9 @@ def build_parser():
             "at which commit, read off the log the store already writes and "
             "held nowhere in the document. With --since, print what changed "
             "between that sha and the head, before writing anything against "
-            "it. The document begins at the <?xml line and everything above it "
+            "it. With --frozen, print one Canvas-Frozen: line saying whether "
+            "this canvas has ended and, if it has, at which commit and for "
+            "what reason. The document begins at the <?xml line and everything above it "
             "is the header. Writes nothing, commits nothing, initialises no "
             "repository, and acquires nothing: the answer can be stale the "
             "moment it is printed, and --base on the next write is still the "
@@ -755,6 +768,14 @@ def build_parser():
         help=(
             "print one Canvas-Wrote: <node-id> <sha> <author> line per node "
             "printed, in the order the nodes are printed"
+        ),
+    )
+    read.add_argument(
+        "--frozen",
+        action="store_true",
+        help=(
+            "also report whether this canvas has ended: Canvas-Frozen: <sha> "
+            "<the freeze's reason>, or Canvas-Frozen: none; both exit 0"
         ),
     )
     read.add_argument(

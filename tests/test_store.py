@@ -6196,10 +6196,16 @@ class ReadingAndHistoryStillWorkOnAFrozenCanvas(FrozenCanvasTestCase):
     matters.
 
     They keep working *identically*: same stdout, same exit code. In particular
-    `read` does not grow a `Canvas-Freeze:` line, because `README.md` section
-    *Reading a canvas* documents stdout's exact shape — one header line, then
-    the document, so that `bin/canvas read my-task | tail -n +2` is the
-    document byte for byte.
+    an **unflagged** `read` does not grow a freeze line, because `README.md`
+    section *Reading a canvas* documents stdout's exact shape — one header
+    line, then the document, so that `bin/canvas read my-task | tail -n +2` is
+    the document byte for byte.
+
+    `read --frozen` is how a reader asks instead, and it is the one
+    non-destructive way to: it adds one header line and nothing else, it writes
+    nothing, and it answers at exit `0` whether the canvas ended or not. The
+    flag is what keeps the paragraph above true — a caller that does not ask
+    pays nothing for a freeze somebody else made.
     """
 
     def setUp(self):
@@ -6266,6 +6272,61 @@ class ReadingAndHistoryStillWorkOnAFrozenCanvas(FrozenCanvasTestCase):
             [self.node(each).get("v") for each in
              (self.problem_id, self.value_id, self.note)],
         )
+
+    def test_read_frozen_names_the_freeze_and_its_reason_at_exit_zero(self):
+        # The gap this flag closes: the reason a canvas ended was readable
+        # only by running `git log` by hand, or by attempting a write and
+        # being refused at exit 1.
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--frozen"
+        )
+        self.assertEqual(0, code, stderr)
+        printed = self.printed(stdout, "Canvas-Frozen")
+        self.assertEqual(1, len(printed), printed)
+        sha, reason = printed[0].split(" ", 1)
+        self.assertEqual(self.freeze_sha, sha)
+        self.assertEqual(self.REASON, reason)
+
+    def test_read_frozen_says_none_of_a_canvas_that_has_not_ended_at_exit_zero(self):
+        # `none` is an answer and not a failure, and it is printed rather than
+        # omitted: the question was asked on purpose, so silence would be
+        # indistinguishable from the flag having done nothing.
+        self.create(ledger_id="a-second-row")
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-second-row", "--frozen"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual(["none"], self.printed(stdout, "Canvas-Frozen"))
+
+    def test_read_frozen_writes_nothing(self):
+        # Neither answer writes: a read is a read whichever way it comes out.
+        self.create(ledger_id="a-third-row")
+        before = self.state()
+        self.run_canvas("read", "a-ledger-row", "--frozen")
+        self.run_canvas("read", "a-third-row", "--frozen")
+        self.assertEqual(before, self.state())
+
+    def test_read_frozen_prints_the_document_an_unflagged_read_prints(self):
+        # The freeze stays out of the document: the line is above the `<?xml`
+        # boundary `README.md` defines, and the bytes below it are the file's.
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--frozen"
+        )
+        self.assertEqual(0, code, stderr)
+        text = stdout.decode("utf-8")
+        self.assertEqual(
+            self.document(), text[text.index("<?xml"):].encode("utf-8")
+        )
+
+    def test_read_frozen_puts_its_line_under_the_base_and_above_the_rest(self):
+        # It is a fact about the whole canvas; `Canvas-Wrote:` is per node.
+        code, stdout, stderr = self.run_canvas(
+            "read", "a-ledger-row", "--frozen", "--provenance"
+        )
+        self.assertEqual(0, code, stderr)
+        names = [line.split(": ", 1)[0] for line in self.header(stdout)]
+        self.assertEqual(["Canvas-Base", "Canvas-Frozen"], names[:2])
+        self.assertEqual({"Canvas-Wrote"}, set(names[2:]))
 
 
 class AFreezeIsFinal(RefusalSurface, FrozenCanvasTestCase):
