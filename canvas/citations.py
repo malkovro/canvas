@@ -63,6 +63,40 @@ repair. It is **reported and never fails the run**: the quoted rule fails on
 words an author typed, this one on words inferred from a timestamp. The
 commentary above `written_against` prices that difference against the reading.
 
+## Which file, before which lines
+
+Every rule here is about where a passage sits in a file, and every one of them
+assumes the right file was opened. `resolve` took the first candidate that
+existed, and the candidates were ordered by the roots the caller passed, so a
+citation that spelled a path could be answered by a file in the other
+repository: `docs/unquoted-citations/READING.md:51` cites
+`ledger-orchestrator/README.md` and was read against this one, which has no
+dependency policy in it, because `canvas` is passed first and both have a
+`README.md`. Wrong twice over, and neither half was on the report.
+
+`candidates` ranks the spellings first, then the basename matched anywhere —
+the fallback is load-bearing, since `FRICTION.md` and
+`docs/drive-by-hand/FRICTION.md` name one file — and among those it prefers a
+path that also ends with the directories the citation wrote. What is left is
+genuinely ambiguous: a bare `cli.py` where two exist decides nothing, and
+neither can the reader. Those are **named on the report and never failed**, for
+the reason the fallback exists at all — most of them are right, and refusing an
+ambiguous name would fire on citations that are correct today. What was wrong
+was the silence, not the guess.
+
+## A citation inside a block is a record
+
+A fenced or indented block is reproduced text. `node-identity.md:505` sets out
+`bin/canvas history` output whose commit reason cites `node-identity.md:446`, a
+line number typed on 2026-09-23, and renumbering it to agree with today's file
+would falsify the transcript exactly as renumbering a `PINNED_REPORTS` citation
+would falsify a measurement — which `PINNED_REPORTS` does not cover, because
+the transcript is quoted inside a live document. `transcribed` is that
+predicate and **both** rules ask it. Only the unquoted one used to: a quotation
+landing beside that transcript line would have been ruled on and reported
+*moved*, and the repair a moved report carries is the renumber. Nothing had
+landed there yet, which is the only reason it had not happened.
+
 ## What is not checked, and why renumbering it would be the bug
 
 `docs/why-verdict/`, `docs/drive-by-hand/` and `docs/merge-and-split/` each hold
@@ -192,6 +226,48 @@ def without_code(text):
     return "".join(characters)
 
 
+def _verbatim(text):
+    """The same document with fenced and indented blocks blanked to spaces.
+
+    Not `without_code`, which also blanks inline spans — and nearly every
+    citation in this corpus is written inside backticks, so blanking those
+    would blank the whole question. What has to be excluded is the *block*
+    kind: `node-identity.md` reproduces a `canvas history` transcript, and the
+    commit reasons inside it cite line numbers as they were typed on the day.
+    """
+    characters = list(text)
+    for pattern in CODE[:2]:
+        for match in pattern.finditer("".join(characters)):
+            for index in range(match.start(), match.end()):
+                if characters[index] != "\n":
+                    characters[index] = " "
+    return "".join(characters)
+
+
+def transcribed(text):
+    """The offsets of the citations that are records rather than claims.
+
+    A citation inside a fenced or indented block is reproduced text — a
+    transcript, a sample report, a diff — and what it says is what was true
+    when it was typed. `node-identity.md:505` sets out `bin/canvas history`
+    output whose commit reason cites `node-identity.md:446`, a line number
+    typed on 2026-09-23; renumbering it to agree with today's file would
+    falsify the transcript for the same reason renumbering a `PINNED_REPORTS`
+    citation would falsify a measurement, and `PINNED_REPORTS` does not cover
+    a transcript quoted inside a live document.
+
+    Both rules need this answer and only one of them used to have it. The
+    unquoted rule filtered on the same lens inline; the quoted rule did not,
+    so a quotation landing beside that transcript line would have been ruled
+    on and reported *moved*, with the repair being the renumber. Nothing in
+    the corpus had landed there yet, which is the only reason it had not
+    happened. One predicate, both callers, so they cannot drift apart again.
+    """
+    verbatim = _verbatim(text)
+    return {citation.start() for citation, _, _, _ in cited(text)
+            if verbatim[citation.start():citation.end()].strip() == ""}
+
+
 def quotations(text):
     """Every quoted span, as `(start_offset, quoted_text)`.
 
@@ -290,28 +366,80 @@ def locate(lines, wanted, span=25):
     return (best[0] + 1, best[1] + 1) if best else None
 
 
-def resolve(target, citing_file, roots):
-    """The file a citation names, or None.
+def candidates(target, citing_file, roots):
+    """Every file a citation could name, best first, as `(path, spelled)`.
 
-    Tried relative to the citing document, then to each root, then by basename
-    anywhere under a root — `node-state.md`, `FRICTION.md` and
+    The spellings come first: relative to the citing document, then under each
+    root. `spelled` is True for those — the citation gave a path and a file is
+    at it, so there is nothing to guess.
+
+    Then the basename anywhere under a root, which is load-bearing rather than
+    a nicety: `node-state.md`, `FRICTION.md` and
     `docs/drive-by-hand/FRICTION.md` all name one file and all three spellings
-    are in use.
+    are in use. What it must not do is throw away the directories the citation
+    *did* write. Matching on the basename alone and taking whichever root was
+    passed first read `ledger-orchestrator/README.md`, in
+    `docs/unquoted-citations/READING.md:51`, as this repository's README —
+    a file with no dependency policy in it — because `canvas` is passed first
+    and both repositories have a `README.md`. So basename matches whose path
+    also ends with the directories the citation spelled are ranked ahead of
+    those that merely share a filename. The sort is stable, so among equals the
+    order the roots were given in still decides.
+
+    A citation that spells no directory at all — a bare `cli.py` — is left
+    exactly where it was: every match ends with it, nothing is reordered, and
+    the ambiguity is real rather than resolvable. `bound_by_name` reports it.
     """
-    candidates = [os.path.join(os.path.dirname(citing_file), target)]
+    spelled = [os.path.join(os.path.dirname(citing_file), target)]
     for root in roots:
-        candidates.append(os.path.join(root, target))
+        spelled.append(os.path.join(root, target))
     base = os.path.basename(target)
+    written = target.replace(os.sep, "/").strip("./")
+    walked = []
     for root in roots:
         for directory, subdirectories, filenames in os.walk(root):
+            # `fixtures` as `documents` already reads it: the corpora the tests
+            # build are not documents anybody maintains and are not documents
+            # anybody cites either. Left in, a fixture is a rival for every
+            # ordinary filename — `tests/fixtures/canvas/README.md` answers to
+            # `canvas/README.md` more exactly than the canvas README does.
             subdirectories[:] = [name for name in subdirectories
-                                 if name not in SKIP_DIRECTORIES]
+                                 if name not in SKIP_DIRECTORIES
+                                 and name != "fixtures"]
             if base in filenames:
-                candidates.append(os.path.join(directory, base))
-    for candidate in candidates:
-        if os.path.isfile(candidate):
-            return candidate
-    return None
+                walked.append(os.path.join(directory, base))
+    walked.sort(key=lambda path: not
+                path.replace(os.sep, "/").endswith("/" + written))
+    found, seen = [], set()
+    for path in spelled + walked:
+        real = os.path.realpath(path)
+        if os.path.isfile(path) and real not in seen:
+            seen.add(real)
+            found.append((path, path in spelled))
+    return found
+
+
+def resolve(target, citing_file, roots):
+    """The file a citation names, or None."""
+    found = candidates(target, citing_file, roots)
+    return found[0][0] if found else None
+
+
+def bound_by_name(target, citing_file, roots):
+    """The files a citation could equally have named, or `[]`.
+
+    Empty whenever the citation says which file it means and a file is there:
+    then nothing was guessed. Empty too when only one file carries the name,
+    however it was found. What is left is the case this cannot decide and the
+    reader has to — a name matched anywhere under the roots with more than one
+    file answering to it — and it is *reported*, never failed, for the reason
+    the fallback exists at all: most of these are right, and a check that
+    refused them would fire on citations that are correct today.
+    """
+    found = candidates(target, citing_file, roots)
+    if len(found) < 2 or found[0][1]:
+        return []
+    return [path for path, _ in found]
 
 
 def documents(roots):
@@ -409,21 +537,28 @@ def check_document(path, roots):
     was thirty lines stale and never tested. Trying each and keeping the best
     answer asserts nothing extra: a citation is still only called drifted when
     the quoted words have been found elsewhere in the file it names.
+
+    A citation inside a fenced or indented block is passed over: it is a
+    transcript of what somebody typed, not a claim about a file today. See
+    `transcribed`.
     """
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     citations = cited(text)
+    records = transcribed(text)
     results = []
     quoted = ([(offset, quote, False) for offset, quote in quotations(text)] +
               [(offset, quote, True) for offset, quote in blockquotes(text)])
     for offset, quote, is_block in sorted(quoted):
         if not fragments(quote):
             continue
-        candidates = attributed_to(text, citations, offset, is_block)
-        if not candidates:
+        near = [candidate for candidate in
+                attributed_to(text, citations, offset, is_block)
+                if candidate[0].start() not in records]
+        if not near:
             continue
         judged = [judge(*candidate, quote=quote, path=path, text=text,
-                        roots=roots) for candidate in candidates]
+                        roots=roots) for candidate in near]
         results.append(min(reversed(judged),
                            key=lambda record: PRECEDENCE.index(record["verdict"])))
     return results
@@ -535,24 +670,6 @@ def _contemporary(repository, commit, other, _cache={}):
     return _cache[key]
 
 
-def _verbatim(text):
-    """The same document with fenced and indented blocks blanked to spaces.
-
-    Not `without_code`, which also blanks inline spans — and nearly every
-    citation in this corpus is written inside backticks, so blanking those
-    would blank the whole question. What has to be excluded is the *block*
-    kind: `node-identity.md` reproduces a `canvas history` transcript, and the
-    commit reasons inside it cite line numbers as they were typed on the day.
-    """
-    characters = list(text)
-    for pattern in CODE[:2]:
-        for match in pattern.finditer("".join(characters)):
-            for index in range(match.start(), match.end()):
-                if characters[index] != "\n":
-                    characters[index] = " "
-    return "".join(characters)
-
-
 def written_against(path, roots):
     """Every citation in one document that has no quotation, weighed against
     the text its target held when the citation was written."""
@@ -563,12 +680,9 @@ def written_against(path, roots):
         return []
     citations = cited(text)
     # Citations the quoted rule already rules on are left to it, and a citation
-    # inside a code region is a record — `node-identity.md` reproduces a
-    # `canvas history` transcript whose commit reasons cite line numbers, and
-    # those say what was typed on the day. Renumbering one would falsify the
-    # transcript for the same reason renumbering a PINNED_REPORTS citation
-    # would falsify a measurement.
-    spoken, verbatim = set(), _verbatim(text)
+    # inside a block is a record rather than a claim — see `transcribed`, which
+    # both rules now ask.
+    spoken, records = set(), transcribed(text)
     quoted = ([(offset, quote, False) for offset, quote in quotations(text)] +
               [(offset, quote, True) for offset, quote in blockquotes(text)])
     for offset, quote, is_block in quoted:
@@ -581,7 +695,7 @@ def written_against(path, roots):
     for citation, target, first, last in citations:
         if not target.endswith(".md") or citation.start() in spoken:
             continue
-        if verbatim[citation.start():citation.end()].strip() == "":
+        if citation.start() in records:
             continue
         line = text[:citation.start()].count("\n") + 1
         commit = blamed.get(line)
@@ -630,14 +744,45 @@ def written_against(path, roots):
     return results
 
 
+def guessed_files(path, roots):
+    """Every citation in one document whose file the checker had to guess.
+
+    Reported beside the verdicts rather than folded into them, because this
+    says nothing about whether a citation lands: it says the checker — and the
+    reader — cannot be sure which file is being talked about, so whatever
+    verdict follows is about a file that may not be the one meant. A citation
+    inside a block is left alone here as everywhere else; it is a record.
+    """
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    records = transcribed(text)
+    found, seen = [], set()
+    for citation, target, _, _ in cited(text):
+        if citation.start() in records or target in seen:
+            continue
+        also = bound_by_name(target, path, roots)
+        if not also:
+            continue
+        seen.add(target)
+        found.append({
+            "path": path,
+            "line": text[:citation.start()].count("\n") + 1,
+            "target": target,
+            "read_as": also[0],
+            "also": also[1:],
+        })
+    return found
+
+
 def check(roots):
     live, pinned = documents(roots)
-    results, unquoted = [], []
+    results, unquoted, guesses = [], [], []
     for _, path in live:
         results.extend(check_document(path, roots))
         unquoted.extend(written_against(path, roots))
+        guesses.extend(guessed_files(path, roots))
     skipped = sum(len(check_document(path, roots)) for _, path in pinned)
-    return results, unquoted, skipped, len(live), len(pinned)
+    return results, unquoted, guesses, skipped, len(live), len(pinned)
 
 
 def main(argv=None):
@@ -661,7 +806,7 @@ def main(argv=None):
                 "Canvas-Exit: 2 — the check could not run\n" % root)
             return 2
 
-    results, unquoted, skipped, live_count, pinned_count = check(roots)
+    results, unquoted, guesses, skipped, live_count, pinned_count = check(roots)
     moved = [record for record in results if record["verdict"] == MOVED]
     undecidable = [record for record in results if record["verdict"] == UNDECIDABLE]
     lands = [record for record in results if record["verdict"] == LANDS]
@@ -708,17 +853,37 @@ def main(argv=None):
                     record["commit"], record["target"], record["actual"][0],
                     record["actual"][1], record["quote"][:120]))
 
+    # The citations whose *file* was a guess. One line of the report can only
+    # ever be about one file, and every other line here assumes the right one
+    # was opened. Named rather than counted, and never failed: the fallback
+    # that produces these also carries the deliberate cross-repository
+    # citations — `FRICTION.md` and `docs/drive-by-hand/FRICTION.md` are one
+    # file under two spellings — so refusing an ambiguous name would fire on
+    # citations that are correct today. What is wrong is that it was silent.
+    if guesses:
+        sys.stdout.write(
+            "\nBound by filename alone — the citation spelled no path that "
+            "exists, and more than\none file answers to the name. Read these; "
+            "the checker read the first:\n")
+        for record in guesses:
+            sys.stdout.write("%s:%d\n    cites %s — read as %s\n" % (
+                record["path"], record["line"], record["target"],
+                record["read_as"]))
+            for other in record["also"]:
+                sys.stdout.write("    could equally be %s\n" % other)
+
     sys.stdout.write(
         "\n%d quoted citations in %d live documents: %d land, %d moved, "
         "%d undecidable.\n%d citations carry no quotation: %d still hold what "
         "they were written against, %d listed above as changed underneath,\n"
         "%d that could not be placed. %d citations in %d pinned dated readings "
-        "were not checked (see PINNED_REPORTS).\n" % (
+        "were not checked (see PINNED_REPORTS).\n%d names above were bound by "
+        "filename alone and are reported, not failed.\n" % (
             len(results), live_count, len(lands), len(moved),
             len(undecidable), len(unquoted),
             len([r for r in unquoted if r["verdict"] == LANDS]), len(drifted),
             len([r for r in unquoted if r["verdict"] == UNDECIDABLE]),
-            skipped, pinned_count))
+            skipped, pinned_count, len(guesses)))
     return 1 if moved else 0
 
 

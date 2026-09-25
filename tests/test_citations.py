@@ -177,7 +177,7 @@ class ADatedReadingIsNotRenumberedToAgreeWithAFileItNeverSaw(unittest.TestCase):
     def test_and_are_counted_on_the_report_rather_than_dropped(self):
         drifted = 'Measured then. `spec.md:1-2` said *"shape does not run out"*.'
         root = corpus(**{"spec.md": SPEC, "docs__why-verdict__READING.md": drifted})
-        _, _, skipped, _, pinned = citations.check([root])
+        _, _, _, skipped, _, pinned = citations.check([root])
         self.assertEqual((skipped, pinned), (1, 1))
 
 
@@ -202,7 +202,7 @@ class EveryCitationInThisRepositoryLandsOnWhatItQuotes(unittest.TestCase):
 
     def test_the_corpus_is_actually_being_read(self):
         # A guard over an empty corpus passes for the wrong reason.
-        results, _, _, live, _ = citations.check([ROOT])
+        results, _, _, _, live, _ = citations.check([ROOT])
         self.assertGreater(live, 5)
         self.assertGreater(len([r for r in results if r["verdict"] == citations.LANDS]), 10)
 
@@ -479,6 +479,173 @@ class ACitationWithNoQuotationIsWeighedAgainstWhatItWasWrittenAgainst(
                          "ruling.md": "Four verbs (`spec.md:3`).\n"})
         self.assertEqual(
             citations.written_against(os.path.join(root, "ruling.md"), [root]), [])
+
+
+class ACitationIsReadAgainstTheFileItSpelled(unittest.TestCase):
+    """Which file, before which lines.
+
+    Every other rule here assumes the right file was opened. `resolve` took the
+    first candidate that existed and the candidates were ordered by the roots
+    the caller passed, so a citation that spelled a path could be answered by a
+    file in the other repository — `ledger-orchestrator/README.md`, in
+    `docs/unquoted-citations/READING.md:51`, read this repository's README,
+    which has no dependency policy in it. It was wrong twice over and neither
+    half showed on the report.
+    """
+
+    def two_repositories(self):
+        """Two roots, each with a `README.md`, and a document in the second
+        citing the second's by the name the root is checked out under — which
+        is how this corpus spells a cross-repository reference."""
+        first = corpus(**{
+            "README.md": "\n".join(["# First", "", "Not the one meant."]),
+        })
+        holder = tempfile.mkdtemp(prefix="canvas-citations-")
+        second = os.path.join(holder, "second")
+        os.makedirs(os.path.join(second, "docs"))
+        for name, body in (
+                ("README.md", "\n".join(["# Second", "", "The one meant."])),
+                (os.path.join("docs", "ruling.md"),
+                 "It is set out at `second/README.md:3`.\n")):
+            with open(os.path.join(second, name), "w",
+                      encoding="utf-8") as handle:
+                handle.write(body)
+        return first, second
+
+    def test_the_directories_a_citation_spells_outrank_the_root_order(self):
+        first, second = self.two_repositories()
+        resolved = citations.resolve(
+            "second/README.md", os.path.join(second, "docs", "ruling.md"),
+            [first, second])
+        self.assertEqual(resolved, os.path.join(second, "README.md"))
+
+    def test_a_bare_filename_still_reaches_the_only_file_carrying_it(self):
+        """The fallback is load-bearing — `FRICTION.md` and
+        `docs/drive-by-hand/FRICTION.md` are one file under two spellings — so
+        ranking the spellings must not stop a name from being matched."""
+        root = corpus(**{"docs__deep__FRICTION.md": "# Friction\n",
+                         "ruling.md": "See `FRICTION.md:1`.\n"})
+        self.assertEqual(
+            citations.resolve("FRICTION.md",
+                              os.path.join(root, "ruling.md"), [root]),
+            os.path.join(root, "docs", "deep", "FRICTION.md"))
+
+    def test_a_test_fixture_is_not_a_rival_for_an_ordinary_name(self):
+        """`documents` already refuses to read a fixture as a document, and a
+        fixture is not a thing anybody cites either. Left in the search it is a
+        rival for every cross-repository name: the real corpus has a
+        `tests/fixtures/canvas/README.md`, which ends with `canvas/README.md`
+        exactly as the canvas README does, and it is under the root that is
+        searched first."""
+        first, second = self.two_repositories()
+        os.makedirs(os.path.join(first, "tests", "fixtures", "second"))
+        with open(os.path.join(first, "tests", "fixtures", "second",
+                               "README.md"), "w", encoding="utf-8") as handle:
+            handle.write("# Fixture\n")
+        self.assertEqual(
+            citations.resolve("second/README.md",
+                              os.path.join(second, "docs", "ruling.md"),
+                              [first, second]),
+            os.path.join(second, "README.md"))
+
+
+class AFilenameMoreThanOneFileAnswersToIsNamed(unittest.TestCase):
+    """What is left after the ranking, and why it is reported and not refused.
+
+    A bare `cli.py` in a document that sits beside two of them is genuinely
+    undecidable, and so is the reader's position. Refusing it would fire on the
+    deliberate cross-repository citations the fallback exists to carry, so this
+    says which file it read and which it could equally have read, and leaves
+    the exit code alone.
+    """
+
+    def ambiguous(self):
+        return corpus(**{
+            "one__cli.py": "# one\n",
+            "two__cli.py": "# two\n",
+            "ruling.md": "The entry point is `cli.py:1`.\n"})
+
+    def test_the_report_says_what_it_read_and_what_else_it_could_have(self):
+        root = self.ambiguous()
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = citations.main([root])
+        report = buffer.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Bound by filename alone", report)
+        self.assertIn(os.path.join(root, "one", "cli.py"), report)
+        self.assertIn("could equally be %s"
+                      % os.path.join(root, "two", "cli.py"), report)
+
+    def test_a_citation_that_spells_a_path_that_exists_says_nothing(self):
+        root = self.ambiguous()
+        self.assertEqual(
+            citations.bound_by_name("one/cli.py",
+                                    os.path.join(root, "ruling.md"), [root]),
+            [])
+
+    def test_a_name_only_one_file_carries_says_nothing(self):
+        root = corpus(**{"one__cli.py": "# one\n",
+                         "ruling.md": "The entry point is `cli.py:1`.\n"})
+        self.assertEqual(
+            citations.bound_by_name("cli.py",
+                                    os.path.join(root, "ruling.md"), [root]),
+            [])
+
+    def test_a_corpus_with_nothing_to_guess_at_prints_no_such_section(self):
+        root = corpus(**{"one__cli.py": "# one\n",
+                         "ruling.md": "The entry point is `one/cli.py:1`.\n"})
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            citations.main([root])
+        self.assertNotIn("Bound by filename alone", buffer.getvalue())
+        self.assertIn("0 names above were bound by filename alone",
+                      buffer.getvalue())
+
+
+class ACitationInsideABlockIsARecordForBothRules(unittest.TestCase):
+    """One predicate, two callers.
+
+    The unquoted rule skipped a citation inside a block and the quoted rule did
+    not, and nothing in the corpus had landed a quotation beside one, so the
+    difference was invisible. A quotation there would have been ruled on and
+    the citation reported *moved* — and the repair the report carries is the
+    renumber, which falsifies the transcript it is quoted from.
+    """
+
+    #: The fence ends and the sentence carries straight on, with no paragraph
+    #: break to end the association — so without the fix the quotation below is
+    #: a claim about `spec.md:3`, which does not hold those words.
+    TRANSCRIPT = "\n".join([
+        "What the log holds:",
+        "",
+        "```",
+        "insert: states the vocabulary, quoting spec.md:3",
+        "```",
+        'and the words it quoted are "The vocabulary is structural and not',
+        'semantic".',
+        ""])
+
+    def test_a_quotation_beside_a_transcript_citation_is_not_ruled_on(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md": self.TRANSCRIPT})
+        self.assertEqual(verdicts(root, "ruling.md"), [])
+
+    def test_the_same_citation_in_prose_is_ruled_on(self):
+        """Proof the fixture would fire — otherwise the test above passes for
+        having written a quotation the rule never saw."""
+        root = corpus(**{"spec.md": SPEC, "ruling.md": "\n".join([
+            "insert: states the vocabulary, quoting `spec.md:3`",
+            'and the words it quoted are "The vocabulary is structural and not',
+            'semantic".', ""])})
+        self.assertEqual(verdicts(root, "ruling.md"),
+                         [(citations.MOVED, (5, 6))])
+
+    def test_the_predicate_is_the_one_the_unquoted_rule_asks(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md": self.TRANSCRIPT})
+        with open(os.path.join(root, "ruling.md"), encoding="utf-8") as handle:
+            text = handle.read()
+        self.assertEqual(len(citations.transcribed(text)), 1)
+
 
 
 if __name__ == "__main__":
