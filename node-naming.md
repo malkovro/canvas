@@ -80,7 +80,7 @@ two different fields, in words chosen to be different.
 This is where the case parts company with `answered`. An open `<question>` and an
 answered one are **identical in their text** — that is precisely why the fact had
 to go into the document: there was no other channel, and the writer who tried to
-use prose for it produced `FRICTION.md:158`'s stale sentence. `create`'s two
+use prose for it produced `FRICTION.md:158-159`'s stale sentence. `create`'s two
 nodes are not identical in their text and never will be, because the two things
 they hold are different things.
 
