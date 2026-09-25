@@ -39,9 +39,11 @@ It holds the spec's existing commitments fixed rather than relitigating them:
   counted as an edit to a node it never touched. The same paragraph, at
   `engineering-spec.md:222-223`, says instead that "The command matches the
   trailer's value for equality instead" — which is what
-  `canvas/store.py:1026` does, keeping an anchored `--grep` as a pre-filter
-  that never decides. What this bullet holds fixed is untouched: a node has
-  a history of its own, and it is exactly the set of commits whose
+  `canvas/store.py:1037` does, comparing the values of the trailer block git
+  itself parsed; the anchored `--grep` at `canvas/store.py:1026` is a
+  pre-filter on top of that and never the authority
+  (`canvas/store.py:885-895`). What this bullet holds fixed is untouched: a
+  node has a history of its own, and it is exactly the set of commits whose
   `Canvas-Node:` trailer names it. Nothing this ruling decides turns on how that
   set is queried, so the ruling stands as written.)
 - **The creation commit creates the root only**, and the two first nodes arrive
