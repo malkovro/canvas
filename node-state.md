@@ -762,7 +762,7 @@ it was recorded. The other four stand.
   `engineering-spec.md:327-338` promises a freeze at `done` and `bin/canvas`
   does not implement one. This document constrains that answer in exactly one
   way: it is not a node state.
-- **Whether authorship is the same shape.** `FRICTION.md:161-167` says what a
+- **Whether authorship is the same shape.** `FRICTION.md:166-172` says what a
   canvas needs to say *about* a node has to be smuggled into the node, and names
   authorship as the other instance. This ruling refuses the general form and
   answers one instance; it does not answer that one. If authorship belongs in
