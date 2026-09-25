@@ -2,7 +2,7 @@
 
 Settled 2026-09-23. This document decides whether a canvas may say anything
 about a node's state, and how much. It is scoped to the four wants the friction
-record collected at `docs/drive-by-hand/FRICTION.md:145-159` and to the
+record collected at `docs/drive-by-hand/FRICTION.md:145-164` and to the
 vocabulary in `schema/canvas.rng`; it decides nothing about the renderer beyond
 the one fact the renderer will need from the document, and it decides nothing
 about the canvas lifecycle. What is still open is named at the end.
@@ -22,12 +22,12 @@ It holds the spec's existing commitments fixed rather than relitigating them:
 - **The vocabulary is closed.** Eleven element names and no twelfth
   (`schema/canvas.rng:13-16`, pinned by
   `tests/test_validate.py:130-143`).
-- **Four verbs and no more** (`engineering-spec.md:116-123`). There is no
-  `resolve`, no `collapse`, no `supersede` (`engineering-spec.md:125`).
+- **Four verbs and no more** (`engineering-spec.md:122-127`). There is no
+  `resolve`, no `collapse`, no `supersede` (`engineering-spec.md:131`).
 - **The semantics live in the reason**, not in a verb name
-  (`engineering-spec.md:128-130`, `product-spec.md:48`).
+  (`engineering-spec.md:131-137`, `product-spec.md:48`).
 - **One edit is one node, one edit is one commit**, and a node's history is
-  `git log --grep='Canvas-Node: <id>'` (`engineering-spec.md:133-135`,
+  `git log --grep='Canvas-Node: <id>'` (`engineering-spec.md:139-141` and `:192`,
   `node-identity.md`).
 - **`v` is what the log counts** — a node's state must not become a claim the
   log cannot check (`node-identity.md` §4, and §7's rejection of an ancestor
@@ -128,7 +128,7 @@ it is inexpressible. That is a stronger answer than a provisional marker on
 What this does **not** give want 3 is a way to mark the `<text>` itself as
 provisional in some sense unrelated to an open question — *"this is my best
 guess"*, *"this is unverified"*. That is asserted-versus-verified, it is
-canvas-versus-reality, and it is the thing `engineering-spec.md:272-276`
+canvas-versus-reality, and it is the thing `engineering-spec.md:291-295`
 rejected. It stays in the reason. See §5.
 
 ### Want 2 — *"this option is the one taken"* — **DELIBERATELY LEFT IN THE REASON**
@@ -161,7 +161,7 @@ retype. Whether `replace` should be able to change an attribute without
 restating the text is a real question and it is named in *Still open*; it is not
 this one, and answering this one would not have answered it.
 
-So want 2 is left where `engineering-spec.md:128-130` puts it: the reason says
+So want 2 is left where `engineering-spec.md:131-137` puts it: the reason says
 which option was chosen and why, and the table it was chosen from goes.
 
 ### Want 4 — *"this document is finished"* — **DELIBERATELY LEFT**, and handed to its own todo
@@ -174,7 +174,7 @@ This is not a node state at all, and it is the one of the four that is
 misfiled by being on the list. It is a property of the canvas, and the canvas
 root is the one element that carries no `id` and no `v` and sits outside the
 identity rules entirely (`schema/canvas.rng:25-26`, `node-identity.md` §4). It
-is also already specified: `engineering-spec.md:327-338` gives the lifecycle —
+is also already specified: `engineering-spec.md:369-380` gives the lifecycle —
 born at `open`, grows through `executing`, **frozen at `done`**, never deleted —
 so what want 4 records is not a missing vocabulary item but a missing
 *mechanism*, the freeze the spec promises and `bin/canvas` does not implement.
@@ -352,7 +352,7 @@ lineage, and its four costs transfer to `answered-by` one for one:
 
 - **It is `supersede` in an attribute.** An `answered-by` pointing from a
   question to the node that settled it is a lineage claim between two nodes,
-  which is the verb `engineering-spec.md:125` deliberately does not have,
+  which is the verb `engineering-spec.md:131` deliberately does not have,
   wearing a different hat.
 - **It would be the first piece of node state not derivable from the log**
   (`node-identity.md:568`). RELAX NG cannot check a cross-reference, so
@@ -386,7 +386,7 @@ about the question node, set by the one commit that is already naming the
 question node. That is the whole of why the first half of option B survives §3
 and the second half does not.
 
-## 5. Why not option C, and why the argument past `engineering-spec.md:272-276` could not be made
+## 5. Why not option C, and why the argument past `engineering-spec.md:291-295` could not be made
 
 `engineering-spec.md:285-295`:
 
@@ -456,14 +456,14 @@ the claim rather than relocating it.
 
 **Third, option C fails two other tests independently**, so even a successful
 argument past 272-276 would not carry it: the tripwire read in spirit (§2), and
-the enumerate-the-intents rule at `engineering-spec.md:128-130` (§3). A `state`
+the enumerate-the-intents rule at `engineering-spec.md:131-137` (§3). A `state`
 attribute needs either an enumerated value set — a topology that will fall
 through the first time somebody needs a value nobody listed — or a free token,
 which puts the semantics back in free text and is option A with extra syntax and
 a second place for the document to contradict itself.
 
 Option C is refused. If canvas-versus-reality drift does turn out to bite,
-`engineering-spec.md:266-276` is still where it gets fixed, and nothing here
+`engineering-spec.md:291-295` is still where it gets fixed, and nothing here
 forecloses that.
 
 ### Why option A is not taken either
@@ -647,7 +647,7 @@ These two lists are what goes into the orchestrator's
   `<question>` has been answered.** No other node carries state, in any
   spelling. *Why:* the four wants are not one want (§1), and the general form —
   a canvas carrying metadata about a node — is what
-  `engineering-spec.md:272-276` rejected as premature and §5 could not argue
+  `engineering-spec.md:291-295` rejected as premature and §5 could not argue
   past.
 - **`answered` is legal on `<question>` and on no other element.** *Why:*
   `<question>` is the declared semantic exception (`engineering-spec.md:108-109`);
@@ -661,7 +661,7 @@ These two lists are what goes into the orchestrator's
   `node-identity.md` §7 prices for an ancestor id apply one for one, and the
   reason already has to name what answered it (§4).
 - **The reason carries semantics; `--why` gains no fields, no structure and no
-  required vocabulary.** *Why:* `engineering-spec.md:128-130`,
+  required vocabulary.** *Why:* `engineering-spec.md:131-137`,
   `product-spec.md:48`, and `VERDICT.md:425-434` on evidence.
 - **Openness is stated in exactly one place — the question node itself.** No
   other node may assert whether a question is open. *Why:* `FRICTION.md:162-163` —
@@ -673,7 +673,7 @@ These two lists are what goes into the orchestrator's
   rather than merely deprecated. *Why:* `validate.py:7-10`, `document.py:3-10`.
 - **"This document is finished" is not a node state.** Whatever ends a canvas is
   a property of the root or of the ledger. *Why:* §1, want 4;
-  `engineering-spec.md:327-338`; the root carries no `id` or `v`.
+  `engineering-spec.md:369-380`; the root carries no `id` or `v`.
 - **The decision rule behind all of the above:** a fact a reader of the rendered
   canvas must act on belongs in the document; a fact a reader reconstructs when
   they ask why belongs in the reason. *Why:* it is what reconciles
@@ -759,7 +759,7 @@ it was recorded. The other four stand.
   that would do most for the wants this ruling leaves in the reason.
 - **What ends a canvas.** Want 4, handed by name to
   [#10330567174](https://app.basecamp.com/3934852/buckets/48039419/todos/10330567174).
-  `engineering-spec.md:327-338` promises a freeze at `done` and `bin/canvas`
+  `engineering-spec.md:369-380` promises a freeze at `done` and `bin/canvas`
   does not implement one. This document constrains that answer in exactly one
   way: it is not a node state.
 - **Whether authorship is the same shape.** `FRICTION.md:166-172` says what a
