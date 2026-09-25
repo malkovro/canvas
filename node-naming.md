@@ -30,6 +30,20 @@ It holds the spec's existing commitments fixed rather than relitigating them:
 - **One edit is one node, one edit is one commit**, and a node's history is
   `git log --grep='Canvas-Node: <id>'` (`engineering-spec.md:139-141` and `:192`,
   `node-identity.md`).
+  (**Added 2026-09-25, after this ruling — the bullet above is as written
+  on 2026-09-23.** That query is not the command.
+  `engineering-spec.md:218-223` calls the bare `--grep` form "the same
+  query written as a substring match" and "wrong in two reachable ways":
+  ids are four characters, so it also answers for a longer id that starts
+  with the one asked about, and a reason that quotes the trailer text is
+  counted as an edit to a node it never touched. The same paragraph, at
+  `engineering-spec.md:222-223`, says instead that "The command matches the
+  trailer's value for equality instead" — which is what
+  `canvas/store.py:1026` does, keeping an anchored `--grep` as a pre-filter
+  that never decides. What this bullet holds fixed is untouched: a node has
+  a history of its own, and it is exactly the set of commits whose
+  `Canvas-Node:` trailer names it. Nothing this ruling decides turns on how that
+  set is queried, so the ruling stands as written.)
 - **The creation commit creates the root only**, and the two first nodes arrive
   as two ordinary `insert` commits (`node-identity.md` §4, quoted verbatim in
   `canvas/store.py`'s `create`).
@@ -186,6 +200,24 @@ and the fix is a test change that belongs to whoever next widens the grammar.
   renderer labels `create`'s two nodes is [`rendering.md`](rendering.md)'s
   business, and presentation was explicitly left free. **This ruling permits that
   and does not decide it.**
+  (**Added 2026-09-25, after this ruling — the cost above is as written on
+  2026-09-23.** The page is not what goes into a Basecamp comment.
+  `engineering-spec.md:322-332` now says of the HTML page "Not pasteable into a
+  Basecamp comment", and marks that as a correction of the line that had said it
+  was: the `basecamp` CLI converts a comment body from Markdown to HTML only
+  when the body contains no HTML, so one tag turns the conversion off for the
+  whole comment, and Basecamp's rich text then drops the doctype, the wrapper
+  elements and every class the page's meaning is carried in. The projection that
+  does go there is the second one — `bin/canvas render <ledger-id> --format
+  comment` — which is where the citation above already points
+  (`engineering-spec.md:333-341`). The cost survives the correction unchanged:
+  `_comment_node` renders an untitled `<text>` node as its text and nothing else
+  (`canvas/render.py:582`), so the comment shows the same two unlabelled
+  paragraphs to the same reader who will never run `history`, and what was wrong
+  was only which artifact the sentence named. So does the answer — both
+  renderers live in `canvas/render.py` and walk what one `store.read` returned
+  (`engineering-spec.md:344-345`), so a marker in words the XML does not carry
+  is as available to one as to the other.)
 - **Somebody will propose this again**, and should be able to tell quickly
   whether they have a new argument. What would reopen it is in *Deliberate*
   below, stated as a test rather than as a mood.
