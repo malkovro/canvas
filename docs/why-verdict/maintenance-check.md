@@ -478,3 +478,12 @@ row `bc-10334523272-what-a-person-and-the-steps-did`. Store
 `/Users/lfigea/.openclaw/workspace/state/canvas` at
 `8f773f2ce113a2aec0315b49df9f860562971d53`, 99 commits; canvas checkout at `c54eaa1`,
 branch `docs/bc-10334523272-maintenance-check`; ledger-orchestrator checkout at `0b35ce6`.*
+
+---
+
+**A later attempt to run the experiment §6 names found two things in front of
+it, and wrote them down beside this document:**
+[`./experiment-preconditions.md`](./experiment-preconditions.md). It reports
+that the denominator §0 publishes can no longer be re-derived — `ps -o lstart= -p
+33867` prints nothing now — and that no canvas in this store has ever stayed
+writable long enough for the experiment to be run on it.
