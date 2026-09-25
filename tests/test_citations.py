@@ -177,7 +177,7 @@ class ADatedReadingIsNotRenumberedToAgreeWithAFileItNeverSaw(unittest.TestCase):
     def test_and_are_counted_on_the_report_rather_than_dropped(self):
         drifted = 'Measured then. `spec.md:1-2` said *"shape does not run out"*.'
         root = corpus(**{"spec.md": SPEC, "docs__why-verdict__READING.md": drifted})
-        _, skipped, _, pinned = citations.check([root])
+        _, _, skipped, _, pinned = citations.check([root])
         self.assertEqual((skipped, pinned), (1, 1))
 
 
@@ -202,7 +202,7 @@ class EveryCitationInThisRepositoryLandsOnWhatItQuotes(unittest.TestCase):
 
     def test_the_corpus_is_actually_being_read(self):
         # A guard over an empty corpus passes for the wrong reason.
-        results, _, live, _ = citations.check([ROOT])
+        results, _, _, live, _ = citations.check([ROOT])
         self.assertGreater(live, 5)
         self.assertGreater(len([r for r in results if r["verdict"] == citations.LANDS]), 10)
 
@@ -349,6 +349,136 @@ class ABlockquoteBeneathACitationQuotesIt(unittest.TestCase):
             '> The vocabulary is *"structural and not semantic"*: shape does not run out.',
             ""])})
         self.assertEqual(len(verdicts(root, "ruling.md")), 1)
+
+
+def history(commits, name="ruling.md"):
+    """A throwaway git repository walked through a series of states.
+
+    `commits` is a list of `{filename: text}`; each is written and committed in
+    turn, so the last one is the working tree and the ones before it are what
+    `git blame` will point a citation at.
+    """
+    root = tempfile.mkdtemp(prefix="canvas-citations-git-")
+    def git(*arguments):
+        subprocess.run(["git"] + list(arguments), cwd=root, check=True,
+                       capture_output=True)
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "test@example.com")
+    git("config", "user.name", "Test")
+    for index, files in enumerate(commits):
+        for filename, text in files.items():
+            path = os.path.join(root, filename)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        git("add", "-A")
+        git("commit", "-q", "-m", "state %d" % index)
+    return root
+
+
+SPEC_THEN = "\n".join([
+    "# Spec",                                   # 1
+    "",                                         # 2
+    "Four verbs. No more.",                     # 3
+    "",                                         # 4
+    "The vocabulary is structural, and shape",  # 5
+    "does not run out.",                        # 6
+])
+
+SPEC_NOW = "\n".join([
+    "# Spec",                                   # 1
+    "",                                         # 2
+    "A section that was not here before, and",  # 3
+    "which pushes everything below it down.",   # 4
+    "",                                         # 5
+    "Four verbs. No more.",                     # 6
+    "",                                         # 7
+    "The vocabulary is structural, and shape",  # 8
+    "does not run out.",                        # 9
+])
+
+
+class ACitationWithNoQuotationIsWeighedAgainstWhatItWasWrittenAgainst(
+        unittest.TestCase):
+    """The other ninety citations.
+
+    The rule above needs an author's quotation and most citations in this
+    corpus carry none, so nothing ruled on them and a reading on 2026-09-25
+    found 24 stale. The missing quotation is recoverable: at the commit that
+    last touched the citing line, the cited range held some text, and that text
+    is what the citation was pointing at.
+    """
+
+    def test_a_range_that_moved_under_an_untouched_citation_is_reported(self):
+        root = history([
+            {"spec.md": SPEC_THEN,
+             "ruling.md": "Four verbs and no more (`spec.md:3`).\n"},
+            {"spec.md": SPEC_NOW},
+        ])
+        found = citations.written_against(os.path.join(root, "ruling.md"), [root])
+        self.assertEqual([(r["verdict"], r["actual"]) for r in found],
+                         [(citations.MOVED, (6, 6))])
+
+    def test_a_citation_whose_range_still_holds_its_text_is_silent(self):
+        root = history([
+            {"spec.md": SPEC_THEN,
+             "ruling.md": "The vocabulary (`spec.md:5-6`).\n"},
+            {"spec.md": SPEC_THEN + "\n\nAppended below, moving nothing.\n"},
+        ])
+        found = citations.written_against(os.path.join(root, "ruling.md"), [root])
+        self.assertEqual([r["verdict"] for r in found], [citations.LANDS])
+
+    def test_a_citation_the_quoted_rule_already_rules_on_is_left_to_it(self):
+        """Two checks reporting one citation would double-count it, and the
+        quoted rule is the stronger evidence where it has any."""
+        root = history([
+            {"spec.md": SPEC_THEN,
+             "ruling.md":
+                 'At `spec.md:5-6` — *"The vocabulary is structural, and shape'
+                 ' does not run out"*.\n'},
+            {"spec.md": SPEC_NOW},
+        ])
+        path = os.path.join(root, "ruling.md")
+        self.assertEqual(len(citations.check_document(path, [root])), 1)
+        self.assertEqual(citations.written_against(path, [root]), [])
+
+    def test_a_citation_inside_a_transcript_block_is_a_record_and_is_skipped(self):
+        """`node-identity.md` reproduces `canvas history` output whose commit
+        reasons cite line numbers. Those say what was typed on the day."""
+        root = history([
+            {"spec.md": SPEC_THEN, "ruling.md": "\n".join([
+                "What the log holds:",
+                "",
+                "```",
+                "insert: states the verb count, quoting spec.md:3",
+                "```",
+                ""])},
+            {"spec.md": SPEC_NOW},
+        ])
+        found = citations.written_against(os.path.join(root, "ruling.md"), [root])
+        self.assertEqual(found, [])
+
+    def test_it_is_reported_and_never_fails_the_run(self):
+        """The evidence is an inference from a timestamp, not words an author
+        typed, so it is named and the exit code is left alone."""
+        root = history([
+            {"spec.md": SPEC_THEN,
+             "ruling.md": "Four verbs and no more (`spec.md:3`).\n"},
+            {"spec.md": SPEC_NOW},
+        ])
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            exit_code = citations.main([root])
+        report = buffer.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("the cited range has changed", report)
+        self.assertIn("spec.md:6-6", report)
+
+    def test_a_directory_that_is_not_a_repository_reports_nothing(self):
+        root = corpus(**{"spec.md": SPEC_THEN,
+                         "ruling.md": "Four verbs (`spec.md:3`).\n"})
+        self.assertEqual(
+            citations.written_against(os.path.join(root, "ruling.md"), [root]), [])
 
 
 if __name__ == "__main__":

@@ -44,6 +44,25 @@ narrower claim that no citation quotes a passage this file can locate elsewhere.
 The count of undecidable citations is printed so that the narrowness is on the
 report rather than in this docstring only.
 
+## The citations no quotation reaches
+
+Fifty of this corpus's 140 live citations carry a quotation. The rule above
+needs one and says nothing about the other ninety, which is most of the corpus
+and was never measured until `docs/unquoted-citations/READING.md` read all of
+them on 2026-09-25 and found **24 stale** — nineteen of them into
+`engineering-spec.md`, which had grown three sections underneath citations
+nobody had touched since.
+
+The second half of this module answers that without abandoning the evidence
+rule. A citation was written at some commit; at that commit the cited range
+held some text; that text is what its author pointed at. `written_against`
+blames the citing line, reads the cited file at that commit, and uses the text
+that stood at the range then as the quotation the citation never carried — and
+from there the same three outcomes apply, the moved case still carrying its own
+repair. It is **reported and never fails the run**: the quoted rule fails on
+words an author typed, this one on words inferred from a timestamp. The
+commentary above `written_against` prices that difference against the reading.
+
 ## What is not checked, and why renumbering it would be the bug
 
 `docs/why-verdict/`, `docs/drive-by-hand/` and `docs/merge-and-split/` each hold
@@ -59,6 +78,7 @@ exemption nobody can see is indistinguishable from a gap.
 import argparse
 import os
 import re
+import subprocess
 import sys
 
 
@@ -69,6 +89,7 @@ PINNED_REPORTS = (
     os.path.join("docs", "why-verdict"),
     os.path.join("docs", "drive-by-hand"),
     os.path.join("docs", "merge-and-split"),
+    os.path.join("docs", "unquoted-citations"),
 )
 
 #: Never walked: caches, git internals, and the verbatim session transcripts a
@@ -346,6 +367,30 @@ def judge(citation, target, first, last, quote, path, text, roots):
                 target=os.path.basename(resolved))
 
 
+def attributed_to(text, citations, offset, is_block):
+    """The citations a quotation at `offset` is a claim about.
+
+    Factored out because two checks need the same answer to the same question:
+    the quoted rule below, and `written_against`, which needs to know which
+    citations the quoted rule has *already* ruled on so that it speaks only
+    about the rest.
+    """
+    candidates = []
+    for citation, target, first, last in citations:
+        if citation.end() > offset or not target.endswith(".md"):
+            continue
+        between = text[citation.end():offset]
+        if len(between) > QUOTE_DISTANCE:
+            continue
+        # A blockquote always sits behind a paragraph break, so for one the
+        # break that ends every other association is the separator itself
+        # and only a second one means the citation is elsewhere.
+        if "\n\n" in (between.rstrip() if is_block else between):
+            continue
+        candidates.append((citation, target, first, last))
+    return candidates
+
+
 #: Worst last. A quotation is weighed against every citation near it and the
 #: best answer any of them gives is the one that stands, because a sentence
 #: citing two files quotes one of them and the other is not thereby wrong.
@@ -374,19 +419,7 @@ def check_document(path, roots):
     for offset, quote, is_block in sorted(quoted):
         if not fragments(quote):
             continue
-        candidates = []
-        for citation, target, first, last in citations:
-            if citation.end() > offset or not target.endswith(".md"):
-                continue
-            between = text[citation.end():offset]
-            if len(between) > QUOTE_DISTANCE:
-                continue
-            # A blockquote always sits behind a paragraph break, so for one the
-            # break that ends every other association is the separator itself
-            # and only a second one means the citation is elsewhere.
-            if "\n\n" in (between.rstrip() if is_block else between):
-                continue
-            candidates.append((citation, target, first, last))
+        candidates = attributed_to(text, citations, offset, is_block)
         if not candidates:
             continue
         judged = [judge(*candidate, quote=quote, path=path, text=text,
@@ -396,13 +429,215 @@ def check_document(path, roots):
     return results
 
 
+# ---------------------------------------------------------------------------
+# Citations with no quotation beside them
+#
+# The rule above speaks only where a quotation gives it the words to look for,
+# which on this corpus is 50 citations of 140. The other 90 were checked by
+# nobody, and a reading of all of them on 2026-09-25 found 24 stale — the same
+# defect in nine spellings, all of them into `engineering-spec.md`, which had
+# grown three sections underneath them.
+#
+# What follows recovers the missing quotation instead of doing without one. A
+# citation was written at some commit; at that commit the cited range held some
+# text; that text is what its author was pointing at. So: blame the citing
+# line, read the cited file at that commit, and take the text that stood at the
+# range then as the quotation the citation never carried. From there the rule
+# above applies unchanged — the same three outcomes, and the moved case still
+# carries its own repair.
+#
+# **It is reported and does not fail the run**, and the difference is not
+# timidity. The quoted rule fails on words an author typed; this one fails on
+# words inferred from a timestamp, and the inference is wrong whenever a
+# citation was already wrong when it was written, or the citing line was last
+# touched by a reflow that had nothing to do with it. Measured against the
+# 2026-09-25 reading: 22 of the 24 stale citations reported, 2 reports on
+# citations that land — and both of those two are ranges a stricter reading
+# would have tightened anyway. A check that is right 22 times in 24 is worth
+# printing and is not worth blocking a merge on, which is the shape
+# `docs/why-verdict/VERDICT.md` §5.2 already set for a guard whose price was
+# one false positive in fifty.
+
+
+def _git(arguments, cwd):
+    """`git` in `cwd`, or None if it failed or there is no git here."""
+    try:
+        finished = subprocess.run(["git"] + arguments, cwd=cwd, check=False,
+                                  capture_output=True, text=True)
+    except OSError:
+        return None
+    return finished.stdout if finished.returncode == 0 else None
+
+
+def _repository(path, _cache={}):
+    """The work tree `path` belongs to, or None.
+
+    Resolved through `realpath` on both sides: git answers with the real path,
+    and on a machine where `/tmp` is a link to `/private/tmp` an unresolved
+    answer makes every `relpath` against it climb out of the repository.
+    """
+    directory = os.path.realpath(os.path.dirname(path))
+    if directory not in _cache:
+        top = _git(["rev-parse", "--show-toplevel"], directory)
+        _cache[directory] = os.path.realpath(top.strip()) if top else None
+    return _cache[directory]
+
+
+def _inside(repository, path):
+    """`path` spelled the way git wants it: relative to the work tree root."""
+    return os.path.relpath(os.path.realpath(path), repository)
+
+
+def _blame(path, repository):
+    """`{line number: commit}` for one file, in one `git blame`.
+
+    One call per document rather than per citation: a document cites the same
+    file a dozen times and blaming it a dozen times is the same answer bought
+    a dozen times.
+    """
+    porcelain = _git(["blame", "--porcelain", "--",
+                      _inside(repository, path)], repository)
+    if porcelain is None:
+        return {}
+    blamed, commit = {}, None
+    for line in porcelain.split("\n"):
+        header = re.match(r"^([0-9a-f]{40}) \d+ (\d+)", line)
+        if header:
+            commit, number = header.group(1), int(header.group(2))
+            blamed[number] = commit
+    return blamed
+
+
+def _at(repository, commit, path, _cache={}):
+    """One file as it stood at one commit, or None if it was not there yet."""
+    key = (repository, commit, path)
+    if key not in _cache:
+        _cache[key] = _git(["show", "%s:%s" % (commit, path)], repository)
+    return _cache[key]
+
+
+def _contemporary(repository, commit, other, _cache={}):
+    """The commit in `other` that was current when `commit` was made.
+
+    A citation that crosses repositories has no shared history to ask, so the
+    two are lined up by time. This is the weakest link in the check and the
+    reason a cross-repository report is worth a little more suspicion than a
+    local one.
+    """
+    if repository == other:
+        return commit
+    key = (repository, commit, other)
+    if key not in _cache:
+        when = _git(["show", "-s", "--format=%cI", commit], repository)
+        found = _git(["rev-list", "-1", "--before=%s" % when.strip(), "HEAD"],
+                     other) if when else None
+        _cache[key] = found.strip() if found else None
+    return _cache[key]
+
+
+def _verbatim(text):
+    """The same document with fenced and indented blocks blanked to spaces.
+
+    Not `without_code`, which also blanks inline spans — and nearly every
+    citation in this corpus is written inside backticks, so blanking those
+    would blank the whole question. What has to be excluded is the *block*
+    kind: `node-identity.md` reproduces a `canvas history` transcript, and the
+    commit reasons inside it cite line numbers as they were typed on the day.
+    """
+    characters = list(text)
+    for pattern in CODE[:2]:
+        for match in pattern.finditer("".join(characters)):
+            for index in range(match.start(), match.end()):
+                if characters[index] != "\n":
+                    characters[index] = " "
+    return "".join(characters)
+
+
+def written_against(path, roots):
+    """Every citation in one document that has no quotation, weighed against
+    the text its target held when the citation was written."""
+    with open(path, encoding="utf-8") as handle:
+        text = handle.read()
+    repository = _repository(path)
+    if repository is None:
+        return []
+    citations = cited(text)
+    # Citations the quoted rule already rules on are left to it, and a citation
+    # inside a code region is a record — `node-identity.md` reproduces a
+    # `canvas history` transcript whose commit reasons cite line numbers, and
+    # those say what was typed on the day. Renumbering one would falsify the
+    # transcript for the same reason renumbering a PINNED_REPORTS citation
+    # would falsify a measurement.
+    spoken, verbatim = set(), _verbatim(text)
+    quoted = ([(offset, quote, False) for offset, quote in quotations(text)] +
+              [(offset, quote, True) for offset, quote in blockquotes(text)])
+    for offset, quote, is_block in quoted:
+        if not fragments(quote):
+            continue
+        for citation, _, _, _ in attributed_to(text, citations, offset, is_block):
+            spoken.add(citation.start())
+    blamed = _blame(path, repository)
+    results = []
+    for citation, target, first, last in citations:
+        if not target.endswith(".md") or citation.start() in spoken:
+            continue
+        if verbatim[citation.start():citation.end()].strip() == "":
+            continue
+        line = text[:citation.start()].count("\n") + 1
+        commit = blamed.get(line)
+        resolved = resolve(target, path, roots)
+        if commit is None or resolved is None:
+            continue
+        elsewhere = _repository(resolved)
+        contemporary = _contemporary(repository, commit, elsewhere) \
+            if elsewhere else None
+        if contemporary is None:
+            continue
+        then = _at(elsewhere, contemporary, _inside(elsewhere, resolved))
+        if then is None:
+            continue
+        held = then.split("\n")
+        if last > len(held):
+            continue
+        wanted = [normalise(" ".join(held[first - 1:last]))]
+        if len(wanted[0]) < MIN_FRAGMENT:
+            continue
+        with open(resolved, encoding="utf-8") as handle:
+            lines = handle.read().split("\n")
+        record = {
+            "path": path,
+            "line": line,
+            "citation": "%s:%d%s" % (target, first,
+                                     "-%d" % last if last != first else ""),
+            "quote": wanted[0],
+            "commit": commit[:8],
+        }
+        if last <= len(lines) and _holds(lines, first, last, wanted):
+            results.append(dict(record, verdict=LANDS, actual=(first, last)))
+            continue
+        # The passage occupied about this many lines when it was written, so
+        # looking much further than that is looking for a different passage.
+        actual = locate(lines, wanted, span=(last - first) + 12)
+        if actual is None:
+            results.append(dict(record, verdict=UNDECIDABLE, actual=None,
+                                why="the text it pointed at is no longer in "
+                                    "the cited file"))
+        elif first == last and actual[0] == first:
+            results.append(dict(record, verdict=LANDS, actual=actual))
+        else:
+            results.append(dict(record, verdict=MOVED, actual=actual,
+                                target=os.path.basename(resolved)))
+    return results
+
+
 def check(roots):
     live, pinned = documents(roots)
-    results = []
+    results, unquoted = [], []
     for _, path in live:
         results.extend(check_document(path, roots))
+        unquoted.extend(written_against(path, roots))
     skipped = sum(len(check_document(path, roots)) for _, path in pinned)
-    return results, skipped, len(live), len(pinned)
+    return results, unquoted, skipped, len(live), len(pinned)
 
 
 def main(argv=None):
@@ -426,7 +661,7 @@ def main(argv=None):
                 "Canvas-Exit: 2 — the check could not run\n" % root)
             return 2
 
-    results, skipped, live_count, pinned_count = check(roots)
+    results, unquoted, skipped, live_count, pinned_count = check(roots)
     moved = [record for record in results if record["verdict"] == MOVED]
     undecidable = [record for record in results if record["verdict"] == UNDECIDABLE]
     lands = [record for record in results if record["verdict"] == LANDS]
@@ -455,12 +690,35 @@ def main(argv=None):
                     record["path"], record["line"], record["citation"],
                     record["why"], record["quote"][:120]))
 
+    # The unquoted citations, weighed against what their target held when they
+    # were written. Reported and never failed: see the commentary above
+    # `written_against` for why the evidence here does not carry a merge block.
+    drifted = [record for record in unquoted if record["verdict"] == MOVED]
+    if drifted:
+        sys.stdout.write(
+            "\nWritten against a different file — the cited range has changed "
+            "since\nthe citing line was last touched. Read these; the check "
+            "cannot:\n")
+        for record in drifted:
+            sys.stdout.write(
+                "%s:%d\n    cites %s, written at %s\n"
+                "    what that range held then is now at %s:%d-%d\n"
+                "    then: %s\n" % (
+                    record["path"], record["line"], record["citation"],
+                    record["commit"], record["target"], record["actual"][0],
+                    record["actual"][1], record["quote"][:120]))
+
     sys.stdout.write(
         "\n%d quoted citations in %d live documents: %d land, %d moved, "
-        "%d undecidable.\n%d citations in %d pinned dated readings were not "
-        "checked (see PINNED_REPORTS).\n" % (
+        "%d undecidable.\n%d citations carry no quotation: %d still hold what "
+        "they were written against, %d listed above as changed underneath,\n"
+        "%d that could not be placed. %d citations in %d pinned dated readings "
+        "were not checked (see PINNED_REPORTS).\n" % (
             len(results), live_count, len(lands), len(moved),
-            len(undecidable), skipped, pinned_count))
+            len(undecidable), len(unquoted),
+            len([r for r in unquoted if r["verdict"] == LANDS]), len(drifted),
+            len([r for r in unquoted if r["verdict"] == UNDECIDABLE]),
+            skipped, pinned_count))
     return 1 if moved else 0
 
 

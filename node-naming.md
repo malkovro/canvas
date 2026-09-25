@@ -3,7 +3,7 @@
 Settled 2026-09-23. This document decides whether what `create` mints is
 distinguishable inside the document itself — whether a node gains a
 human-readable name, and whether `create`'s two first nodes get one. It is
-scoped to the finding at `docs/drive-by-hand/FRICTION.md:169-174` and to the
+scoped to the finding at `docs/drive-by-hand/FRICTION.md:174-179` and to the
 vocabulary in `schema/canvas.rng`. It decides nothing about the renderer beyond
 saying that the renderer is free, and it decides nothing about authorship in the
 document, which `node-state.md` *Still open* holds separately.
@@ -26,9 +26,9 @@ It holds the spec's existing commitments fixed rather than relitigating them:
   (`engineering-spec.md:99-106`). `<question>` is the one declared exception
   (`engineering-spec.md:108-112`).
 - **The semantics live in the reason**, not in a verb name and not in a field
-  (`engineering-spec.md:128-130`, `product-spec.md:48`).
+  (`engineering-spec.md:131-137`, `product-spec.md:48`).
 - **One edit is one node, one edit is one commit**, and a node's history is
-  `git log --grep='Canvas-Node: <id>'` (`engineering-spec.md:133-135`,
+  `git log --grep='Canvas-Node: <id>'` (`engineering-spec.md:139-141` and `:192`,
   `node-identity.md`).
 - **The creation commit creates the root only**, and the two first nodes arrive
   as two ordinary `insert` commits (`node-identity.md` §4, quoted verbatim in
@@ -177,7 +177,7 @@ and the fix is a test change that belongs to whoever next widens the grammar.
   and so is `create`'s own output, which the caller had in hand before anything
   moved.
 - **The rendered HTML page shows two unlabelled paragraphs.** That page is the
-  artifact pasted into a Basecamp comment (`engineering-spec.md:303-304`), read
+  artifact pasted into a Basecamp comment (`engineering-spec.md:333-341`), read
   by somebody who will never run `history`. **This is the strongest argument
   against this ruling** and it is named here rather than buried. The answer: a
   projection is not the document, and may say what the document does not —
@@ -242,7 +242,7 @@ and the fix is a test change that belongs to whoever next widens the grammar.
   the same event as the design working. `node-state.md` §3 reconciles them by
   distinguishing the document from the log, and this ruling leans on exactly that
   reconciliation, in a case §3 did not anticipate — and it leans on it to prefer
-  `VERDICT.md`'s reading in a case `FRICTION.md:169-174` raises in its own voice
+  `VERDICT.md`'s reading in a case `FRICTION.md:174-179` raises in its own voice
   as a defect **of the document**. The same file that supplies the evidence for
   the finding supplies the reading that would decide it the other way. Neither
   file cites the other and neither has been amended. **The reading is inherited
