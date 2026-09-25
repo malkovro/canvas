@@ -207,5 +207,149 @@ class EveryCitationInThisRepositoryLandsOnWhatItQuotes(unittest.TestCase):
         self.assertGreater(len([r for r in results if r["verdict"] == citations.LANDS]), 10)
 
 
+
+class AQuotationMarkInsideCodeIsNotADelimiter(unittest.TestCase):
+    """Straight quotes are paired in order, so one unpaired mark inverts every
+    pair after it. A document naming `"` as a character the renderer escapes
+    did exactly that, and every citation below it in the file went unchecked."""
+
+    ESCAPES = "\n".join([
+        "A renderer escapes `<`, `>`, `&` or `\"` before it emits anything.",
+        "",
+        "Then `spec.md:5-6` \u2014 *\"the vocabulary is structural and not semantic\"*.",
+    ])
+
+    def test_a_quote_named_in_code_does_not_swallow_the_quotation_after_it(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md": self.ESCAPES})
+        self.assertEqual(verdicts(root, "ruling.md"), [(citations.LANDS, (5, 6))])
+
+    def test_a_code_block_is_not_read_for_quotations(self):
+        spans = citations.quotations('    <tag name="x" other="y"/>\n')
+        self.assertEqual(spans, [])
+
+    def test_a_quotation_containing_code_is_still_quoted_in_full(self):
+        spans = citations.quotations('says "`replace` takes the new text"')
+        self.assertEqual([text for _, text in spans], ["`replace` takes the new text"])
+
+
+class AQuotationAfterTwoCitationsIsTriedAgainstBoth(unittest.TestCase):
+    """*"`spec.md:5-6` and `other.md:2` both state it in their own words"* and
+    then a quotation: the words are one file's, and attributing them to the
+    nearer citation alone leaves the other untested and silently stale."""
+
+    BOTH = ('`spec.md:1-2` and `other.md:1` both say it \u2014 '
+            '*"the vocabulary is structural and not semantic"*.')
+
+    def test_the_further_citation_is_reported_when_the_quote_is_its_file(self):
+        root = corpus(**{"spec.md": SPEC, "other.md": "# Other\n\nNothing.\n",
+                         "ruling.md": self.BOTH})
+        found = citations.check_document(os.path.join(root, "ruling.md"), [root])
+        self.assertEqual([(r["verdict"], r["citation"], r["actual"]) for r in found],
+                         [(citations.MOVED, "spec.md:1-2", (5, 6))])
+
+    def test_a_landing_citation_beats_a_drifted_one_in_the_same_sentence(self):
+        root = corpus(**{"spec.md": SPEC, "other.md": "# Other\n\nNothing.\n",
+                         "ruling.md": ('`spec.md:1-2` and `spec.md:5-6` \u2014 '
+                                       '*"the vocabulary is structural and not semantic"*.')})
+        self.assertEqual(verdicts(root, "ruling.md"), [(citations.LANDS, (5, 6))])
+
+    def test_neither_containing_it_is_still_undecidable(self):
+        root = corpus(**{"spec.md": SPEC, "other.md": "# Other\n\nNothing.\n",
+                         "ruling.md": ('`spec.md:5-6` and `other.md:1` \u2014 '
+                                       '*"a sentence found in no file at all"*.')})
+        self.assertEqual(verdicts(root, "ruling.md"), [(citations.UNDECIDABLE, None)])
+
+
+class AQuotationsOwnClosingPunctuationIsNotPartOfTheQuote(unittest.TestCase):
+    """A writer ending a sentence on a quotation puts the full stop inside the
+    marks; the source it quotes carries on."""
+
+    def test_a_borrowed_full_stop_does_not_make_the_quote_unfindable(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md":
+                         '`spec.md:5-6` \u2014 *"the vocabulary is structural and not semantic."*'})
+        self.assertEqual(verdicts(root, "ruling.md"), [(citations.LANDS, (5, 6))])
+
+    def test_it_does_not_reach_for_words_the_target_lacks(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md":
+                         '`spec.md:5-6` \u2014 *"the vocabulary is structural and prescriptive."*'})
+        self.assertEqual(verdicts(root, "ruling.md"), [(citations.UNDECIDABLE, None)])
+
+
+class TheUndecidableCitationsAreNamedAndNotOnlyCounted(unittest.TestCase):
+    """A count nobody can resolve to a location is an exemption nobody can see,
+    which is the thing `PINNED_REPORTS` is printed to avoid."""
+
+    def test_the_report_says_where_to_look(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md":
+                         'See `spec.md:5-6`, and *"this paragraph is the problem statement"*.'})
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+            citations.main([root])
+        report = buffer.getvalue()
+        self.assertIn("ruling.md:1", report)
+        self.assertIn("the quoted words are not in the cited file", report)
+        self.assertIn("1 undecidable", report)
+
+    def test_a_corpus_with_nothing_undecidable_says_nothing(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md":
+                         '`spec.md:5-6` \u2014 *"the vocabulary is structural and not semantic"*.'})
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
+            citations.main([root])
+        self.assertNotIn("Undecidable", buffer.getvalue())
+
+
+
+class ABlockquoteBeneathACitationQuotesIt(unittest.TestCase):
+    """Markdown's own way of quoting a passage, and what the corpus reaches for
+    when the passage is long. The association rule ends at a paragraph break
+    and a blockquote always sits behind one, so every one of them was invisible
+    until the break was read as the separator it is."""
+
+    def test_a_blockquote_is_read_as_the_quotation(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md": "\n".join([
+            "The clause, at `spec.md:1-2`:",
+            "",
+            "> The vocabulary is structural and not",
+            "> semantic: shape does not run out.",
+            ""])})
+        found = citations.check_document(os.path.join(root, "ruling.md"), [root])
+        self.assertEqual([(r["verdict"], r["actual"]) for r in found],
+                         [(citations.MOVED, (5, 6))])
+
+    def test_one_that_lands_is_silent(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md": "\n".join([
+            "The clause, at `spec.md:5-6`:",
+            "",
+            "> The vocabulary is structural and not",
+            "> semantic: shape does not run out.",
+            ""])})
+        self.assertEqual(verdicts(root, "ruling.md"), [(citations.LANDS, (5, 6))])
+
+    def test_it_does_not_reach_back_past_a_second_paragraph(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md": "\n".join([
+            "The clause, at `spec.md:1-2`.",
+            "",
+            "An intervening paragraph that cites nothing at all.",
+            "",
+            "> The vocabulary is structural and not",
+            "> semantic: shape does not run out.",
+            ""])})
+        self.assertEqual(verdicts(root, "ruling.md"), [])
+
+    def test_code_inside_a_blockquote_is_kept_in_the_quotation(self):
+        found = citations.blockquotes("> takes the `new text` and not a patch\n")
+        self.assertEqual([body for _, body in found],
+                         ["takes the `new text` and not a patch\n"])
+
+    def test_an_inline_quotation_inside_one_is_not_counted_twice(self):
+        root = corpus(**{"spec.md": SPEC, "ruling.md": "\n".join([
+            "The clause, at `spec.md:5-6`:",
+            "",
+            '> The vocabulary is *"structural and not semantic"*: shape does not run out.',
+            ""])})
+        self.assertEqual(len(verdicts(root, "ruling.md")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

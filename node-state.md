@@ -57,7 +57,7 @@ wants 1 and 3.
 
 ## 1. The four wants: which two this answers, and which two stay in the reason
 
-The finding, `FRICTION.md:145-146`:
+The finding, `FRICTION.md:150-151`:
 
 > **The single largest gap: a node has no status.** Four separate wants in this
 > canvas all reduce to it, and every one ended as a word typed into somebody's
@@ -70,7 +70,7 @@ cannot derive. Two are not.
 
 ### Want 1 — *"this question is answered"* — **ANSWERED**
 
-`FRICTION.md:148-149`:
+`FRICTION.md:153-154`:
 
 > - *"this question is answered"* — became `replace` destroying the question
 >   (`f7be9ea`, `fad921f`).
@@ -92,7 +92,7 @@ no longer open.
 
 ### Want 3 — *"the code has taken option B, and the question is still open"* — **ANSWERED**, as a consequence rather than by a second mechanism
 
-`FRICTION.md:152-158`:
+`FRICTION.md:157-163`:
 
 > - *"the code has taken option B, and the question is still open"* — the mirror
 >   image, hit by the first writer at commit `35e25a1`, node `nf98`. The node
@@ -133,7 +133,7 @@ rejected. It stays in the reason. See §5.
 
 ### Want 2 — *"this option is the one taken"* — **DELIBERATELY LEFT IN THE REASON**
 
-`FRICTION.md:150-151`:
+`FRICTION.md:155-156`:
 
 > - *"this option is the one taken"* — became the literal word `CHOSEN.` inside
 >   a cell (`90907b5`, `6be144a`).
@@ -166,7 +166,7 @@ which option was chosen and why, and the table it was chosen from goes.
 
 ### Want 4 — *"this document is finished"* — **DELIBERATELY LEFT**, and handed to its own todo
 
-`FRICTION.md:159`:
+`FRICTION.md:164`:
 
 > - *"this document is finished"* — became node `gjxb` (`02de26b`).
 
@@ -255,7 +255,7 @@ say so out loud rather than leaving it to somebody's memory.
 
 ## 3. "The semantics live in the reason" — which reading this takes, and how FRICTION and VERDICT are reconciled
 
-`engineering-spec.md:125-131`:
+`engineering-spec.md:131-137`:
 
 > **There is no `resolve`, no `collapse`, no `supersede`.** An options table
 > becoming a settled decision is `replace` on the table node, with the new node
@@ -265,7 +265,7 @@ say so out loud rather than leaving it to somebody's memory.
 > of in advance. A verb per kind of intent is how you get eleven verbs and a
 > twelfth case that fits none of them.
 
-The clause, at `engineering-spec.md:128-130`:
+The clause, at `engineering-spec.md:134-136`:
 
 > The semantics live in the reason, where they can be anything, and not in a
 > verb name, where they can only be what somebody thought of in advance.
@@ -388,7 +388,7 @@ and the second half does not.
 
 ## 5. Why not option C, and why the argument past `engineering-spec.md:272-276` could not be made
 
-`engineering-spec.md:266-276`:
+`engineering-spec.md:285-295`:
 
 > **Between the canvas and reality** — the canvas says we chose A; the branch
 > implements B. No amount of reading the canvas catches this, and it is the more
