@@ -30,7 +30,7 @@ For each citation with a quotation next to it, three outcomes:
 
 The third case is the one that keeps this honest. Most quoted text near a
 citation is the citing author's own sentence, not a quotation of the target —
-`node-naming.md:68` cites `engineering-spec.md:108-110` and then says *"this
+`node-naming.md:82` cites `engineering-spec.md:108-110` and then says *"this
 paragraph is the problem statement"*, which is a remark about the citation and
 appears in no spec. A check that treated every nearby quotation as a claim about
 the target would fail on prose that is not wrong, which is the failure mode
@@ -237,7 +237,7 @@ def blockquotes(text):
     the long passages, where inline marks would be unreadable. They were
     invisible, and not by a rule anybody chose: the association ends at a
     paragraph break and a blockquote always sits behind one. Three of the
-    eleven pointed at the wrong lines, `node-state.md:268` among them, which
+    eleven pointed at the wrong lines, `node-state.md:283` among them, which
     sets the quotation out in full directly beneath the range that does not
     hold it.
     """
@@ -258,7 +258,7 @@ def fragments(quote):
 
     Punctuation closing a fragment is dropped. A writer who ends a sentence on
     a quotation puts the full stop inside the quotation marks, and the source
-    it quotes carries on — `node-state.md:625` quotes *"…it folds back into
+    it quotes carries on — `node-state.md:640` quotes *"…it folds back into
     `<text open="true">`."* where the spec has that clause followed by an em
     dash. Requiring the borrowed full stop made a citation that lands read as
     one whose words are nowhere in the file. This drops a character the citing

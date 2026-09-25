@@ -109,7 +109,7 @@ stop."*
 A human-readable name on an ordinary `<text>` node is that growth wearing an
 attribute's clothes. Its values are a taxonomy of roles — "Problem", "Expected
 value", and then whatever the twelfth case turns out to be — and it reaches every
-node rather than one. `node-state.md:289-292` gives the mechanical form of the
+node rather than one. `node-state.md:304-307` gives the mechanical form of the
 test: *could this field ever have a twelfth value that fits none of the ones
 somebody thought of?* For a name on a node: yes, obviously, and the first
 canvas anybody drives will produce one. For `answered`: no, the value set has one
