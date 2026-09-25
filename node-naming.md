@@ -182,7 +182,7 @@ and the fix is a test change that belongs to whoever next widens the grammar.
   against this ruling** and it is named here rather than buried. The answer: a
   projection is not the document, and may say what the document does not —
   `canvas/render.py` already prints markers in words that exist nowhere in the
-  XML (*Open question*, *Answered question*, `README.md:266-268`). Whether the
+  XML (*Open question*, *Answered question*, `README.md:293-295`). Whether the
   renderer labels `create`'s two nodes is [`rendering.md`](rendering.md)'s
   business, and presentation was explicitly left free. **This ruling permits that
   and does not decide it.**
@@ -257,7 +257,7 @@ and the fix is a test change that belongs to whoever next widens the grammar.
 
 ## Still open
 
-- **Whether authorship belongs in the document.** `FRICTION.md:161-167` names it
+- **Whether authorship belongs in the document.** `FRICTION.md:166-172` names it
   as the other instance of *"what a canvas needs to say about a node has to be
   smuggled into the node"*, and `node-state.md` *Still open* holds it. This
   change answers it **on the read surface** — `read --provenance` says who last

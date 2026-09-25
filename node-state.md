@@ -117,7 +117,7 @@ has taken option B and the question is still open"* from two nodes each of which
 is only about itself. The sentence that went stale is a sentence this ruling
 makes redundant, and a sentence nobody writes cannot go false.
 
-`FRICTION.md:158` is the argument for putting the fact in one place rather than
+`FRICTION.md:162-163` is the argument for putting the fact in one place rather than
 two: *"A canvas whose nodes disagree about whether a question is open is worse
 than one that never said."* Two nodes can only disagree about whether a question
 is open if two nodes are both allowed to say so. Under this ruling exactly one
@@ -141,7 +141,7 @@ rejected. It stays in the reason. See §5.
 Left in the reason, for two reasons that are different in kind.
 
 **The spec already prescribes a different move, and it is the right one.**
-`engineering-spec.md:125-128`: *"An options table becoming a settled decision is
+`engineering-spec.md:131-134`: *"An options table becoming a settled decision is
 `replace` on the table node, with the new node being a `<text>`, and `--why
 "chose A over B: B needs a migration we are not paying for this cycle"`."* The
 canvas is *"Not a wiki. A wiki accumulates. A canvas resolves"*
@@ -178,7 +178,7 @@ is also already specified: `engineering-spec.md:327-338` gives the lifecycle —
 born at `open`, grows through `executing`, **frozen at `done`**, never deleted —
 so what want 4 records is not a missing vocabulary item but a missing
 *mechanism*, the freeze the spec promises and `bin/canvas` does not implement.
-`FRICTION.md:122-124` says exactly that: `--help` lists seven subcommands and
+`FRICTION.md:127-129` says exactly that: `--help` lists seven subcommands and
 *"None is a freeze, a close or a `done`."*
 
 Giving every node a state would not have reached it either: `node-attributes` is
@@ -195,7 +195,7 @@ ledger, not an eleventh element and not a value of `answered`.
 
 ### The fifth finding this does not touch
 
-`FRICTION.md:161-167` records authorship as *"The same shape as the missing
+`FRICTION.md:166-172` records authorship as *"The same shape as the missing
 status: what a canvas needs to say *about* a node has to be smuggled into the
 node."* It is not one of the four wants and the todo does not ask about it. This
 ruling refuses the general form of that shape — a canvas may **not** carry
@@ -239,7 +239,7 @@ the shape it adds is not *"which of these is this node"* but *"is this question
 still open"*, and that question has an answer for every question node that will
 ever exist.
 
-The defence at `engineering-spec.md:105-106` is that the vocabulary is
+The defence at `engineering-spec.md:103-105` is that the vocabulary is
 *structural* and not *semantic*: *"`table`, `text`, `list` describe shape, and
 shape does not run out."* This ruling does not weaken that. `<question>` was
 already the declared exception — `engineering-spec.md:108-109`, *"`<question>` is
@@ -664,7 +664,7 @@ These two lists are what goes into the orchestrator's
   required vocabulary.** *Why:* `engineering-spec.md:128-130`,
   `product-spec.md:48`, and `VERDICT.md:425-434` on evidence.
 - **Openness is stated in exactly one place — the question node itself.** No
-  other node may assert whether a question is open. *Why:* `FRICTION.md:158` —
+  other node may assert whether a question is open. *Why:* `FRICTION.md:162-163` —
   *"A canvas whose nodes disagree about whether a question is open is worse than
   one that never said"* — and want 3 is answered by making the disagreement
   inexpressible (§1).
