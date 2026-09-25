@@ -73,8 +73,8 @@ PINNED_REPORTS = (
 
 #: Never walked: caches, git internals, and the verbatim session transcripts a
 #: report quotes, which are records rather than prose anybody maintains.
-SKIP_DIRECTORIES = (".git", "__pycache__", "node_modules", ".runs",
-                    ".orchestrator-artifacts")
+SKIP_DIRECTORIES = (".git", "__pycache__", ".pytest_cache", "node_modules",
+                    ".runs", ".orchestrator-artifacts")
 SKIP_FILENAMES = ("canvas-transcript.md",)
 
 #: `path.md:12` or `path.md:12-40`, optionally inside backticks; and the bare
@@ -137,6 +137,40 @@ def normalise(text):
     return re.sub(r"\s+", " ", re.sub(r"[`*_\[\]]", "", text)).strip().lower()
 
 
+#: A fenced block, a line indented into a code block, and an inline code span.
+#: Applied in that order, because a backtick inside a fenced block opens
+#: nothing.
+CODE = (re.compile(r"^(?P<fence>```|~~~).*?^(?P=fence)", re.M | re.S),
+        re.compile(r"^(?: {4}|\t).*$", re.M),
+        re.compile(r"`[^`\n]*`"))
+
+
+def without_code(text):
+    """The same document with every code region blanked to spaces.
+
+    Offsets are preserved, so this is a lens for finding delimiters and never
+    a source of quoted text.
+
+    A `"` inside code is a character being named, not a quotation mark, and
+    reading it as one is not a near miss: straight quotes are paired in order,
+    so a single unpaired mark inverts every pair after it in the file. One
+    such mark — ``docs/canvas-in-the-page.md`` listing the characters a
+    renderer must escape, *"`<`, `>`, `&` or `"`"* — silently turned every
+    quotation in the rest of that document into the prose *between* two
+    quotations, and no citation in the largest document of this corpus was
+    checked at all. Two stale citations were sitting behind it. A run cannot
+    report coverage it does not have, so the mark has to stop counting where
+    the corpus already says it is not punctuation.
+    """
+    characters = list(text)
+    for pattern in CODE:
+        for match in pattern.finditer("".join(characters)):
+            for index in range(match.start(), match.end()):
+                if characters[index] != "\n":
+                    characters[index] = " "
+    return "".join(characters)
+
+
 def quotations(text):
     """Every quoted span, as `(start_offset, quoted_text)`.
 
@@ -146,18 +180,52 @@ def quotations(text):
     line as a quotation itself, which is a sentence that appears in no file and
     would be reported undecidable forever. Curly pairs are unambiguous, so they
     are taken first and blanked out before the straight-quote pass sees them.
+
+    Delimiters are located in `without_code(text)` and the quotation is then
+    cut from `text` itself, so a quotation that contains code — *"`replace`
+    takes the new text and not a patch of it"* — is still quoted in full.
     """
     found = []
-    remaining = list(text)
-    for match in re.finditer("“([^”]+)”", text):
-        found.append((match.start(), match.group(1)))
+    remaining = list(without_code(text))
+    for start, _ in blockquotes(text):
+        end = text.index("\n\n", start) if "\n\n" in text[start:] else len(text)
+        for index in range(start, end):
+            if remaining[index] != "\n":
+                remaining[index] = " "
+    for match in re.finditer("“([^”]+)”", "".join(remaining)):
+        found.append((match.start(), text[match.start() + 1:match.end() - 1]))
         for index in range(match.start(), match.end()):
             remaining[index] = " "
     stripped = "".join(remaining)
     marks = [match.start() for match in re.finditer('"', stripped)]
     for opening, closing in zip(marks[::2], marks[1::2]):
-        found.append((opening, stripped[opening + 1:closing]))
+        found.append((opening, text[opening + 1:closing]))
     return sorted(found)
+
+
+#: A run of lines each opening with `>`: markdown's own way of quoting a
+#: passage, and the corpus uses it for the long ones.
+BLOCKQUOTE = re.compile(r"^(?:>[^\n]*\n)+", re.M)
+
+
+def blockquotes(text):
+    """Every blockquote, as `(start_offset, quoted_text)`.
+
+    A citation followed by a blockquote is quoting its target as surely as one
+    followed by `*"…"*`, and eleven of this corpus's citations do it — usually
+    the long passages, where inline marks would be unreadable. They were
+    invisible, and not by a rule anybody chose: the association ends at a
+    paragraph break and a blockquote always sits behind one. Three of the
+    eleven pointed at the wrong lines, `node-state.md:268` among them, which
+    sets the quotation out in full directly beneath the range that does not
+    hold it.
+    """
+    found = []
+    for match in BLOCKQUOTE.finditer(without_code(text)):
+        body = "\n".join(line.lstrip(">").strip() for line
+                          in text[match.start():match.end()].split("\n"))
+        found.append((match.start(), body))
+    return found
 
 
 def fragments(quote):
@@ -166,9 +234,18 @@ def fragments(quote):
     An elided quotation — *"A state field … it should be fixed with evidence"* —
     is two claims about the target with unknown text between them, so each side
     is located separately and both must be inside the cited range.
+
+    Punctuation closing a fragment is dropped. A writer who ends a sentence on
+    a quotation puts the full stop inside the quotation marks, and the source
+    it quotes carries on — `node-state.md:625` quotes *"…it folds back into
+    `<text open="true">`."* where the spec has that clause followed by an em
+    dash. Requiring the borrowed full stop made a citation that lands read as
+    one whose words are nowhere in the file. This drops a character the citing
+    author added; it never reaches for words the target does not have.
     """
     parts = re.split("…|\\.\\.\\.", normalise(quote))
-    return [part.strip() for part in parts if len(part.strip()) >= MIN_FRAGMENT]
+    parts = [part.strip().rstrip(".,;:!?") for part in parts]
+    return [part for part in parts if len(part) >= MIN_FRAGMENT]
 
 
 def _holds(lines, first, last, wanted):
@@ -237,56 +314,85 @@ def documents(roots):
     return live, pinned
 
 
+def judge(citation, target, first, last, quote, path, text, roots):
+    """One citation weighed against one quotation, as a record with a verdict."""
+    wanted = fragments(quote)
+    record = {
+        "path": path,
+        "line": text[:citation.start()].count("\n") + 1,
+        # Spelled out rather than quoted back, so a bare `:289-290`
+        # continuation is reported against the file it inherited.
+        "citation": "%s:%d%s" % (target, first,
+                                 "-%d" % last if last != first else ""),
+        "quote": normalise(quote),
+    }
+    resolved = resolve(target, path, roots)
+    if resolved is None:
+        return dict(record, verdict=UNDECIDABLE, actual=None,
+                    why="the cited file was not found")
+    with open(resolved, encoding="utf-8") as handle:
+        lines = handle.read().split("\n")
+    if last <= len(lines) and _holds(lines, first, last, wanted):
+        return dict(record, verdict=LANDS, actual=(first, last))
+    actual = locate(lines, wanted)
+    if actual is None:
+        return dict(record, verdict=UNDECIDABLE, actual=None,
+                    why="the quoted words are not in the cited file")
+    # A single-line citation pointing at the first line of a sentence that
+    # runs on is a pointer, not a range, and it lands.
+    if first == last and actual[0] == first:
+        return dict(record, verdict=LANDS, actual=actual)
+    return dict(record, verdict=MOVED, actual=actual,
+                target=os.path.basename(resolved))
+
+
+#: Worst last. A quotation is weighed against every citation near it and the
+#: best answer any of them gives is the one that stands, because a sentence
+#: citing two files quotes one of them and the other is not thereby wrong.
+PRECEDENCE = (LANDS, MOVED, UNDECIDABLE)
+
+
 def check_document(path, roots):
-    """Every quoted citation in one document, as dicts carrying its verdict."""
+    """Every quoted citation in one document, as dicts carrying its verdict.
+
+    A quotation is attributed to the nearest citation before it, except that
+    when several stand in the same sentence every one of them is tried. Taking
+    only the nearest is wrong where the corpus writes *"`engineering-spec.md:
+    128-130` and `product-spec.md:48` both state it in their own words"* and
+    then quotes: the words are the spec's, the nearest citation is the product
+    spec, and the verdict was *undecidable* — silence — while the spec citation
+    was thirty lines stale and never tested. Trying each and keeping the best
+    answer asserts nothing extra: a citation is still only called drifted when
+    the quoted words have been found elsewhere in the file it names.
+    """
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     citations = cited(text)
     results = []
-    for offset, quote in quotations(text):
-        preceding = [found for found in citations if found[0].end() <= offset]
-        if not preceding:
+    quoted = ([(offset, quote, False) for offset, quote in quotations(text)] +
+              [(offset, quote, True) for offset, quote in blockquotes(text)])
+    for offset, quote, is_block in sorted(quoted):
+        if not fragments(quote):
             continue
-        citation, target, first, last = preceding[-1]
-        between = text[citation.end():offset]
-        if len(between) > QUOTE_DISTANCE or "\n\n" in between:
+        candidates = []
+        for citation, target, first, last in citations:
+            if citation.end() > offset or not target.endswith(".md"):
+                continue
+            between = text[citation.end():offset]
+            if len(between) > QUOTE_DISTANCE:
+                continue
+            # A blockquote always sits behind a paragraph break, so for one the
+            # break that ends every other association is the separator itself
+            # and only a second one means the citation is elsewhere.
+            if "\n\n" in (between.rstrip() if is_block else between):
+                continue
+            candidates.append((citation, target, first, last))
+        if not candidates:
             continue
-        if not target.endswith(".md"):
-            continue
-        wanted = fragments(quote)
-        if not wanted:
-            continue
-        resolved = resolve(target, path, roots)
-        record = {
-            "path": path,
-            "line": text[:citation.start()].count("\n") + 1,
-            # Spelled out rather than quoted back, so a bare `:289-290`
-            # continuation is reported against the file it inherited.
-            "citation": "%s:%d%s" % (target, first,
-                                     "-%d" % last if last != first else ""),
-            "quote": normalise(quote),
-        }
-        if resolved is None:
-            results.append(dict(record, verdict=UNDECIDABLE, actual=None,
-                                why="the cited file was not found"))
-            continue
-        with open(resolved, encoding="utf-8") as handle:
-            lines = handle.read().split("\n")
-        if last <= len(lines) and _holds(lines, first, last, wanted):
-            results.append(dict(record, verdict=LANDS, actual=(first, last)))
-            continue
-        actual = locate(lines, wanted)
-        if actual is None:
-            results.append(dict(record, verdict=UNDECIDABLE, actual=None,
-                                why="the quoted words are not in the cited file"))
-            continue
-        # A single-line citation pointing at the first line of a sentence that
-        # runs on is a pointer, not a range, and it lands.
-        if first == last and actual[0] == first:
-            results.append(dict(record, verdict=LANDS, actual=actual))
-            continue
-        results.append(dict(record, verdict=MOVED, actual=actual,
-                            target=os.path.basename(resolved)))
+        judged = [judge(*candidate, quote=quote, path=path, text=text,
+                        roots=roots) for candidate in candidates]
+        results.append(min(reversed(judged),
+                           key=lambda record: PRECEDENCE.index(record["verdict"])))
     return results
 
 
@@ -332,6 +438,22 @@ def main(argv=None):
                 record["path"], record["line"], record["citation"],
                 record["target"], record["actual"][0], record["actual"][1],
                 record["quote"][:120]))
+
+    # Named, not merely counted. These are the citations this cannot rule on,
+    # and they are exactly the ones a person has to read for themselves; a
+    # count nobody can resolve to a location is an exemption nobody can see,
+    # which is the thing PINNED_REPORTS is printed to avoid. Three defects
+    # lived here — two documents' worth of quotations mispaired by a `"` in
+    # code, and a spec citation thirty lines stale — and each was found by
+    # calling this module directly, because the report would not say where to
+    # look.
+    if undecidable:
+        sys.stdout.write("\nUndecidable — read these yourself:\n")
+        for record in undecidable:
+            sys.stdout.write(
+                "%s:%d\n    cites %s — %s\n    quote: %s\n" % (
+                    record["path"], record["line"], record["citation"],
+                    record["why"], record["quote"][:120]))
 
     sys.stdout.write(
         "\n%d quoted citations in %d live documents: %d land, %d moved, "

@@ -123,10 +123,20 @@ inside the cited lines; somewhere else in the same file, which is the only
 failure and is reported with the range that now holds it; or not in that file
 at all, which is counted and not failed, because most quoted text beside a
 citation is the citing author's own sentence rather than a quotation of the
-target. Pass a sibling checkout as well to cover citations that cross
-repositories:
+target. Those undecidable ones are named on the report as well as counted:
+they are precisely the citations nobody can check mechanically, so a reader
+who wants them read has to be told where they are. Pass a sibling checkout as
+well to cover citations that cross repositories:
 
     bin/canvas-citations . ../ledger-orchestrator
+
+Two things decide which words count as a quotation, and both were learned from
+citations this missed. A `"` inside code is a character being named rather than
+a delimiter — straight quotes are paired in order, so one unpaired mark inverts
+every pair below it and takes the prose *between* quotations as the quotations,
+which is how one document's citations all went unchecked. And where a sentence
+cites two files before quoting, each is tried: the words belong to one of them,
+and testing only the nearer leaves the other stale and silent.
 
 The dated readings under `docs/why-verdict/`, `docs/drive-by-hand/` and
 `docs/merge-and-split/` are not checked. Each was written against a named sha

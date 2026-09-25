@@ -103,7 +103,7 @@ member. This fails exactly where `answered` passed.
 
 ## 4. The reason already carries it, and the spec says that is where it goes first
 
-`engineering-spec.md:272-276`, the sentence `node-state.md` §5 could not argue
+`engineering-spec.md:291-295`, the sentence `node-state.md` §5 could not argue
 past either:
 
 > A state field distinguishing what was asserted from what was verified was
@@ -182,7 +182,7 @@ and the fix is a test change that belongs to whoever next widens the grammar.
   against this ruling** and it is named here rather than buried. The answer: a
   projection is not the document, and may say what the document does not —
   `canvas/render.py` already prints markers in words that exist nowhere in the
-  XML (*Open question*, *Answered question*, `README.md:293-295`). Whether the
+  XML (*Open question*, *Answered question*, `README.md:624-626`). Whether the
   renderer labels `create`'s two nodes is [`rendering.md`](rendering.md)'s
   business, and presentation was explicitly left free. **This ruling permits that
   and does not decide it.**
