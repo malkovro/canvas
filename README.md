@@ -108,6 +108,33 @@ GitHub's `ubuntu-latest` image, and `git`, because the store tests exercise the
 real repository the tool builds. Every test points `$OPENCLAW_WORKSPACE` at its
 own temporary directory; none of them touches a live workspace.
 
+### Checking that citations still land
+
+These documents cite each other by line number, and a line number is a fact
+about a file at one moment: inserting a paragraph into a spec moves every
+passage below it and falsifies every citation of them without breaking anything
+a reader can see. The citation still resolves — the lines exist, they are
+simply the wrong lines.
+
+    bin/canvas-citations [<checkout> ...]
+
+For each citation with a quotation beside it, the quoted words are either
+inside the cited lines; somewhere else in the same file, which is the only
+failure and is reported with the range that now holds it; or not in that file
+at all, which is counted and not failed, because most quoted text beside a
+citation is the citing author's own sentence rather than a quotation of the
+target. Pass a sibling checkout as well to cover citations that cross
+repositories:
+
+    bin/canvas-citations . ../ledger-orchestrator
+
+The dated readings under `docs/why-verdict/`, `docs/drive-by-hand/` and
+`docs/merge-and-split/` are not checked. Each was written against a named sha
+and its citations record what was there then, so correcting one to today's line
+numbers would edit a measurement to agree with a file it never saw. The report
+prints how many citations that exempted, because an exemption nobody can see is
+indistinguishable from a gap.
+
 ### Checking a successful write for coherence
 
 `bin/canvas` remains local, deterministic and network-free. The orchestrator
