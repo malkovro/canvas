@@ -29,6 +29,23 @@ It holds the spec's existing commitments fixed rather than relitigating them:
 - **One edit is one node, one edit is one commit**, and a node's history is
   `git log --grep='Canvas-Node: <id>'` (`engineering-spec.md:139-141` and `:192`,
   `node-identity.md`).
+  (**Added 2026-09-25, after this ruling — the bullet above is as written
+  on 2026-09-23.** That query is not the command.
+  `engineering-spec.md:218-223` calls the bare `--grep` form "the same
+  query written as a substring match" and "wrong in two reachable ways":
+  ids are four characters, so it also answers for a longer id that starts
+  with the one asked about, and a reason that quotes the trailer text is
+  counted as an edit to a node it never touched. The same paragraph, at
+  `engineering-spec.md:222-223`, says instead that "The command matches the
+  trailer's value for equality instead" — which is what
+  `canvas/store.py:1037` does, comparing the values of the trailer block git
+  itself parsed; the anchored `--grep` at `canvas/store.py:1026` is a
+  pre-filter on top of that and never the authority
+  (`canvas/store.py:885-895`). What this bullet holds fixed is untouched: a
+  node has a history of its own, and it is exactly the set of commits whose
+  `Canvas-Node:` trailer names it. Nothing this ruling decides turns on how that
+  set is queried, and `v` counts that set rather than what any one query
+  returns, so the ruling stands as written.)
 - **`v` is what the log counts** — a node's state must not become a claim the
   log cannot check (`node-identity.md` §4, and §7's rejection of an ancestor
   id at `node-identity.md:555-598`).
