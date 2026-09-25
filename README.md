@@ -150,7 +150,7 @@ indistinguishable from a gap.
 `bin/canvas` remains local, deterministic and network-free. The orchestrator
 may synchronously check a successful content write in a separate process:
 
-    bin/canvas-coherence <ledger-id> --trigger <full-head-sha> \
+    bin/canvas-coherence <canvas-id> --trigger <full-head-sha> \
         --model-command <adapter> [<adapter-argument> ...]
 
 `--model-command` is the final option. The adapter receives one UTF-8 JSON
@@ -195,31 +195,30 @@ render, history, freeze, or a question inserted by the checker itself.
 
 ## The store
 
-A canvas lives in one file per ledger row:
+A Canvas lives in one file per Canvas identifier:
 
-    $OPENCLAW_WORKSPACE/state/canvas/<ledger_id>.xml
+    $OPENCLAW_WORKSPACE/state/canvas/<canvas-id>.xml
 
-beside `state/ledger/<ledger_id>.json`. One fact, one place, joined on read.
 `$OPENCLAW_WORKSPACE` has no default: a tool that falls back to a guess writes
 real state whenever a caller forgets the variable, and the failure is silent and
 lands on production data.
 
-`state/canvas` is **one git repository** holding every ledger row's file,
+`state/canvas` is **one git repository** holding every Canvas file,
 initialised on first use and never re-initialised over one that already exists.
 It is one repository and not one per canvas because ids are unique across the
 whole of it: the uniqueness check `insert` runs is the history itself, with no
 path filter, so a repository per canvas would path-scope it by accident and
 hand out an id another canvas already used.
 
-    bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT [--author TEXT]
-    bin/canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
-    bin/canvas render  <ledger_id>
-    bin/canvas history <ledger_id> <node-id>
-    bin/canvas replace <ledger_id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
-    bin/canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
-    bin/canvas remove  <ledger_id> <node-id> --why TEXT [--base SHA] [--author TEXT]
-    bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--author TEXT]
-    bin/canvas freeze  <ledger_id> --why TEXT [--author TEXT]
+    bin/canvas create  [<canvas-id>] --problem TEXT --expected-value TEXT [--author TEXT]
+    bin/canvas read    <canvas-id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
+    bin/canvas render  <canvas-id>
+    bin/canvas history <canvas-id> <node-id>
+    bin/canvas replace <canvas-id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
+    bin/canvas insert  <canvas-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
+    bin/canvas remove  <canvas-id> <node-id> --why TEXT [--base SHA] [--author TEXT]
+    bin/canvas move    <canvas-id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--author TEXT]
+    bin/canvas freeze  <canvas-id> --why TEXT [--author TEXT]
 
 The read hands out the current sha and all four verbs take it back as
 `--base`: the sha the edit was decided against. [The staleness
@@ -234,7 +233,7 @@ either: `render` writes nothing at all.
 
 ### What one commit contains
 
-One repository for every ledger row is also one **index** for every ledger row,
+One repository for every Canvas is also one **index** for every Canvas,
 so what a commit contains is a thing this store has to decide rather than
 inherit. It decides it this way, and a caller may rely on all three:
 
@@ -243,7 +242,7 @@ inherit. It decides it this way, and a caller may rely on all three:
 - **One commit changes one node in it**, named in its `Canvas-Node:` trailer —
   except at the two ends of a canvas's life. `create`'s birth commit names no
   node and writes a root with nothing in it; `freeze` names no node, carries
-  `Canvas-Freeze: <ledger-id>`, and changes no file at all.
+  `Canvas-Freeze: <canvas-id>`, and changes no file at all.
 - **The reason in its subject is about that node**, because the write path
   composes the subject and the trailer together and will not write one without
   the other.
@@ -252,7 +251,7 @@ It holds because the commit names its path, exactly as the `add` before it
 does: `git commit … -- <path>` builds the commit from the head plus that one
 file, so a second writer's staged entry stays staged and is committed by that
 writer's own commit under that writer's own reason. Two things follow for a
-reader. `git log -- <ledger-id>.xml` is that canvas's whole history and nothing
+reader. `git log -- <canvas-id>.xml` is that canvas's whole history and nothing
 else's; and [`history`](#a-nodes-history) — the commits whose `Canvas-Node:`
 trailer names the node — is that node's whole history, rather than most of it.
 
@@ -276,34 +275,75 @@ to the caller's own canvas.
 
 ### Creating a canvas
 
-`create` makes the canvas for a ledger row with its first nodes — the problem
-and the expected value the ledger's `open` already requires — and prints the sha
-and the path:
+Omit the identifier and `create` mints a stable, collision-safe one, then prints
+it as `Canvas-ID` for every later command. It also creates the first two nodes
+and prints their ids, the sha and the path:
 
-    $ bin/canvas create my-task --problem "The store does not exist." \
-                                --expected-value "A writer can learn what to write against."
+    $ bin/canvas create --problem "The store does not exist." \
+                        --expected-value "A writer can learn what to write against."
+    Canvas-ID: canvas-8ce441e168bf4eeea13a1f584f327323
     Canvas-Problem: y8dk
     Canvas-Expected-Value: itpe
     Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
-    Canvas-File: /…/state/canvas/my-task.xml
+    Canvas-File: /…/state/canvas/canvas-8ce441e168bf4eeea13a1f584f327323.xml
 
-**The two ids first**, because an id is the thing the caller did not know —
-`insert` prints `Canvas-Node:` for the same reason. One name each, and not
-`Canvas-Node:` twice: two lines differing only in their position would leave the
-caller counting, which is the thing [`node-naming.md`](node-naming.md) rules the
-document does not carry. `Canvas-Problem:` and `Canvas-Expected-Value:` name the
-two flags `create` takes, one for one. The price, the same one `freeze` already
-pays for `Canvas-Freeze:`: a caller grepping `Canvas-Node:` across the verbs to
-collect minted ids does not see `create`'s.
+**Minted identifiers come first**, because they are what the caller did not
+know. `Canvas-ID` appears only when the CLI minted the Canvas identifier. The
+node ids use `Canvas-Problem:` and `Canvas-Expected-Value:`, one name for each
+flag rather than `Canvas-Node:` twice: two identical labels would leave the
+caller counting, which [`node-naming.md`](node-naming.md) rules the document
+does not carry. The price, the same one `freeze` pays for `Canvas-Freeze:`: a
+caller grepping `Canvas-Node:` across the verbs to collect minted ids does not
+see `create`'s.
 
 The two lines below them are unchanged and in their existing order, so anything
 parsing `Canvas-Base:` or `Canvas-File:` by name is unaffected.
 
+Supplying the positional identifier remains supported for integrations that
+already have one. A task-ledger or Basecamp-derived id is optional integration,
+not a prerequisite:
+
+    bin/canvas create bc-10340467739-existing-task \
+      --problem "The task's problem." \
+      --expected-value "The task's expected value."
+
+That form does not print `Canvas-ID`, because the caller supplied it. Existing
+commands and stored files keep using the identifier verbatim. The root's
+`ledger=` attribute also remains unchanged for schema and file compatibility;
+standalone Canvases store their minted Canvas identifier there.
+
+#### Runnable standalone lifecycle
+
+This starts with a clean temporary workspace, creates a standalone Canvas,
+reuses the printed identifier to read and edit it, renders it, then freezes it:
+
+```bash
+export OPENCLAW_WORKSPACE="$(mktemp -d)"
+
+created="$(bin/canvas create \
+  --problem "The deployment steps are scattered." \
+  --expected-value "One reviewed sequence is ready to follow.")"
+printf '%s\n' "$created"
+
+canvas_id="$(printf '%s\n' "$created" | sed -n 's/^Canvas-ID: //p')"
+problem_id="$(printf '%s\n' "$created" | sed -n 's/^Canvas-Problem: //p')"
+base="$(printf '%s\n' "$created" | sed -n 's/^Canvas-Base: //p')"
+
+bin/canvas read "$canvas_id"
+bin/canvas replace "$canvas_id" "$problem_id" \
+  --text "The deployment steps need one reviewed order." \
+  --why "The first pass found duplicate ordering in deploy.md and runbook.md; this node now states the conflict the Canvas must resolve." \
+  --base "$base"
+bin/canvas render "$canvas_id" >| "$canvas_id.html"
+bin/canvas freeze "$canvas_id" \
+  --why "done: the reviewed sequence is recorded in this Canvas and rendered in $canvas_id.html"
+```
+
 It is **three commits, not one**:
 
-    create my-task: born at open, root only
-    insert y8dk: the problem the ledger row states
-    insert itpe: the expected value the ledger row states
+    create canvas-8ce441e168bf4eeea13a1f584f327323: Canvas created, root only
+    insert y8dk: the problem this Canvas starts with
+    insert itpe: the expected value this Canvas starts with
 
 `node-identity.md` §4 requires it. The creation commit creates the root only,
 and the two first nodes arrive as two ordinary `insert` commits, each naming its
@@ -331,7 +371,8 @@ unlabelled paragraphs, which the renderer is free to fix and the grammar is not.
 that is absent, empty or whitespace-only is exit `2` — the same code and the
 same answer an empty `--why` gets — and it is decided before the store is
 opened, so nothing is written, nothing is committed, nothing is minted and the
-repository is not even initialised. The ledger id is left free to try again.
+repository is not even initialised. A supplied identifier is left free to try
+again; an omitted one has not yet been minted.
 
 The reason is that the store cannot hold *deliberately blank* and say so. A
 node with no character data is written `<text id="…" v="1"/>` whether it was
@@ -345,8 +386,8 @@ this refusal is about whether there is content, not about what it looks like.
 `insert … --text ""` still makes one, because an `insert` carries a `--why`
 that says what the node is for, and a reader who finds it blank can ask
 [`history`](#a-nodes-history) what it was for. `create`'s two nodes get the two
-fixed reasons the tool writes — *the problem the ledger row states*, *the
-expected value the ledger row states* — so a blank one arrives with a reason
+fixed reasons the tool writes — *the problem this Canvas starts with*, *the
+expected value this Canvas starts with* — so a blank one arrives with a reason
 that describes content it does not have. That is the difference, and it is the
 whole of it.
 
@@ -585,8 +626,8 @@ to be — a `--why` contains spaces, colons, quotes and pipes.
 
 ### Rendering a canvas
 
-    bin/canvas render <ledger_id> > canvas.html
-    bin/canvas render <ledger_id> --format comment
+    bin/canvas render <canvas-id> > canvas.html
+    bin/canvas render <canvas-id> --format comment
 
 `engineering-spec.md` section *Projections* gives the canvas three of them and
 the first two are here: *"HTML — one standalone document: shareable as a file,
@@ -684,8 +725,8 @@ on working on a canvas that has been [frozen](#ending-a-canvas).
 | exit | meaning |
 |---|---|
 | `0` | the projection is on stdout |
-| `1` | the request is wrong against the store as it stands — there is no canvas for that ledger id, or the stored document is invalid. **An invalid canvas is refused rather than rendered**, with the validator's diagnostics: `read` prints an invalid document because refusing to show it would make it unrepairable, and a projection is the other case — a page asserting a canvas that does not exist, carrying a sha, is exactly the artifact somebody pastes into a comment. Repair it with `bin/canvas read` and `bin/canvas replace`, then re-render |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or unusable, a ledger id that is not a filename, a missing or unrecognised argument, `git` or `xmllint` missing, the validator unable to run, or any other condition the operating system refuses the command with |
+| `1` | the request is wrong against the store as it stands — there is no canvas for that Canvas identifier, or the stored document is invalid. **An invalid canvas is refused rather than rendered**, with the validator's diagnostics: `read` prints an invalid document because refusing to show it would make it unrepairable, and a projection is the other case — a page asserting a canvas that does not exist, carrying a sha, is exactly the artifact somebody pastes into a comment. Repair it with `bin/canvas read` and `bin/canvas replace`, then re-render |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset or unusable, a Canvas identifier that is not a filename, a missing or unrecognised argument, `git` or `xmllint` missing, the validator unable to run, or any other condition the operating system refuses the command with |
 
 Those are [the tool's two codes](#exit-codes) and its
 [one refusal shape](#what-a-refusal-prints); a new subcommand gets no third one.
@@ -764,7 +805,7 @@ store is opened, so a blank id costs no read:
     $ bin/canvas history my-task ''
     canvas: a node id is required and must not be empty: a node id is four characters, so an empty one names no node and never could — this is the invocation being wrong, not the node being absent
     Canvas-About: argument node-id
-    Canvas-About: ledger id my-task
+    Canvas-About: Canvas identifier my-task
     Canvas-Next: re-run `bin/canvas history my-task <node-id>` with the id you meant; if it came from a variable, that variable was empty. `bin/canvas read my-task` prints the canvas and every id in it
     Canvas-Exit: 2 — the tool or its environment is wrong; do not touch the canvas
 
@@ -854,11 +895,11 @@ too, and say what to type:
     usage: canvas replace [-h] [--type NAME] [--text TEXT] [--title TITLE]
                           [--href HREF] [--answered] --why TEXT [--base SHA]
                           [--author AUTHOR]
-                          ledger_id node-id
+                          canvas-id node-id
     canvas: replace: the following arguments are required: --why
     Canvas-Node: bn3x
     Canvas-About: command canvas replace
-    Canvas-About: ledger id a-row
+    Canvas-About: Canvas identifier a-row
     Canvas-About: option --why
     Canvas-Next: re-run the same command with --why TEXT (why this edit is being made; required, with no default). There is no default and no fallback: a reason a tool invented is a sentence in the history that reads like somebody decided something. Nothing was written
     Canvas-Exit: 2 — the tool or its environment is wrong; do not touch the canvas
@@ -1043,7 +1084,7 @@ attributes, same character data, same parent, and the same sibling order for
 every other node.
 
 **The supported write surface is five functions**: `create`, `insert`,
-`replace`, `remove` and `move`. Each takes a ledger id, a reason and at most one
+`replace`, `remove` and `move`. Each takes a Canvas identifier, a reason and at most one
 node id, and **none of them takes a document**. That absence is the design:
 a function that accepts a whole tree is a whole-document rewrite whatever it is
 called, so the parameter is not offered and the one private function that has it
@@ -1140,8 +1181,8 @@ against, which is also why its root commit writes no `Canvas-Base:` trailer.
 
 | the `--base` given | exit | why |
 |---|---|---|
-| not a sha at all | `2` | the invocation is wrong, as a malformed ledger id is |
-| a well-formed sha this repository never handed out | `1` | a true statement about the store, like "no canvas for this ledger id". Re-read and re-decide |
+| not a sha at all | `2` | the invocation is wrong, as a malformed Canvas identifier is |
+| a well-formed sha this repository never handed out | `1` | a true statement about the store, like "no canvas for this Canvas identifier". Re-read and re-decide |
 | known, but not an ancestor of the head | `1` | the canvas repository has one line of history and nothing here branches, so this came from a rewritten history or somewhere else — and `<base>..HEAD` would answer "nothing moved" for it, a vacuous pass wearing the safe case's face |
 
 An abbreviation git can still resolve is accepted. `read` hands out the full
@@ -1214,7 +1255,7 @@ of them, `probe-empty-problem-20260924`, is in the live store and was.
 ruling, what was done with that one, and the one thing that would reopen it.
 
 **Where the freeze is recorded: in the log, as one commit.** Its subject is
-`freeze <ledger_id>: <why>` and it carries `Canvas-Freeze: <ledger_id>`:
+`freeze <canvas-id>: <why>` and it carries `Canvas-Freeze: <canvas-id>`:
 
     freeze my-task: done: the done-gate artifact is PR #21, merged 2026-09-23
 
@@ -1251,7 +1292,7 @@ was never the whole of a canvas here.
 
 **Every write verb is refused against a frozen canvas, at exit `1`.**
 `replace`, `insert`, `remove`, `move`, a second `freeze`, and a `create` for the
-same ledger id: all of them, with nothing applied, nothing committed and nothing
+same Canvas identifier: all of them, with nothing applied, nothing committed and nothing
 minted. The refusal names the freeze, its reason, its commit and its author:
 
     canvas: refusing to replace b7pk in my-task: this canvas was frozen at
@@ -1259,7 +1300,7 @@ minted. The refusal names the freeze, its reason, its commit and its author:
             read-only history. Nothing was applied, nothing was committed and
             nothing was minted
     Canvas-Node: b7pk
-    Canvas-About: ledger id my-task
+    Canvas-About: Canvas identifier my-task
     Canvas-About: canvas /…/state/canvas/my-task.xml
     Canvas-About: freeze <40-char sha>
     Canvas-About: author leo | by-hand
@@ -1342,8 +1383,8 @@ mode.
 | exit | meaning |
 |---|---|
 | `0` | it worked |
-| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that ledger id (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history (a *blank* node id is `2`, not this — it is not an id at all; see [a node's history](#a-nodes-history)), **`read --id` named a node this canvas does not hold**, **the node being written moved since the `--base` declared for it**, the `--base` or `--since` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
-| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, an absent or blank `--problem` or `--expected-value` on [`create`](#creating-a-canvas), a blank node id on [`history`](#a-nodes-history), and a `--base` or `--since` that is not a sha**), a ledger id that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
+| `1` | the request is wrong against the store as it stands — the canvas already exists, there is genuinely no canvas for that Canvas identifier (the filesystem answered `ENOENT`, not that it would not say), there is no such node in this canvas's history (a *blank* node id is `2`, not this — it is not an id at all; see [a node's history](#a-nodes-history)), **`read --id` named a node this canvas does not hold**, **the node being written moved since the `--base` declared for it**, the `--base` or `--since` is a sha this repository never handed out or one nothing here descends from, **the canvas has been [frozen](#ending-a-canvas) and takes no more writes**, or the document is invalid. Re-read and re-decide |
+| `2` | the tool or its environment is wrong — `$OPENCLAW_WORKSPACE` unset, not a directory or not one this process may look at, an unknown verb, a missing or malformed argument (**including an absent or empty `--why`, an absent or blank `--problem` or `--expected-value` on [`create`](#creating-a-canvas), a blank node id on [`history`](#a-nodes-history), and a `--base` or `--since` that is not a sha**), a Canvas identifier that is not a filename, `git` or `xmllint` missing, the validator unable to run, or **a canvas that is there and cannot be read, a `state/canvas` that cannot be written or looked in, a directory anywhere above the canvas that this process may not traverse, something that is not a regular file where the canvas belongs, a repository this process may not read — which is never reported as a repository with no commits in it — or any other condition the operating system refuses the command with**. Do not touch the canvas |
 
 Both non-zero codes arrive with that sentence attached, on the refusal's own
 `Canvas-Exit:` line — see [what a refusal prints](#what-a-refusal-prints). A
@@ -1354,18 +1395,18 @@ output, not that there are more codes. There are two, and there is no third.
 This is `bin/canvas-validate`'s `1` / `2` split with its purpose preserved, and
 it differs from it in one deliberate place. `canvas-validate` maps a missing
 file to `2`, because there the caller supplied the path and a missing file means
-the invocation named the wrong one. Here the path is *derived* from a ledger id,
+the invocation named the wrong one. Here the path is *derived* from a Canvas identifier,
 so "no canvas for this ledger" is a true statement about the store rather than a
 broken invocation, and the right response is to create one or re-check the id —
-not to stop touching the canvas. It maps to `1`. A *malformed* ledger id stays
+not to stop touching the canvas. It maps to `1`. A *malformed* Canvas identifier stays
 `2`, because that is the invocation being wrong.
 
-A ledger id has to be a filename: one or more of `[A-Za-z0-9._-]`, not starting
+A Canvas identifier has to be a filename: one or more of `[A-Za-z0-9._-]`, not starting
 with a dot. That is what stops `canvas read ../../../etc/passwd` from escaping
 `state/canvas/`.
 
 A canvas this process cannot read is `2` and not `1`, which is the same call
-made the other way round. "No canvas for this ledger id" is a fact about the
+made the other way round. "No canvas for this Canvas identifier" is a fact about the
 store and the caller can act on it; "the canvas is there and I am not allowed
 to read it" is a fact about the *process*, and the store is intact. Exit `1`
 would tell a caller to re-read and re-decide, and the re-read would fail in
@@ -1453,9 +1494,9 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   stated once, there. "Nothing was changed" is a fact about the past and an
   agent cannot act on it; the command that would succeed is on `Canvas-Next:`.
 - **A refusal with no node is not an exemption.** Some genuinely have none —
-  there is no canvas for this ledger id, `$OPENCLAW_WORKSPACE` is unset,
+  there is no canvas for this Canvas identifier, `$OPENCLAW_WORKSPACE` is unset,
   `xmllint` is missing, a `--base` that is not a sha. Each names the thing it
-  *is* about on `Canvas-About:` instead: the ledger id, the variable, the
+  *is* about on `Canvas-About:` instead: the Canvas identifier, the variable, the
   binary, the value that was rejected. Never an empty list of nodes.
 - **A refusal names every node it has, and an `insert` that missed its position
   has none.** Every id the refusal is genuinely holding goes on a
@@ -1466,7 +1507,7 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   earlier and has never been in the canvas, so no commit names it,
   `bin/canvas read` cannot show it, and the next attempt mints a different one.
   Printing that draw under `Canvas-Node:` would hand back an id a caller can
-  neither look up nor reuse, so it names the ledger id and the position instead.
+  neither look up nor reuse, so it names the Canvas identifier and the position instead.
 - **`Canvas-Exit:` is why no refusal exits with an unexplained code.** The
   meaning is this document's table's own words, printed beside the number,
   because a caller reading stderr cannot see a table in a Markdown file. The
@@ -1482,10 +1523,10 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   printed ready to run against real paths, running it is what makes the refused
   command work, and it exits `0`. Everything else a next action names is either
   a **diagnostic** — `ls -ld`, `ls -l`, `df -h`, `ulimit -n`, and `bin/canvas
-  read <ledger-id>` where a staleness refusal sends you to look at the canvas
+  read <canvas-id>` where a staleness refusal sends you to look at the canvas
   again — there to show the state that produced the refusal; or a **form** — a
   command with a `<placeholder>` in it that the caller fills in, such as
-  `bin/canvas create <ledger-id> --problem "<the problem>" --expected-value
+  `bin/canvas create <canvas-id> --problem "<the problem>" --expected-value
   "<the expected value>"`.
 
   The rule is not about a command's exit code, it is about what the line
@@ -1585,7 +1626,7 @@ everywhere else in the tool, so a refusal naming one uses the same word.
 - **"Every refusal writes nothing" is a claim the outermost guard does not
   make.** It sits outside every function that knows what it had done, so rather
   than assert something it cannot see, it names the two commands that answer
-  the question — `bin/canvas read <ledger-id>` and `git -C
+  the question — `bin/canvas read <canvas-id>` and `git -C
   $OPENCLAW_WORKSPACE/state/canvas log`. `bin/canvas-validate`'s does say
   nothing was written, because that command reads and nothing it calls writes.
 
@@ -1601,7 +1642,7 @@ everywhere else in the tool, so a refusal naming one uses the same word.
   is one node, so a commit's patch already *is* that node's diff, and a
   node-granular differ would be restating git rather than using it.
 - **It does not report a node's history beyond one node at a time.**
-  `bin/canvas history <ledger_id> <node-id>` returns one node's edits, oldest
+  `bin/canvas history <canvas-id> <node-id>` returns one node's edits, oldest
   first, with the reason for each. There is no verb that reports a whole
   canvas's history, no verb that reports a node's diffs, and none that reverts
   one: `git log`, `git show` and `git revert` are right there, and wrapping
@@ -1670,13 +1711,13 @@ rewrite is inexpressible and nobody said so. That belongs in an instruction an
 agent loads before it touches the store, not in a README it reads afterwards.
 
 [`skills/canvas/SKILL.md`](skills/canvas/SKILL.md) is that instruction — the
-Claude Code skill for driving a canvas over a ledger-backed task's whole life:
+Claude Code skill for driving a standalone or integrated Canvas over its whole life:
 where the tool is (`CANVAS_BIN`, `OPENCLAW_WORKSPACE`), the read–decide–write
 loop and what `--base` does on each of its two branches, one-node edits, the
 `--why` rule, what not to write, resolution against the prompt budget, and
-`freeze` at `done` and `abandoned`. It says in its own words that `create` is
-almost never the agent's — `bin/task-ledger open` makes the canvas — and that
-the rendered comment belongs to the ledger row, which is its only author.
+`freeze` at `done` and `abandoned`. It explains that standalone creation omits
+the identifier and reuses the printed `Canvas-ID`, while a task-ledger supplies
+its existing id and owns the rendered Basecamp comment and automatic freeze.
 
 **Registration is a symlink**, so the merged file and the loaded file are one
 file:

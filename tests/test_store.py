@@ -177,6 +177,17 @@ class CreateFromACleanWorkspace(StoreTestCase):
         self.create()
         self.assertEqual([], validate_file(self.canvas_file()))
 
+    def test_no_temporary_file_survives_a_refusal(self):
+        self.run_canvas(
+            "create", "a-ledger-row", "--problem", "a\bb", "--expected-value", "E"
+        )
+        leftovers = [
+            name
+            for name in os.listdir(self.canvas_dir)
+            if name != ".git" and not name.endswith(".xml")
+        ]
+        self.assertEqual([], leftovers)
+
     def test_the_created_document_validates_through_the_standalone_shim(self):
         self.create()
         result = subprocess.run(
@@ -697,17 +708,77 @@ class CreateRefusesRatherThanCorrupts(StoreTestCase):
         self.create()
         self.assertEqual([], validate_file(self.canvas_file()))
 
-    def test_no_temporary_file_survives_a_refusal(self):
-        self.run_canvas(
-            "create", "a-ledger-row", "--problem", "a\bb", "--expected-value", "E"
-        )
-        leftovers = [
-            name
-            for name in os.listdir(self.canvas_dir)
-            if name != ".git" and not name.endswith(".xml")
-        ]
-        self.assertEqual([], leftovers)
 
+class StandaloneAndIntegratedCreation(StoreTestCase):
+    """Creation works with a minted id and with an externally supplied one."""
+
+    def fields(self, stdout):
+        return dict(
+            line.split(": ", 1) for line in stdout.decode("utf-8").splitlines()
+        )
+
+    def test_standalone_create_prints_a_reusable_collision_safe_identifier(self):
+        code, stdout, stderr = self.run_canvas(
+            "create",
+            "--problem", "A standalone problem.",
+            "--expected-value", "A standalone outcome.",
+        )
+        self.assertEqual(0, code, stderr)
+        printed = self.fields(stdout)
+        canvas_id = printed["Canvas-ID"]
+        self.assertRegex(canvas_id, r"\Acanvas-[0-9a-f]{32}\Z")
+        self.assertTrue(os.path.isfile(self.canvas_file(canvas_id)))
+
+        code, read, stderr = self.run_canvas("read", canvas_id)
+        self.assertEqual(0, code, stderr)
+        root = ElementTree.fromstring(self.document(read))
+        self.assertEqual(canvas_id, root.get("ledger"))
+        self.assertEqual(
+            ["A standalone problem.", "A standalone outcome."],
+            [node.text for node in root],
+        )
+
+    def test_separate_standalone_creates_mint_separate_identifiers(self):
+        identifiers = []
+        for problem in ("First standalone problem.", "Second standalone problem."):
+            code, stdout, stderr = self.run_canvas(
+                "create",
+                "--problem", problem,
+                "--expected-value", "A standalone outcome.",
+            )
+            self.assertEqual(0, code, stderr)
+            identifiers.append(self.fields(stdout)["Canvas-ID"])
+        self.assertEqual(2, len(set(identifiers)), identifiers)
+        for canvas_id in identifiers:
+            self.assertTrue(os.path.isfile(self.canvas_file(canvas_id)))
+
+    def test_caller_supplied_ledger_derived_identifier_remains_supported(self):
+        canvas_id = "bc-10340467739-existing-integration"
+        code, stdout, stderr = self.run_canvas(
+            "create", canvas_id,
+            "--problem", "An integrated problem.",
+            "--expected-value", "An integrated outcome.",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertNotIn("Canvas-ID", self.fields(stdout))
+        root = ElementTree.parse(self.canvas_file(canvas_id)).getroot()
+        self.assertEqual(canvas_id, root.get("ledger"))
+
+    def test_an_old_ledger_attribute_file_still_reads(self):
+        canvas_id = "legacy-canvas"
+        self.create(ledger_id=canvas_id)
+        fixture = os.path.join(ROOT, "tests", "fixtures", "valid.xml")
+        shutil.copyfile(fixture, self.canvas_file(canvas_id))
+        self.git("add", "--", self.canvas_file(canvas_id))
+        self.git("commit", "-m", "install a pre-standalone Canvas file")
+
+        code, stdout, stderr = self.run_canvas("read", canvas_id)
+        self.assertEqual(0, code, stderr)
+        root = ElementTree.fromstring(self.document(stdout))
+        self.assertEqual(
+            "bc-10326884396-deliver-the-first-priority-canvas-todo-d",
+            root.get("ledger"),
+        )
 
 class ACanvasIsNotBornBlank(StoreTestCase):
     """`create` refuses a blank `--problem` or `--expected-value`, writing nothing.
@@ -763,7 +834,7 @@ class ACanvasIsNotBornBlank(StoreTestCase):
     def test_the_refusal_names_the_flag_the_ledger_id_and_the_exit_code(self):
         _, _, stderr = self.blank_create("--problem", "")
         self.assertIn("Canvas-About: option --problem", stderr)
-        self.assertIn("Canvas-About: ledger id a-ledger-row", stderr)
+        self.assertIn("Canvas-About: Canvas identifier a-ledger-row", stderr)
         self.assertIn("Canvas-Exit: 2", stderr)
         self.assertIn("nothing was written, committed or minted", stderr)
 
@@ -786,9 +857,9 @@ class ACanvasIsNotBornBlank(StoreTestCase):
         self.assertEqual([], validate_file(self.canvas_file()))
         self.assertEqual(
             [
-                "create a-ledger-row: born at open, root only",
-                "insert %s: the problem the ledger row states" % self.minted(0),
-                "insert %s: the expected value the ledger row states" % self.minted(1),
+                "create a-ledger-row: Canvas created, root only",
+                "insert %s: the problem this Canvas starts with" % self.minted(0),
+                "insert %s: the expected value this Canvas starts with" % self.minted(1),
             ],
             self.subjects(),
         )
@@ -890,7 +961,7 @@ class CharacterDataTheStoreCannotTellApart(StoreTestCase):
         os.makedirs(self.canvas_dir)
         store.ensure_repository(self.canvas_dir)
         root = document.new_canvas("a-ledger-row")
-        sha = self.written(root, "create", "a-ledger-row", "born at open, root only")
+        sha = self.written(root, "create", "a-ledger-row", "Canvas created, root only")
 
         document.place_into(root, document.ROOT, document.new_text("qqqq", ""))
         sha = self.written(
@@ -906,7 +977,7 @@ class CharacterDataTheStoreCannotTellApart(StoreTestCase):
 
         self.assertEqual(
             [
-                "create a-ledger-row: born at open, root only",
+                "create a-ledger-row: Canvas created, root only",
                 "insert qqqq: a node with no text in it",
                 "insert pppp: the node this commit is about",
             ],
@@ -983,7 +1054,7 @@ class TheToolAndItsEnvironment(StoreTestCase):
         for ledger_id in ("../../../etc/passwd", "a/b", ".hidden", "", "with space"):
             code, _, stderr = self.run_canvas("read", ledger_id)
             self.assertEqual(2, code, ledger_id)
-            self.assertIn("ledger id", stderr)
+            self.assertIn("Canvas identifier", stderr)
 
     def test_a_traversing_ledger_id_writes_nothing_anywhere(self):
         before = sorted(os.listdir(self.workspace))
@@ -1798,8 +1869,8 @@ class CreatePrintsTheIdsItMinted(StoreTestCase):
         _, stdout, _ = self.create()
         printed = self.minted(stdout)
         for name, subject in (
-            ("Canvas-Problem", "the problem the ledger row states"),
-            ("Canvas-Expected-Value", "the expected value the ledger row states"),
+            ("Canvas-Problem", "the problem this Canvas starts with"),
+            ("Canvas-Expected-Value", "the expected value this Canvas starts with"),
         ):
             commits = self.git(
                 "log", "--grep=Canvas-Node: %s" % printed[name], "--format=%s"
@@ -3575,11 +3646,11 @@ class OneCommandReturnsANodesReasonHistory(VerbTestCase):
 
     def test_the_first_nodes_of_a_canvas_have_the_reason_create_gave_them(self):
         self.assertEqual(
-            [("insert", "the problem the ledger row states")],
+            [("insert", "the problem this Canvas starts with")],
             [(verb, reason) for _, _, verb, reason in self.blocks(self.problem_id)],
         )
         self.assertEqual(
-            [("insert", "the expected value the ledger row states")],
+            [("insert", "the expected value this Canvas starts with")],
             [(verb, reason) for _, _, verb, reason in self.blocks(self.value_id)],
         )
 
@@ -3674,7 +3745,7 @@ class TheHistoryCommandRefusesWhatIsNotThere(VerbTestCase):
         )
         self.assertEqual(1, code)
         self.assertEqual(b"", stdout)
-        self.assertIn("no canvas for ledger id no-such-row", stderr)
+        self.assertIn("no canvas for Canvas identifier no-such-row", stderr)
 
     def test_no_such_node_exits_one_and_says_something_different(self):
         code, stdout, stderr = self.run_canvas("history", "a-ledger-row", "zzzz")
@@ -3683,14 +3754,14 @@ class TheHistoryCommandRefusesWhatIsNotThere(VerbTestCase):
         self.assertIn("no node with id zzzz", stderr)
         # The two are told apart: a missing canvas and a missing node are
         # different repairs, and the message is where the caller learns which.
-        self.assertNotIn("no canvas for ledger id", stderr)
+        self.assertNotIn("no canvas for Canvas identifier", stderr)
 
     def test_a_malformed_ledger_id_exits_two(self):
         code, _, stderr = self.run_canvas(
             "history", "../../etc/passwd", self.problem_id
         )
         self.assertEqual(2, code)
-        self.assertIn("not a usable ledger id", stderr)
+        self.assertIn("not a usable Canvas identifier", stderr)
 
     def test_an_unset_workspace_exits_two(self):
         code, _, stderr = self.run_canvas(
@@ -3784,7 +3855,7 @@ class AnEmptyNodeIdIsAMalformedArgument(VerbTestCase):
         )
         self.assertEqual(2, code)
         self.assertIn("a node id is required and must not be empty", stderr)
-        self.assertNotIn("no canvas for ledger id", stderr)
+        self.assertNotIn("no canvas for Canvas identifier", stderr)
         self.assertEqual([], os.listdir(clean))
 
     def test_a_real_node_id_still_answers(self):
@@ -3869,7 +3940,7 @@ class TheHistoryCommandOnlyReads(VerbTestCase):
             "history", "a-ledger-row", self.problem_id
         )
         self.assertEqual(0, code, stderr)
-        self.assertIn(b"the problem the ledger row states", stdout)
+        self.assertIn(b"the problem this Canvas starts with", stdout)
 
 
 class EveryAppliedEditCommitCarriesAllThreeTrailers(VerbTestCase):
@@ -4245,7 +4316,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             named = [each for each in edit[1:] if NODE_ID.match(each)]
             self.assertSurface(
                 2, code, stderr, msg=edit, nodes=named,
-                about=["ledger id a-ledger-row", "option --why"],
+                about=["Canvas identifier a-ledger-row", "option --why"],
                 next_action=["--why"],
             )
             self.assertEqual(b"", stdout, edit)
@@ -4260,7 +4331,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             )
             self.assertSurface(
                 2, code, stderr, msg=why, nodes=[self.problem_id],
-                about=["ledger id a-ledger-row", "option --why"],
+                about=["Canvas identifier a-ledger-row", "option --why"],
                 next_action=["--why"],
             )
             self.assertEqual(b"", stdout, why)
@@ -4300,7 +4371,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             self.assertSurface(
                 1, code, stderr, msg=edit,
                 nodes=[section, first, second],
-                about=["ledger id a-ledger-row"],
+                about=["Canvas identifier a-ledger-row"],
                 next_action=["--why"],
             )
             self.assertEqual(b"", stdout, edit)
@@ -4321,7 +4392,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             code, stdout, stderr = self.verb(*edit)
             self.assertSurface(
                 1, code, stderr, msg=edit, nodes=["zz99"],
-                about=["ledger id a-ledger-row"],
+                about=["Canvas identifier a-ledger-row"],
                 next_action=["bin/canvas read a-ledger-row"],
             )
             self.assertEqual(b"", stdout, edit)
@@ -4331,7 +4402,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
         code, stdout, stderr = self.run_canvas("history", "a-ledger-row", "zz99")
         self.assertSurface(
             1, code, stderr, msg="history", nodes=["zz99"],
-            about=["ledger id a-ledger-row"],
+            about=["Canvas identifier a-ledger-row"],
             next_action=["bin/canvas read a-ledger-row"],
         )
         self.assertEqual(b"", stdout)
@@ -4343,7 +4414,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
         )
         self.assertSurface(
             1, code, stderr, nodes=[self.problem_id, "zz99"],
-            about=["ledger id a-ledger-row"],
+            about=["Canvas identifier a-ledger-row"],
         )
 
     def test_a_move_to_the_root_position_still_names_the_node_being_moved(self):
@@ -4359,7 +4430,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
         )
         trailers = self.assertSurface(
             1, code, stderr, nodes=[self.problem_id],
-            about=["ledger id a-ledger-row", "position root"],
+            about=["Canvas identifier a-ledger-row", "position root"],
             next_action=["bin/canvas read a-ledger-row"],
         )
         # The moved node, and only it: root is a position and not a node, so
@@ -4401,7 +4472,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             code, stdout, stderr = self.verb(*(edit + ("--why", "w")))
             trailers = self.assertSurface(
                 1, code, stderr, msg=edit, nodes=named,
-                about=["ledger id a-ledger-row", "position"],
+                about=["Canvas identifier a-ledger-row", "position"],
                 next_action=["bin/canvas read a-ledger-row"],
             )
             self.assertEqual(named, trailers["Canvas-Node"], stderr)
@@ -4426,7 +4497,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
                 )
             self.assertIn(self.problem_id, caught.exception.nodes)
             self.assertNotIn("root", caught.exception.nodes)
-            self.assertIn("ledger id a-ledger-row", caught.exception.about)
+            self.assertIn("Canvas identifier a-ledger-row", caught.exception.about)
         self.assertEqual(before, self.state())
 
     def test_the_stale_base_branch_names_the_node_the_ledger_and_both_shas(self):
@@ -4443,7 +4514,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
         self.assertSurface(
             1, code, stderr, nodes=[self.problem_id],
             about=[
-                "ledger id a-ledger-row",
+                "Canvas identifier a-ledger-row",
                 "option --base %s" % base,
                 "the head",
             ],
@@ -4469,7 +4540,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
         )
         self.assertSurface(
             1, code, stderr, nodes=[self.problem_id],
-            about=["ledger id a-ledger-row", "option --base %s" % orphan,
+            about=["Canvas identifier a-ledger-row", "option --base %s" % orphan,
                    "the head"],
             next_action=["bin/canvas read a-ledger-row"],
         )
@@ -4550,7 +4621,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             ))
         code, stdout, stderr = self.run_canvas("read", "a-ledger-row")
         self.assertSurface(
-            1, code, stderr, about=["ledger id a-ledger-row"],
+            1, code, stderr, about=["Canvas identifier a-ledger-row"],
             next_action=["schema/canvas.rng"],
         )
         # The document is still handed back: a caller cannot repair what it
@@ -4648,7 +4719,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             with self.assertRaises(TypeError):
                 kind("something is wrong")
             with self.assertRaises(ValueError):
-                kind("something is wrong", "", about=["ledger id a-ledger-row"])
+                kind("something is wrong", "", about=["Canvas identifier a-ledger-row"])
 
     def test_a_refusal_cannot_be_built_without_naming_something(self):
         from canvas import store
@@ -4659,7 +4730,7 @@ class EveryRefusalNamesTheNodesAndTheNextAction(RefusalSurface, VerbTestCase):
             with self.assertRaises(ValueError):
                 kind("something is wrong", "do this instead")
             kind("something is wrong", "do this instead", nodes=["ab2c"])
-            kind("something is wrong", "do this instead", about=["ledger id x"])
+            kind("something is wrong", "do this instead", about=["Canvas identifier x"])
 
 
 class AnUnreadableCanvasIsARefusalAndNotATraceback(RefusalSurface, VerbTestCase):
@@ -4718,7 +4789,7 @@ class AnUnreadableCanvasIsARefusalAndNotATraceback(RefusalSurface, VerbTestCase)
         code, _, stderr = self.verb("read")
         self.assertNotIn("Traceback", stderr)
         self.assertSurface(
-            2, code, stderr, about=["ledger id a-ledger-row", path],
+            2, code, stderr, about=["Canvas identifier a-ledger-row", path],
             next_action=["chmod"],
         )
 
@@ -4736,7 +4807,7 @@ class AnUnreadableCanvasIsARefusalAndNotATraceback(RefusalSurface, VerbTestCase)
             self.assertNotIn("Traceback", stderr, edit)
             self.assertSurface(
                 2, code, stderr, msg=edit,
-                about=["ledger id a-ledger-row", path], next_action=["chmod"],
+                about=["Canvas identifier a-ledger-row", path], next_action=["chmod"],
             )
 
     # -- validate._wellformedness_problem ---------------------------------
@@ -4805,7 +4876,7 @@ class AnUnreadableCanvasIsARefusalAndNotATraceback(RefusalSurface, VerbTestCase)
         # leave the ordinary case exactly where README's table puts it.
         code, _, stderr = self.run_canvas("read", "no-such-row")
         self.assertSurface(
-            1, code, stderr, about=["ledger id no-such-row"],
+            1, code, stderr, about=["Canvas identifier no-such-row"],
             next_action=["create"],
         )
 
@@ -4880,7 +4951,7 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
         "was never a node of this canvas",
         "has no commits",
         "is not a git repository",
-        "no canvas for ledger id",
+        "no canvas for Canvas identifier",
         "names nothing that exists",
         "is not a directory",
     )
@@ -5250,7 +5321,7 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
                 code, _, stderr = self.verb(*args)
                 self.assertConforms(code, stderr, args)
                 self.assertEqual(2, code, "%s\n%s" % (args, stderr))
-                self.assertNotIn("no canvas for ledger id", stderr)
+                self.assertNotIn("no canvas for Canvas identifier", stderr)
                 self.assertIn("cannot tell", stderr)
                 # The errno, so a caller can tell a mode from a missing file.
                 self.assertIn("errno 13 EACCES", stderr)
@@ -5374,7 +5445,7 @@ class NoOSConditionLeavesTheToolAsATracebackOrALie(RefusalSurface, VerbTestCase)
         for number in list(refusal._OS_NEXT_ACTION) + [unknown, None]:
             error = OSError(number, "some condition", self.canvas_file())
             built = refusal.from_os_error(
-                refusal.Refused, error, about=["ledger id a-ledger-row"]
+                refusal.Refused, error, about=["Canvas identifier a-ledger-row"]
             )
             self.assertTrue(built.next_action.strip(), number)
             self.assertTrue(built.about, number)
@@ -5609,7 +5680,7 @@ class EveryRefusalIsTrueAndItsNextActionRuns(RefusalSurface, VerbTestCase):
                     "%s: said nothing is at %s, and something is\n%s"
                     % (msg, path, stderr),
                 )
-        if "no canvas for ledger id" in stderr:
+        if "no canvas for Canvas identifier" in stderr:
             for path in paths.get("canvas", []):
                 self.assertFalse(
                     os.path.exists(path),
@@ -6817,7 +6888,7 @@ class EveryWriteVerbIsRefusedAgainstAFrozenCanvas(
             )
             trailers = self.assertSurface(
                 1, code, stderr, msg=args,
-                about=["ledger id a-ledger-row", "freeze %s" % self.freeze_sha],
+                about=["Canvas identifier a-ledger-row", "freeze %s" % self.freeze_sha],
             )
             # The reason it ended, so the writer learns what ended it without a
             # second command; and the commit, so they can go and read it.
@@ -6866,7 +6937,7 @@ class EveryWriteVerbIsRefusedAgainstAFrozenCanvas(
         )
         self.assertSurface(
             1, code, stderr, msg="create over a frozen canvas",
-            about=["ledger id a-ledger-row", "freeze %s" % self.freeze_sha],
+            about=["Canvas identifier a-ledger-row", "freeze %s" % self.freeze_sha],
         )
         self.assertIn(self.REASON, stderr)
         self.assertEqual(self.frozen_state, self.state())
@@ -7231,7 +7302,7 @@ class TheReadmeAnswersTheReopeningCase(unittest.TestCase):
         self.assertIn("<link>", section)
 
     def test_the_store_section_lists_the_command(self):
-        self.assertIn("bin/canvas freeze  <ledger_id> --why TEXT", self.readme())
+        self.assertIn("bin/canvas freeze  <canvas-id> --why TEXT", self.readme())
 
     def test_what_the_store_does_not_do_says_it_does_not_unfreeze(self):
         self.assertIn(

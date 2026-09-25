@@ -2,23 +2,24 @@
 name: canvas
 description: >-
   Drive a Canvas — the small structured XML document that holds the current shared
-  understanding of one ledger-backed task between a person and the agents working on it.
-  Use whenever a task has a ledger row and you need to read what is already understood,
+  understanding of one task between a person and the agents working on it. A Canvas may
+  stand alone or use an identifier supplied by a task-ledger integration. Use whenever
+  you need to read what is already understood,
   record a decision or an open question, settle one, render the canvas for a person, or
   end it. Covers the whole safe workflow for `bin/canvas`: read first and carry the sha
   into `--base`, one node per edit, a `--why` a later reader can resolve, and never
   editing the XML by hand. Triggers on "canvas", "bin/canvas", `--why`, "the shared
   understanding of this task", a `Canvas-Base:` / `Canvas-Node:` / `Canvas-Frozen:` line,
-  or a ledger id that has a canvas.
+  or a Canvas identifier.
 allowed-tools: Bash, Read
 ---
 
 # Canvas
 
-A canvas is **one XML file per ledger row**, git-backed, holding what is currently
-understood about that task: the problem, what is expected, the decisions taken, the
-questions still open. The ledger projects a task's *lifecycle*; the canvas projects its
-*content*.
+A Canvas is **one XML file per Canvas identifier**, git-backed, holding what is currently
+understood about a task: the problem, what is expected, the decisions taken, and the
+questions still open. It works on its own; a ledger may optionally project the task's
+*lifecycle* while the Canvas projects its *content*.
 
 You own it. Nobody is going to run the CLI for you, and nobody is going to tidy it up
 afterwards.
@@ -46,8 +47,8 @@ whole point — it tells you whether to fix your edit or stop touching the canva
 | exit | meaning | what you do |
 |---|---|---|
 | `0` | it worked | carry on |
-| `1` | **your request is wrong against the store as it stands** — no canvas for that ledger id, no such node, the node you are writing moved since your `--base`, an unknown `--base` sha, the canvas is frozen, the document is invalid | re-read and re-decide. The refusal names the node and hands you its diff |
-| `2` | **the tool or its environment is wrong** — `OPENCLAW_WORKSPACE` unset or unusable, `git` or `xmllint` missing, a malformed ledger id, an absent or empty `--why`, a `--base` that is not a sha | **do not touch the canvas.** Fix the environment or the invocation. Retrying the edit will not help |
+| `1` | **your request is wrong against the store as it stands** — no Canvas for that identifier, no such node, the node you are writing moved since your `--base`, an unknown `--base` sha, the Canvas is frozen, the document is invalid | re-read and re-decide. The refusal names the node and hands you its diff |
+| `2` | **the tool or its environment is wrong** — `OPENCLAW_WORKSPACE` unset or unusable, `git` or `xmllint` missing, a malformed Canvas identifier, an absent or empty `--why`, a `--base` that is not a sha | **do not touch the canvas.** Fix the environment or the invocation. Retrying the edit will not help |
 
 A `1` is information about the task. A `2` is information about your machine. Do not
 report a `2` as "the canvas refused my edit".
@@ -59,14 +60,14 @@ pasted into a prompt at all.
 
 ```bash
 # 1. read — the first line is the sha you will write against
-$CANVAS read <ledger-id>
+$CANVAS read <canvas-id>
 # Canvas-Base: dd93708016b1eee07970a587147cab8ca7c6a5b8
 # <?xml version="1.0" ...
 
 # 2. decide
 
 # 3. write ONE node, naming that sha
-$CANVAS insert <ledger-id> --into root --type text \
+$CANVAS insert <canvas-id> --into root --type text \
   --text "..." \
   --why "..." \
   --base dd93708016b1eee07970a587147cab8ca7c6a5b8 \
@@ -131,7 +132,7 @@ requires `--href`, `<section>` requires `--title`.
 ## `--why` is the field that makes the canvas worth reading
 
 It is required, has no default, and lives in the commit subject and nowhere else.
-`bin/canvas history <ledger-id> <node-id>` is how a later reader asks what a node is *for*.
+`bin/canvas history <canvas-id> <node-id>` is how a later reader asks what a node is *for*.
 
 **The bar:** could a reader, months later, reading only this reason, tell what the node
 was for and decide whether to **honour** it or **explicitly retire** it.
@@ -194,31 +195,41 @@ alternatives it rejected: a `create` that **failed** never writes `task-ledger |
 all, so a canvas made by hand afterwards could never be called untouched, however long its
 row ran without a single step writing to it.
 
-## When to do what, over a ledger-backed task's life
+## When to do what over a Canvas's life
 
-### `create` — almost never yours
+### `create` — standalone by default, explicit integration when needed
 
-`bin/task-ledger open` creates the canvas, with the row's problem and expected value as its
-first two nodes. Run `create` by hand only when that failed — the row's live Basecamp
-comment says `canvas:failed` and stderr named the command to run. `create` refuses to
-overwrite an existing canvas (exit `1`).
+For a standalone Canvas, omit the identifier. The CLI mints a collision-safe identifier,
+prints it as `Canvas-ID`, and uses it for the stored file and every later command:
 
-    $CANVAS create <ledger-id> --problem "..." --expected-value "..."
+    created="$($CANVAS create --problem "..." --expected-value "...")"
+    printf '%s\n' "$created"
+    canvas_id="$(printf '%s\n' "$created" | sed -n 's/^Canvas-ID: //p')"
+    $CANVAS read "$canvas_id"
+
+An integration that already has a stable identifier supplies it positionally, unchanged:
+
+    $CANVAS create bc-10340467739-existing-task \
+      --problem "..." --expected-value "..."
+
+`bin/task-ledger open` uses that explicit form. If its automatic creation failed, the
+row's live Basecamp comment says `canvas:failed` and stderr names the repair command.
+`create` refuses to overwrite an existing Canvas (exit `1`).
 
 **Neither may be blank.** An absent, empty or whitespace-only `--problem` or
 `--expected-value` is exit `2` and writes nothing at all — no canvas, no commits, no
-minted ids — so the ledger id is still free. If that is why the row's `canvas:failed`
-fired, the repair is to run the command above with a problem and an expected value that
-say what they hold, not to open a second row.
+minted ids. A supplied identifier remains free to retry; with no supplied identifier,
+none has yet been minted. For an integrated row carrying `canvas:failed`, retry the exact
+explicit-id command with a problem and expected value that say what they hold.
 
 ### `read` — first thing in any step that touches the task
 
-    $CANVAS read <ledger-id>                    # sha, then the whole document
-    $CANVAS read <ledger-id> --id c4kc --id ezwq # those nodes and their subtrees
-    $CANVAS read <ledger-id> --type question     # every question
-    $CANVAS read <ledger-id> --provenance        # + who last wrote each node, and at which sha
-    $CANVAS read <ledger-id> --frozen            # + has this canvas ended, and why
-    $CANVAS read <ledger-id> --since <sha>       # + what changed since a sha you held
+    $CANVAS read <canvas-id>                    # sha, then the whole document
+    $CANVAS read <canvas-id> --id c4kc --id ezwq # those nodes and their subtrees
+    $CANVAS read <canvas-id> --type question     # every question
+    $CANVAS read <canvas-id> --provenance        # + who last wrote each node, and at which sha
+    $CANVAS read <canvas-id> --frozen            # + has this canvas ended, and why
+    $CANVAS read <canvas-id> --since <sha>       # + what changed since a sha you held
 
 `read` writes nothing, commits nothing and locks nothing — the answer can be stale the
 moment it prints. `--base` on the write is the only thing that refuses.
@@ -254,8 +265,8 @@ become one sentence and the argument stays in `history`. Not deletion.
 
 ### `render` — for people, one-way, never read back
 
-    $CANVAS render <ledger-id> > canvas.html          # standalone HTML page
-    $CANVAS render <ledger-id> --format comment       # block-level Markdown for a Basecamp comment
+    $CANVAS render <canvas-id> > canvas.html          # standalone HTML page
+    $CANVAS render <canvas-id> --format comment       # block-level Markdown for a Basecamp comment
 
 Both open with an index of every `<question>` and name the sha they were rendered from. A
 render is a read: it writes nothing and works on a frozen canvas. There is no `--output`;
@@ -266,12 +277,13 @@ than overwrites** if the file is already there, and `>> canvas.html` fails if it
 Use `>|` when you mean to replace, or a fresh filename. A render that silently did not
 replace the file is a stale page carrying a sha nobody checks.
 
-The `comment` projection is what the **ledger row** carries in the one live comment it
-rewrites in place. The row is its only author — do not post a rendered canvas yourself.
+The `comment` projection exists for integrations such as the task ledger, which carries it
+in one live Basecamp comment. When working through that integration, the row is the
+comment's only author — do not post a second rendered copy yourself.
 
 ### `history` — what a node is *for*
 
-    $CANVAS history <ledger-id> c4kc
+    $CANVAS history <canvas-id> c4kc
 
 Prints every edit that named that node, oldest first: sha, author, verb, reason. Edits made
 before a `move` are included, because a move keeps the id. Read this before you `replace`
@@ -279,7 +291,7 @@ something that looks wrong — it may be right for a reason the current text doe
 
 ### `freeze` — at `done` and at `abandoned`, and once
 
-    $CANVAS freeze <ledger-id> \
+    $CANVAS freeze <canvas-id> \
       --why "done: the delivered artifact is PR #26, merged 2026-09-24; nodes c4kc and ezwq carry the decisions it rests on"
 
 One commit, naming no node and changing no byte of the document: what it records is that
@@ -287,10 +299,11 @@ the canvas has ended and why. One verb for both endings — *done* and *abandone
 things a `--why` says. Afterwards every write verb is refused at exit `1`; `read`, `render`
 and `history` go on working.
 
-**There is no unfreeze.** A task that comes back gets a new ledger row and a new canvas — so
-a canvas ends when its *row* reaches a terminal state, never when you finish a step.
+**There is no unfreeze.** Resumed work gets a new Canvas identifier and a new Canvas.
 
-**Which means you almost certainly should not run it.** The ledger does it for you: `apply_transition` in `bin/task-ledger` freezes on `done` and on `abandoned`,
+For a standalone Canvas, you own this transition: freeze it when the work is done or
+abandoned. For a ledger-integrated Canvas, do not run it first. The ledger does it for you:
+`apply_transition` in `bin/task-ledger` freezes on `done` and on `abandoned`,
 both of them, composing the `--why` from the row's own gate text and authoring it
 `task-ledger | close` (ledger-orchestrator `docs/canvas-ends-at-terminal.md`).
 
@@ -300,10 +313,8 @@ closes — it is designed to close whether or not the freeze lands — but it re
 said the canvas ended properly. You get a defect in the record in exchange for a step that
 was already being taken for you.
 
-So run `freeze` by hand in exactly two cases:
+For an integrated Canvas, run `freeze` by hand only when:
 
-- **no ledger row is closing this canvas** — a scratch or sample canvas, or one whose row
-  predates the wiring; or
 - **the automatic freeze did not land** — the row closed carrying a `canvas:failed` event
   whose detail starts `freeze:`, and the ledger printed the exact command to run on stderr.
 
@@ -312,11 +323,12 @@ So run `freeze` by hand in exactly two cases:
 - **`bin/canvas-coherence`** — the post-write model-backed contradiction checker. Orchestration
   invokes it after a successful write; it writes its findings back as `<question>` nodes
   through the store like any other writer. You do not call it per edit. See `coherence.md`.
-- **The row's Basecamp comment** — the ledger row is the single author of it.
+- **An integrated row's Basecamp comment** — the ledger row is the single author of it.
 - **`bin/canvas-validate <file>`** — validating a file by hand, for when you are debugging
   the store rather than driving a task.
-- **The freeze at `done` and `abandoned`** — `bin/task-ledger` runs it, and running it first
-  is how you break it. See above.
+- **An integrated Canvas's freeze at `done` and `abandoned`** — `bin/task-ledger` runs it,
+  and running it first is how you break it. Standalone Canvases are different: you freeze
+  those yourself. See above.
 
 ## The three rules underneath all of this
 
