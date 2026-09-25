@@ -10,7 +10,7 @@ it is not chosen here.
 `state/canvas` is **one git repository** holding every ledger row's file.
 `node-identity.md` section 1 settles that: ids are unique across the whole
 repository, and the uniqueness check is the history itself with no path filter,
-so a repository per ledger id would path-scope that check by accident and hand
+so a repository per Canvas identifier would path-scope that check by accident and hand
 out an id another canvas already used.
 
 Every git invocation is pinned with `--git-dir` and `--work-tree`, never a bare
@@ -73,7 +73,7 @@ leading underscore is a convention and the guard is a refusal.
 history" — and `abandoned` "freezes it the same way, with the reason as the
 last edit". `freeze` is that edit, and the freeze is recorded where every
 reason in this store is already recorded: in the log, as one commit carrying
-`Canvas-Freeze: <ledger-id>`, whose subject is `freeze <ledger-id>: <why>` and
+`Canvas-Freeze: <canvas-id>`, whose subject is `freeze <canvas-id>: <why>` and
 which changes no byte of the document. Nothing is added to
 `schema/canvas.rng` — the vocabulary is closed and has one home — and `read`
 and `history` go on working on a frozen canvas exactly as they did, because
@@ -111,7 +111,7 @@ from canvas.validate import EnvironmentProblem, validate_file
 class Refusal(refusal.Refused):
     """The request is wrong against the store as it stands. Exit 1.
 
-    The canvas already exists; there is no canvas for that ledger id; the
+    The canvas already exists; there is no canvas for that Canvas identifier; the
     document is invalid. Re-read and re-decide. Carries the diagnostics that
     say which, where there are any.
 
@@ -133,10 +133,10 @@ class ToolProblem(refusal.Refused):
     """
 
 
-# A ledger id becomes a filename, so it has to be one. This is what stops
-# `canvas read ../../../etc/passwd` from escaping state/canvas/. Every ledger id
+# A Canvas identifier becomes a filename, so it has to be one. This is what stops
+# `canvas read ../../../etc/passwd` from escaping state/canvas/. Every Canvas identifier
 # in the live workspace matches: a hand-written slug, or bc-<todo-id>-<slug>.
-_LEDGER_ID = re.compile(r"[A-Za-z0-9._-]+\Z")
+_CANVAS_ID = re.compile(r"[A-Za-z0-9._-]+\Z")
 
 # node-identity.md section 1: four characters, the first a lowercase letter, the
 # remaining three from lowercase letters and digits with the visually confusable
@@ -227,17 +227,38 @@ def canvas_directory():
 
 
 def canvas_path(canvas_dir, ledger_id):
-    """The file for one ledger row, or a ToolProblem if the id is not one."""
-    if not _LEDGER_ID.match(ledger_id) or ledger_id.startswith("."):
+    """The file for one Canvas identifier, or a ToolProblem if unusable."""
+    if not _CANVAS_ID.match(ledger_id) or ledger_id.startswith("."):
         raise ToolProblem(
-            "not a usable ledger id: %r; a ledger id is one or more of "
+            "not a usable Canvas identifier: %r; a Canvas identifier is one or more of "
             "[A-Za-z0-9._-] and does not start with a dot" % ledger_id,
-            "re-run naming a ledger id of [A-Za-z0-9._-] that does not start "
+            "re-run naming a Canvas identifier of [A-Za-z0-9._-] that does not start "
             "with a dot; it becomes the name of a file in state/canvas, which "
             "is what stops one escaping that directory",
-            about=["ledger id %r" % ledger_id],
+            about=["Canvas identifier %r" % ledger_id],
         )
     return os.path.join(canvas_dir, ledger_id + ".xml")
+
+
+def _mint_canvas_id(canvas_dir):
+    """Mint a valid, collision-safe identifier for a standalone Canvas.
+
+    The random value is the identifier: once printed it is stable and every
+    later command addresses the same file with it. A pre-existing filesystem
+    entry of any kind counts as a collision, so creation never selects a name
+    that the store would have to overwrite or reinterpret.
+    """
+    for _ in range(_MINT_ATTEMPTS):
+        canvas_id = "canvas-%s" % secrets.token_hex(16)
+        if not os.path.lexists(canvas_path(canvas_dir, canvas_id)):
+            return canvas_id
+    raise ToolProblem(
+        "could not mint an unused Canvas identifier after %d attempts"
+        % _MINT_ATTEMPTS,
+        "inspect %s for unexpected identifier collisions and re-run; nothing "
+        "was written, committed or minted" % canvas_dir,
+        about=["canvas repository %s" % canvas_dir],
+    )
 
 
 # --------------------------------------------------------------------------
@@ -245,7 +266,7 @@ def canvas_path(canvas_dir, ledger_id):
 # --------------------------------------------------------------------------
 #
 # `read`, `history` and the four verbs each begin by asking the same three
-# questions of the store — is there a canvas for this ledger id, is there a
+# questions of the store — is there a canvas for this Canvas identifier, is there a
 # repository, does it have a commit — and each used to answer them with its own
 # copy of the same sentence. Three copies of one string is three places for the
 # next action to be added to two of.
@@ -277,7 +298,7 @@ def _nothing_at(ledger_id, path, node_id=None):
     """Nothing is at `path`. The exit-1 refusal, wherever `ENOENT` is the answer.
 
     `README.md` section *Exit codes* maps exit `1` to, among other things,
-    "there is genuinely no canvas for that ledger id (the filesystem answered
+    "there is genuinely no canvas for that Canvas identifier (the filesystem answered
     `ENOENT`, not that it would not say)". That is one fact, and it arrives by
     two routes: the existence check below asks and is told, and an `open` or a
     `parse` further down raises `FileNotFoundError` when the canvas is removed
@@ -292,12 +313,12 @@ def _nothing_at(ledger_id, path, node_id=None):
     """
     if ledger_id is not None:
         return Refusal(
-            "no canvas for ledger id %s: nothing at %s" % (ledger_id, path),
+            "no canvas for Canvas identifier %s: nothing at %s" % (ledger_id, path),
             "create it with `bin/canvas create %s --problem \"<the problem>\" "
-            "--expected-value \"<the expected value>\"`, or re-run with the ledger "
-            "id whose canvas you meant" % ledger_id,
+            "--expected-value \"<the expected value>\"`, or re-run with the "
+            "Canvas identifier you meant" % ledger_id,
             nodes=[node_id] if node_id is not None else [],
-            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+            about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
         )
     return Refusal(
         "there is no canvas at %s%s: nothing is there"
@@ -307,7 +328,7 @@ def _nothing_at(ledger_id, path, node_id=None):
             if node_id is None
             else ", so there is nothing for %s to be one edit of" % node_id,
         ),
-        "create the canvas first, with `bin/canvas create <ledger-id> "
+        "create the canvas first, with `bin/canvas create <canvas-id> "
         "--problem \"<the problem>\" --expected-value \"<the expected value>\"`, "
         "and then edit it one node at a time; nothing was written and nothing "
         "was committed",
@@ -317,12 +338,12 @@ def _nothing_at(ledger_id, path, node_id=None):
 
 
 def _no_canvas(ledger_id, path):
-    """No canvas for that ledger id. A fact about the store, so exit 1.
+    """No canvas for that Canvas identifier. A fact about the store, so exit 1.
 
     Unless it is not a fact. `os.path.isfile` answers False for a canvas that
     is not there, for one this process is not allowed to look for, and for a
     directory or a symlink loop sitting where the canvas belongs — four
-    different states flattened into one bit, and "no canvas for that ledger id"
+    different states flattened into one bit, and "no canvas for that Canvas identifier"
     is true of exactly one of them. The others make it a false statement whose
     next action, `create` it, provably does not succeed: `create` refuses in
     turn, at a different exit code, saying something different again.
@@ -347,7 +368,7 @@ def _no_canvas(ledger_id, path):
         return _nothing_at(ledger_id, path)
     except OSError as error:
         return ToolProblem(
-            "cannot tell whether there is a canvas for ledger id %s: looking "
+            "cannot tell whether there is a canvas for Canvas identifier %s: looking "
             "at %s was refused: %s"
             % (ledger_id, path, refusal.os_condition(error)),
             refusal.os_next_action(
@@ -357,7 +378,7 @@ def _no_canvas(ledger_id, path):
                     "canvas exists is still unknown"
                 ),
             ),
-            about=["ledger id %s" % ledger_id, "canvas %s" % path]
+            about=["Canvas identifier %s" % ledger_id, "canvas %s" % path]
             + refusal.os_about(error, unless=["canvas %s" % path]),
         )
     if stat.S_ISREG(found.st_mode):
@@ -365,24 +386,24 @@ def _no_canvas(ledger_id, path):
         # in between. Not a request to re-decide: the same request may well
         # work now.
         return ToolProblem(
-            "the canvas for ledger id %s appeared at %s between the check for "
+            "the canvas for Canvas identifier %s appeared at %s between the check for "
             "it and the look at it" % (ledger_id, path),
             "re-run the same command; the canvas is there now, and this "
             "refusal is the tool declining to act on a store that changed "
             "under it rather than guess which state it meant",
-            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+            about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
         )
     # Something is there. "Nothing at <path>" would be false, and `create`,
     # which is what a caller told there is nothing would reach for, refuses
     # this with a different message again.
     return ToolProblem(
-        "there is no canvas for ledger id %s at %s, but there is something "
+        "there is no canvas for Canvas identifier %s at %s, but there is something "
         "there: %s" % (ledger_id, path, _what_is_there(found.st_mode)),
         "move %s out of the way — `ls -ld %s` shows what it is — and then "
         "`bin/canvas create %s --problem \"<the problem>\" --expected-value "
         "\"<the expected value>\"`; a canvas is a regular file and this store "
         "will not write over whatever that is" % (path, path, ledger_id),
-        about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
     )
 
 
@@ -390,7 +411,7 @@ def _not_a_repository(canvas_dir, wanted):
     """`state/canvas` is not a git repository. The tool's world is wrong: exit 2."""
     return ToolProblem(
         "%s is not a git repository, so it has no %s" % (canvas_dir, wanted),
-        "make the first canvas with `bin/canvas create <ledger-id> --problem "
+        "make the first canvas with `bin/canvas create <canvas-id> --problem "
         "\"<the problem>\" --expected-value \"<the expected value>\"`; that is "
         "the only thing here that initialises the repository, and a read never "
         "writes one",
@@ -417,7 +438,7 @@ def _no_repository_at(canvas_dir, wanted):
         "%s is not a git repository: %s is not there, so there is no answer "
         "here to %s it"
         % (canvas_dir, os.path.join(canvas_dir, ".git"), wanted),
-        "make the first canvas with `bin/canvas create <ledger-id> --problem "
+        "make the first canvas with `bin/canvas create <canvas-id> --problem "
         "\"<the problem>\" --expected-value \"<the expected value>\"`; that is "
         "the only thing here that initialises the repository, and a read never "
         "writes one; nothing was read, written or committed",
@@ -433,7 +454,7 @@ def _no_commits(canvas_dir, wanted):
     """The repository is there and empty. Also exit 2, and the same answer."""
     return ToolProblem(
         "%s has no commits, so it has no %s" % (canvas_dir, wanted),
-        "make the first canvas with `bin/canvas create <ledger-id> --problem "
+        "make the first canvas with `bin/canvas create <canvas-id> --problem "
         "\"<the problem>\" --expected-value \"<the expected value>\"`; until one "
         "commit exists there is no sha for anything to be written against",
         about=["canvas repository %s" % canvas_dir],
@@ -505,7 +526,7 @@ def _cannot_read(path, error, ledger_id=None, node_id=None):
     """
     if getattr(error, "errno", None) == errno.ENOENT:
         return _nothing_at(ledger_id, path, node_id=node_id)
-    about = (["ledger id %s" % ledger_id] if ledger_id is not None else []) + [
+    about = (["Canvas identifier %s" % ledger_id] if ledger_id is not None else []) + [
         "canvas %s" % path
     ]
     return ToolProblem(
@@ -534,7 +555,7 @@ def _cannot_write(path, error, node_id=None):
 
     Exit `2` for every errno, `ENOENT` included, and that is where this differs
     from `_cannot_read`. `ENOENT` on a *read* is the documented "there is
-    genuinely no canvas for that ledger id", which a caller acts on by creating
+    genuinely no canvas for that Canvas identifier", which a caller acts on by creating
     it. `ENOENT` on a write is `state/canvas` itself going missing under the
     tool mid-write — a store that moved, not a request that was wrong — which
     `README.md` lists under `2` as "a `state/canvas` that cannot be written or
@@ -995,7 +1016,7 @@ def _log(canvas_dir, arguments, complaint):
                 # is `[""]`, and every reader below asks `<id> in record.named`,
                 # so that empty id made the two commits carrying no such
                 # trailer — the `create` and the `freeze` — match a query for
-                # `""`. That is how `history <ledger-id> ""` came to exit `0`
+                # `""`. That is how `history <canvas-id> ""` came to exit `0`
                 # and print the `create` commit: not a rule anybody wrote, but
                 # a decoding accident the matcher could not see past. Two
                 # readers had already worked around it where it reached them —
@@ -1060,7 +1081,7 @@ def _commits_in(canvas_dir, since, path):
 # `abandoned` "freezes it the same way, with the reason as the last edit". An
 # edit in this store is a commit and a reason lives in the commit subject and
 # nowhere else, so the freeze is a commit too: one commit carrying
-# `Canvas-Freeze: <ledger-id>`, subject `freeze <ledger-id>: <why>`, changing
+# `Canvas-Freeze: <canvas-id>`, subject `freeze <canvas-id>: <why>`, changing
 # no byte of the document.
 #
 # **It is not in the document, and that is the decision and not an oversight.**
@@ -1157,13 +1178,13 @@ def _refuse_if_frozen(canvas_dir, ledger_id, path, verb, node_id=None):
             ended.reason,
         ),
         "read it with `bin/canvas read %s`; a freeze is final, so if this "
-        "row's work has restarted, make a new canvas for the new ledger row "
-        "with `bin/canvas create <new-ledger-id> --problem \"<the problem>\" "
+        "work has restarted, make a new Canvas with `bin/canvas create "
+        "<new-canvas-id> --problem \"<the problem>\" "
         "--expected-value \"<the expected value>\"` and link back to this one"
         % ledger_id,
         nodes=[node_id] if node_id is not None else [],
         about=[
-            "ledger id %s" % ledger_id,
+            "Canvas identifier %s" % ledger_id,
             "canvas %s" % path,
             "freeze %s" % ended.sha,
             "author %s" % ended.author,
@@ -1451,14 +1472,22 @@ def require_first_nodes(problem, expected_value, ledger_id):
     ):
         if content is not None and content.strip():
             continue
+        create = (
+            "bin/canvas create %s" % ledger_id
+            if ledger_id is not None
+            else "bin/canvas create"
+        )
+        about = ["option %s" % flag]
+        if ledger_id is not None:
+            about.append("Canvas identifier %s" % ledger_id)
         raise ToolProblem(
             "%s is required and must not be empty: a canvas is born holding "
             "the problem and the expected value, and a blank one is "
             "indistinguishable from a lost one" % flag,
-            "re-run `bin/canvas create %s` with %s saying what it holds; "
+            "re-run `%s` with %s saying what it holds; "
             "nothing was written, committed or minted, and no canvas exists "
-            "yet" % (ledger_id, flag),
-            about=["option %s" % flag, "ledger id %s" % ledger_id],
+            "yet" % (create, flag),
+            about=about,
         )
     return problem, expected_value
 
@@ -1508,7 +1537,7 @@ def require_node_id(node_id, ledger_id):
             "if it came from a variable, that variable was empty. "
             "`bin/canvas read %s` prints the canvas and every id in it"
             % (ledger_id, ledger_id),
-            about=["argument node-id", "ledger id %s" % ledger_id],
+            about=["argument node-id", "Canvas identifier %s" % ledger_id],
         )
     return node_id
 
@@ -1550,7 +1579,7 @@ def preflight(path, ledger_id, contents):
             "`bin/canvas create %s` with a --problem and an --expected-value "
             "that XML can hold. Nothing was written and no canvas exists yet"
             % ledger_id,
-            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+            about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
             details=problems,
         )
 
@@ -1685,7 +1714,7 @@ def _one_node_only(path, root, node_id):
                 "refusing to write %s in a commit naming %s: there is no canvas "
                 "there for that node to be one edit of. A canvas is created by "
                 "`create`, and only its birth commit names no node" % (path, node_id),
-                "create the canvas first, with `bin/canvas create <ledger-id> "
+                "create the canvas first, with `bin/canvas create <canvas-id> "
                 "--problem \"<the problem>\" --expected-value \"<the expected "
                 "value>\"`, and then edit it one node at a time",
                 nodes=[node_id],
@@ -1712,7 +1741,7 @@ def _one_node_only(path, root, node_id):
             "that path and it is not a regular file, so it is not a canvas: %s"
             % (path, node_id, _what_is_there(os.stat(path).st_mode)),
             "move %s out of the way — `ls -ld %s` shows what it is — and then "
-            "create the canvas with `bin/canvas create <ledger-id> --problem "
+            "create the canvas with `bin/canvas create <canvas-id> --problem "
             "\"<the problem>\" --expected-value \"<the expected value>\"`; "
             "nothing was written and nothing was committed" % (path, path),
             nodes=[node_id],
@@ -1833,9 +1862,9 @@ def _a_canvas_is_being_ended(path, root):
             "refusing to freeze %s: there is no canvas there to end. A canvas "
             "is created by `create`, and a freeze is the last edit it takes"
             % path,
-            "create the canvas first, with `bin/canvas create <ledger-id> "
+            "create the canvas first, with `bin/canvas create <canvas-id> "
             "--problem \"<the problem>\" --expected-value \"<the expected "
-            "value>\"`, or re-run naming the ledger id whose canvas you meant; "
+            "value>\"`, or re-run naming the Canvas identifier whose canvas you meant; "
             "nothing was written and nothing was committed",
             about=["canvas %s" % path],
         )
@@ -1893,7 +1922,7 @@ def _a_canvas_is_being_ended(path, root):
 def _inside_the_store(canvas_dir, path):
     """A canvas is written at its own path in the canvas repository, or not at all.
 
-    `canvas_path` already keeps a ledger id from escaping `state/canvas`; this
+    `canvas_path` already keeps a Canvas identifier from escaping `state/canvas`; this
     keeps a hand-supplied path from doing it, so that the file a write produces
     is always one `git add` can stage and always one `read` can find again.
     """
@@ -1901,10 +1930,10 @@ def _inside_the_store(canvas_dir, path):
     where = os.path.realpath(os.path.dirname(os.path.abspath(path)))
     if where != home or not os.path.basename(path).endswith(".xml"):
         raise ToolProblem(
-            "refusing to write %s: a canvas is written as <ledger-id>.xml "
+            "refusing to write %s: a canvas is written as <canvas-id>.xml "
             "inside %s and nowhere else" % (path, canvas_dir),
-            "write it as %s/<ledger-id>.xml; `bin/canvas` derives that path "
-            "from the ledger id, which is why no command line can express "
+            "write it as %s/<canvas-id>.xml; `bin/canvas` derives that path "
+            "from the Canvas identifier, which is why no command line can express "
             "this one" % canvas_dir,
             about=["path %s" % path, "canvas repository %s" % canvas_dir],
         )
@@ -2145,7 +2174,7 @@ def _write_and_commit(
     for the third time on the same argument. `_open_canvas` answers the freeze
     first, so a command line hears about it before an `insert` mints an id;
     this call site is what binds a caller that never goes near
-    `canvas/cli.py`. `freeze` is the ledger id this commit is freezing, or None
+    `canvas/cli.py`. `freeze` is the Canvas identifier this commit is freezing, or None
     for every other write — the one write allowed to happen while the freeze is
     being recorded is the one recording it, and a second `freeze` is refused by
     the guard above like anything else.
@@ -2187,7 +2216,7 @@ def _write_and_commit(
     )
     _inside_the_store(canvas_dir, path)
     # `_inside_the_store` has just settled that the basename is `<id>.xml`
-    # inside the canvas repository, which is what makes this the ledger id
+    # inside the canvas repository, which is what makes this the Canvas identifier
     # rather than a guess at one.
     _refuse_if_frozen(
         canvas_dir,
@@ -2356,13 +2385,13 @@ def _write_and_commit(
 
 
 def create(ledger_id, problem, expected_value, author=None):
-    """Make the canvas for a ledger row, with its first nodes. Return (path, sha).
+    """Make a Canvas with its first nodes, minting its identifier when absent.
 
     Three commits, not one:
 
-        create <ledger_id>: born at open, root only
-        insert <id>: the problem the ledger row states
-        insert <id>: the expected value the ledger row states
+        create <canvas-id>: Canvas created, root only
+        insert <id>: the problem this Canvas starts with
+        insert <id>: the expected value this Canvas starts with
 
     `node-identity.md` section 4 requires it: "The two nodes the ledger's `open`
     contributes — the problem and the expected value — arrive as two ordinary
@@ -2403,6 +2432,8 @@ def create(ledger_id, problem, expected_value, author=None):
     problem, expected_value = require_first_nodes(problem, expected_value, ledger_id)
 
     canvas_dir = canvas_directory()
+    if ledger_id is None:
+        ledger_id = _mint_canvas_id(canvas_dir)
     path = canvas_path(canvas_dir, ledger_id)
     ensure_repository(canvas_dir)
 
@@ -2419,12 +2450,12 @@ def create(ledger_id, problem, expected_value, author=None):
                 "\"%s\" — so it is read-only history; this command creates, it "
                 "does not overwrite" % (ledger_id, path, ended.sha, ended.reason),
                 "read it with `bin/canvas read %s`; a freeze is final, so if "
-                "this row's work has restarted, make a new canvas for the new "
-                "ledger row with `bin/canvas create <new-ledger-id> --problem "
+                "this work has restarted, make a new Canvas with `bin/canvas "
+                "create <new-canvas-id> --problem "
                 "\"<the problem>\" --expected-value \"<the expected value>\"` "
                 "and link back to this one" % ledger_id,
                 about=[
-                    "ledger id %s" % ledger_id,
+                    "Canvas identifier %s" % ledger_id,
                     "canvas %s" % path,
                     "freeze %s" % ended.sha,
                     "author %s" % ended.author,
@@ -2438,7 +2469,7 @@ def create(ledger_id, problem, expected_value, author=None):
             "time with insert, replace, remove or move, each with its own "
             "--why" % ledger_id,
             about=[
-                "ledger id %s" % ledger_id,
+                "Canvas identifier %s" % ledger_id,
                 "canvas %s" % path,
                 "sha %s" % head_sha(canvas_dir),
             ],
@@ -2456,13 +2487,13 @@ def create(ledger_id, problem, expected_value, author=None):
         root,
         "create",
         ledger_id,
-        "born at open, root only",
+        "Canvas created, root only",
         author,
     )
 
     first_nodes = (
-        (problem, "the problem the ledger row states"),
-        (expected_value, "the expected value the ledger row states"),
+        (problem, "the problem this Canvas starts with"),
+        (expected_value, "the expected value this Canvas starts with"),
     )
     minted = []
     for content, reason in first_nodes:
@@ -2560,7 +2591,7 @@ def _tree_to_read(path, ledger_id):
             "reports it — and read again; `bin/canvas read %s` with no "
             "selector prints the file as it stands. Nothing was written"
             % (path, ledger_id),
-            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+            about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
         )
     except OSError as error:
         raise _cannot_read(path, error, ledger_id=ledger_id)
@@ -2587,7 +2618,7 @@ def _no_such_nodes(ledger_id, path, missing):
         "of those, or select by type with `bin/canvas read %s --type <name>`. "
         "Nothing was written" % (ledger_id, ledger_id),
         nodes=list(missing),
-        about=["ledger id %s" % ledger_id, "canvas %s" % path],
+        about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
     )
 
 
@@ -2722,7 +2753,7 @@ def history(ledger_id, node_id):
     makes "no such node in this canvas" a true statement rather than a guess,
     and the command names the canvas anyway.
 
-    Refuses when there is no canvas for that ledger id, and — separately, and
+    Refuses when there is no canvas for that Canvas identifier, and — separately, and
     saying which — when no commit in that canvas names the node.
 
     **A blank node id is refused before any of that**, at exit `2`, as a
@@ -2750,7 +2781,7 @@ def history(ledger_id, node_id):
             "`bin/canvas read %s` prints the canvas and every id in it; ask "
             "one of those for its history" % ledger_id,
             nodes=[node_id],
-            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+            about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
         )
     return edits
 
@@ -2802,7 +2833,7 @@ def history(ledger_id, node_id):
 #: What `--base` may be: the sha a read handed out, or an abbreviation of one
 #: git can still resolve. Anything else is the invocation being wrong rather
 #: than a fact about the store, which is `README.md`'s own call for a malformed
-#: ledger id — that stays `2` while a well-formed one naming nothing is `1`.
+#: Canvas identifier — that stays `2` while a well-formed one naming nothing is `1`.
 _A_SHA = re.compile(r"\A[0-9a-fA-F]{4,40}\Z")
 
 
@@ -2823,7 +2854,7 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id, option="--base
     - **A well-formed sha this repository never handed out** -> `Refusal`, exit
       1. That is a true statement about the store as it stands, and the answer
       is to re-read and re-decide, exactly as it is for "no canvas for this
-      ledger id" and "no node with id X in this canvas".
+      Canvas identifier" and "no node with id X in this canvas".
     - **Known, but not an ancestor of the head** -> `Refusal`, exit 1. The
       canvas repository has one line of history and nothing in this store ever
       creates a branch, so a known non-ancestor came from a rewritten history
@@ -2844,7 +2875,7 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id, option="--base
             "Canvas-Base: line, or %s. Nothing was written"
             % (ledger_id, instead),
             nodes=[node_id] if node_id is not None else [],
-            about=["ledger id %s" % ledger_id, "option %s %r" % (option, declared)],
+            about=["Canvas identifier %s" % ledger_id, "option %s %r" % (option, declared)],
         )
     resolved = _git(
         canvas_dir, "rev-parse", "--verify", "--quiet", "%s^{commit}" % declared
@@ -2870,7 +2901,7 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id, option="--base
             "read the canvas again with `bin/canvas read %s` and use the sha "
             "it prints. Nothing was written" % ledger_id,
             nodes=[node_id] if node_id is not None else [],
-            about=["ledger id %s" % ledger_id, "option %s %s" % (option, declared)],
+            about=["Canvas identifier %s" % ledger_id, "option %s %s" % (option, declared)],
         )
     base = resolved.stdout.decode("utf-8", "replace").strip()
     if base != head:
@@ -2896,7 +2927,7 @@ def _resolve_base(canvas_dir, declared, head, ledger_id, node_id, option="--base
                 "sha it prints. Nothing was written" % ledger_id,
                 nodes=[node_id] if node_id is not None else [],
                 about=[
-                    "ledger id %s" % ledger_id,
+                    "Canvas identifier %s" % ledger_id,
                     "option %s %s" % (option, base),
                     "sha %s, the head" % head,
                 ],
@@ -3034,7 +3065,7 @@ def _check_base(canvas_dir, path, ledger_id, node_id, head, declared):
             % ledger_id,
             nodes=[node_id],
             about=[
-                "ledger id %s" % ledger_id,
+                "Canvas identifier %s" % ledger_id,
                 "canvas %s" % path,
                 "option --base %s" % declared,
                 "sha %s, the head" % head,
@@ -3099,7 +3130,7 @@ def _open_canvas(ledger_id, verb, node_id=None):
     A stored document that is not well-formed is a `Refusal` and not a
     `ToolProblem`: the store is wrong, the tool is fine, and the answer is to
     repair the file rather than to stop touching canvases. That is the same
-    call `README.md` already makes for "no canvas for this ledger id".
+    call `README.md` already makes for "no canvas for this Canvas identifier".
 
     **A frozen canvas is answered here**, before `_check_base` runs and before
     `insert` mints an id, so that a write against a canvas that has ended
@@ -3125,7 +3156,7 @@ def _open_canvas(ledger_id, verb, node_id=None):
             "%s" % error,
             "repair the XML at the line named above — `bin/canvas-validate %s` "
             "reports it — and re-run; nothing was written" % path,
-            about=["ledger id %s" % ledger_id, "canvas %s" % path],
+            about=["Canvas identifier %s" % ledger_id, "canvas %s" % path],
         )
     except OSError as error:
         # A canvas that is there and unreadable is not a wrong request, so it
@@ -3149,7 +3180,7 @@ def _addressed(root, node_id, ledger_id):
             "name one of the canvas's own nodes instead — `bin/canvas read %s` "
             "prints every id in it — or use --into root to place a node inside "
             "the root, which is the one thing root does name" % ledger_id,
-            about=["ledger id %s" % ledger_id, "position root, the <canvas> element"],
+            about=["Canvas identifier %s" % ledger_id, "position root, the <canvas> element"],
         )
     node = document.find(root, node_id)
     if node is None:
@@ -3159,7 +3190,7 @@ def _addressed(root, node_id, ledger_id):
             "`bin/canvas read %s` prints the canvas and every id in it; re-run "
             "naming one of those" % ledger_id,
             nodes=[node_id],
-            about=["ledger id %s" % ledger_id],
+            about=["Canvas identifier %s" % ledger_id],
         )
     return node
 
@@ -3194,7 +3225,7 @@ def _one_position(after, into, ledger_id=None, moving=None):
             ],
             about=(
                 [each for each in given if each]
-                + (["ledger id %s" % ledger_id] if ledger_id else [])
+                + (["Canvas identifier %s" % ledger_id] if ledger_id else [])
             )
             or ["option --after", "option --into"],
         )
@@ -3204,7 +3235,7 @@ def _place(root, node, after, into, ledger_id, moving=None):
     """Put the node at the named position, or refuse naming every node in hand.
 
     `canvas/document.py` composes the problem and has never heard of a ledger
-    id, so it says "this canvas" and cannot say which. The ledger id is added
+    id, so it says "this canvas" and cannot say which. The Canvas identifier is added
     here, where it is known, rather than taught to the document module.
 
     `moving` is the id of the node being placed **when that node is already a
@@ -3219,7 +3250,7 @@ def _place(root, node, after, into, ledger_id, moving=None):
     attempt mints a different one. `Canvas-Node:` means "a node of this canvas"
     everywhere else in the tool, and printing a discarded draw under it would
     hand an agent an id it can neither look up nor reuse. That refusal names
-    the ledger id and the position instead, which are the two things about it
+    the Canvas identifier and the position instead, which are the two things about it
     that are true.
     """
     try:
@@ -3239,7 +3270,7 @@ def _place(root, node, after, into, ledger_id, moving=None):
                 for each in (moving, named)
                 if each is not None and each != document.ROOT
             ],
-            about=["ledger id %s" % ledger_id, "position %s" % named],
+            about=["Canvas identifier %s" % ledger_id, "position %s" % named],
         )
 
 
@@ -3279,7 +3310,7 @@ def insert(
     why = require_reason(
         why,
         nodes=[each for each in (after, into) if each is not None],
-        about=["ledger id %s" % ledger_id],
+        about=["Canvas identifier %s" % ledger_id],
         # An `insert` has no target yet: its id is minted below, after this
         # check, so there is no id of its own for the reason to be excused by.
         target=None,
@@ -3363,7 +3394,7 @@ def replace(
     N children" inexpressible rather than merely refused.
     """
     why = require_reason(
-        why, nodes=[node_id], about=["ledger id %s" % ledger_id], target=node_id
+        why, nodes=[node_id], about=["Canvas identifier %s" % ledger_id], target=node_id
     )
     canvas_dir, path, root, head = _open_canvas(ledger_id, "replace", node_id)
     # Before `_addressed`, so that a node *removed* since `--base` is the hard
@@ -3383,7 +3414,7 @@ def replace(
             "empty node; every child keeps its id and its whole history across "
             "the move",
             nodes=[node_id] + [child.get("id") for child in children if child.get("id")],
-            about=["ledger id %s" % ledger_id],
+            about=["Canvas identifier %s" % ledger_id],
         )
     if children and text is not None:
         raise Refusal(
@@ -3394,7 +3425,7 @@ def replace(
             "replace each child with its own --why instead, one node at a "
             "time; a container's own text is not a thing this vocabulary has",
             nodes=[node_id] + [child.get("id") for child in children if child.get("id")],
-            about=["ledger id %s" % ledger_id],
+            about=["Canvas identifier %s" % ledger_id],
         )
 
     if author is None:
@@ -3448,7 +3479,7 @@ def remove(ledger_id, node_id, why, author=None, base=None):
     first, each removal with its own reason.
     """
     why = require_reason(
-        why, nodes=[node_id], about=["ledger id %s" % ledger_id], target=node_id
+        why, nodes=[node_id], about=["Canvas identifier %s" % ledger_id], target=node_id
     )
     canvas_dir, path, root, head = _open_canvas(ledger_id, "remove", node_id)
     news = _check_base(canvas_dir, path, ledger_id, node_id, head, base)
@@ -3464,7 +3495,7 @@ def remove(ledger_id, node_id, why, author=None, base=None):
             "node; a cascading delete would let those children vanish in a "
             "commit no query on them ever returns",
             nodes=[node_id] + [child.get("id") for child in children if child.get("id")],
-            about=["ledger id %s" % ledger_id],
+            about=["Canvas identifier %s" % ledger_id],
         )
 
     if author is None:
@@ -3503,7 +3534,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
     why = require_reason(
         why,
         nodes=[each for each in (node_id, after, into) if each is not None],
-        about=["ledger id %s" % ledger_id],
+        about=["Canvas identifier %s" % ledger_id],
         target=node_id,
     )
     _one_position(after, into, ledger_id, moving=node_id)
@@ -3522,7 +3553,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
             "naming --after <node-id> or --into <container-id> from those, "
             "where 'root' names the canvas itself" % ledger_id,
             nodes=[node_id, target_id],
-            about=["ledger id %s" % ledger_id],
+            about=["Canvas identifier %s" % ledger_id],
         )
     if document.contains(node, target):
         raise Refusal(
@@ -3538,7 +3569,7 @@ def move(ledger_id, node_id, why, after=None, into=None, author=None, base=None)
             "prints the tree — or move %s out from under it first, with its "
             "own --why" % (node_id, ledger_id, target_id),
             nodes=[node_id, target_id],
-            about=["ledger id %s" % ledger_id],
+            about=["Canvas identifier %s" % ledger_id],
         )
 
     if author is None:
@@ -3602,7 +3633,7 @@ def freeze(ledger_id, why, author=None):
     """
     why = require_reason(
         why,
-        about=["ledger id %s" % ledger_id],
+        about=["Canvas identifier %s" % ledger_id],
         # A freeze names no node, so there is no id of its own for a reason to
         # be excused by — the back-reference guard is very slightly stricter
         # here than on an editing verb, and that is the right way round for the

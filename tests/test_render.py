@@ -896,7 +896,7 @@ class RenderRefusesInTheShapeEveryRefusalTakes(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertEqual("", stdout)
         self.assertRefusalShape(stderr, 1)
-        self.assertIn("Canvas-About: ledger id no-such-row", stderr)
+        self.assertIn("Canvas-About: Canvas identifier no-such-row", stderr)
 
     def test_an_invalid_stored_canvas_is_one_and_nothing_is_rendered(self):
         # A projection of a document that breaks the grammar would assert a
@@ -1235,7 +1235,7 @@ class TheCommentProjectionIsAReadLikeThePage(unittest.TestCase):
         )
         self.assertEqual(1, code)
         self.assertEqual("", stdout)
-        self.assertIn("Canvas-About: ledger id no-such-row", stderr)
+        self.assertIn("Canvas-About: Canvas identifier no-such-row", stderr)
 
     def test_a_form_this_tool_does_not_have_is_refused(self):
         build(self.workspace, "a-row", "none")

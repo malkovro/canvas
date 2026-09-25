@@ -2,15 +2,15 @@
 
 Nine subcommands, and no more:
 
-    canvas create  <ledger_id> --problem TEXT --expected-value TEXT
-    canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
-    canvas render  <ledger_id> [--format page|comment]
-    canvas history <ledger_id> <node-id>
-    canvas replace <ledger_id> <node-id> --why TEXT [--base SHA]
-    canvas insert  <ledger_id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
-    canvas remove  <ledger_id> <node-id> --why TEXT [--base SHA]
-    canvas move    <ledger_id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
-    canvas freeze  <ledger_id> --why TEXT
+    canvas create  [<canvas-id>] --problem TEXT --expected-value TEXT
+    canvas read    <canvas-id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
+    canvas render  <canvas-id> [--format page|comment]
+    canvas history <canvas-id> <node-id>
+    canvas replace <canvas-id> <node-id> --why TEXT [--base SHA]
+    canvas insert  <canvas-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
+    canvas remove  <canvas-id> <node-id> --why TEXT [--base SHA]
+    canvas move    <canvas-id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA]
+    canvas freeze  <canvas-id> --why TEXT
 
 Still **four editing verbs**, and now two writes that are not one of them:
 `create`, which is the birth of a canvas, and `freeze`, which is its end. A
@@ -134,12 +134,14 @@ def _create(args):
     The two existing lines are unchanged and in their existing order, below.
     """
     path, sha, problem_id, value_id = store.create(
-        args.ledger_id, args.problem, args.expected_value, args.author
+        args.canvas_id, args.problem, args.expected_value, args.author
     )
+    canvas_id = os.path.basename(path)[: -len(".xml")]
+    identifier = "Canvas-ID: %s\n" % canvas_id if args.canvas_id is None else ""
     sys.stdout.write(
-        "Canvas-Problem: %s\nCanvas-Expected-Value: %s\n"
+        "%sCanvas-Problem: %s\nCanvas-Expected-Value: %s\n"
         "Canvas-Base: %s\nCanvas-File: %s\n"
-        % (problem_id, value_id, sha, path)
+        % (identifier, problem_id, value_id, sha, path)
     )
     return 0
 
@@ -177,7 +179,7 @@ def _read(args):
     `sed -n '/^<?xml/,$p'` is the document alone under any combination of flags.
     """
     sha, body, problems, header = store.read(
-        args.ledger_id,
+        args.canvas_id,
         node_ids=args.node_ids,
         node_types=args.node_types,
         since=args.since,
@@ -199,18 +201,18 @@ def _read(args):
     # The path is re-derived rather than returned, because both calls have
     # already succeeded by the time there is anything to say: the read found
     # the file there.
-    path = store.canvas_path(store.canvas_directory(), args.ledger_id)
+    path = store.canvas_path(store.canvas_directory(), args.canvas_id)
     _refuse(
         refusal.Refused(
             "the canvas for %s is invalid: it is printed above, and the "
-            "diagnostics below say where" % args.ledger_id,
+            "diagnostics below say where" % args.canvas_id,
             "repair %s: each diagnostic above names the line, and the node "
             "where the document parses at all. A node the schema refuses is "
             "corrected with `bin/canvas replace %s <node-id> --why \"<why>\"`, "
             "one node at a time; XML that will not parse has to be repaired in "
             "the file itself. What a canvas node may be is written in "
-            "schema/canvas.rng and nowhere else" % (path, args.ledger_id),
-            about=["ledger id %s" % args.ledger_id, "canvas %s" % path],
+            "schema/canvas.rng and nowhere else" % (path, args.canvas_id),
+            about=["Canvas identifier %s" % args.canvas_id, "canvas %s" % path],
             details=problems,
         ),
         1,
@@ -230,7 +232,7 @@ def _render(args):
     plain text above the doctype would be a defect in the artifact. The sha is
     inside the page, in its header, where a reader of the page can see it.
 
-    So `bin/canvas render <ledger-id> > canvas.html` is how it reaches a file,
+    So `bin/canvas render <canvas-id> > canvas.html` is how it reaches a file,
     and where that file goes is the shell's business. There is no `--output`:
     a projection this command could write anywhere is a projection somebody
     eventually writes into `state/canvas`.
@@ -240,7 +242,7 @@ def _render(args):
     row rewriting its own live comment — reads that stdout and puts it in the
     comment it was already writing. Nothing here knows Basecamp exists.
     """
-    sys.stdout.write(renderer.render(args.ledger_id, getattr(args, "format", renderer.PAGE)))
+    sys.stdout.write(renderer.render(args.canvas_id, getattr(args, "format", renderer.PAGE)))
     return 0
 
 
@@ -256,7 +258,7 @@ def _history(args):
     edit made before a `move` is in the list like any other: the move kept the
     id, so the query that finds the move finds everything the id ever did.
     """
-    edits = store.history(args.ledger_id, args.node_id)
+    edits = store.history(args.canvas_id, args.node_id)
     out = ["Canvas-Node: %s\n" % args.node_id]
     for edit in edits:
         out.append(
@@ -293,7 +295,7 @@ def _edited(args, node_id, sha, news=None):
 
 def _replace(args):
     sha, news = store.replace(
-        args.ledger_id,
+        args.canvas_id,
         args.node_id,
         args.why,
         node_type=args.node_type,
@@ -309,7 +311,7 @@ def _replace(args):
 
 def _insert(args):
     node_id, sha, news = store.insert(
-        args.ledger_id,
+        args.canvas_id,
         args.why,
         after=args.after,
         into=args.into,
@@ -326,7 +328,7 @@ def _insert(args):
 
 def _remove(args):
     sha, news = store.remove(
-        args.ledger_id,
+        args.canvas_id,
         args.node_id,
         args.why,
         author=args.author,
@@ -337,7 +339,7 @@ def _remove(args):
 
 def _move(args):
     sha, news = store.move(
-        args.ledger_id,
+        args.canvas_id,
         args.node_id,
         args.why,
         after=args.after,
@@ -351,7 +353,7 @@ def _move(args):
 def _freeze(args):
     """What ending a canvas prints: the ledger row it ended, and the new sha.
 
-    The ledger id first, under `Canvas-Freeze:` — the same name the commit's
+    The Canvas identifier first, under `Canvas-Freeze:` — the same name the commit's
     trailer carries, and the same idiom the editing verbs use to name what they
     changed. A freeze changes no node, so there is no `Canvas-Node:` line: the
     thing it is about is the canvas.
@@ -360,9 +362,9 @@ def _freeze(args):
     news to print after it, because a freeze declares no `--base` and so asks
     no staleness question.
     """
-    sha = store.freeze(args.ledger_id, args.why, author=args.author)
+    sha = store.freeze(args.canvas_id, args.why, author=args.author)
     sys.stdout.write(
-        "Canvas-Freeze: %s\nCanvas-Base: %s\n" % (args.ledger_id, sha)
+        "Canvas-Freeze: %s\nCanvas-Base: %s\n" % (args.canvas_id, sha)
     )
     return 0
 
@@ -537,7 +539,7 @@ def _supplied(top, argv):
 
     argparse composes its refusals inside `parse_args` and hands `error()` a
     sentence and nothing else — not the node id that was on the command line,
-    not even the ledger id. This walks the argv `main` was handed, using the
+    not even the Canvas identifier. This walks the argv `main` was handed, using the
     options the parsers themselves declare, so that a refusal from the argument
     parser can name the nodes involved like every other refusal does.
 
@@ -591,7 +593,7 @@ def _invocation_problem(parser, message):
     The message argparse composed says what was wrong with the invocation and
     it is kept verbatim — it is accurate, and a caller who has seen it before
     will recognise it. What is added is everything it never had: the nodes that
-    were on the command line, the ledger id, and one concrete invocation that
+    were on the command line, the Canvas identifier, and one concrete invocation that
     would succeed.
     """
     top = getattr(parser, "top", parser)
@@ -605,8 +607,8 @@ def _invocation_problem(parser, message):
     # a node. It is a position, and the store's own refusals say so.
     nodes = [each for each in addressed if each != "root"]
     about = ["command %s" % parser.prog]
-    if positionals.get("ledger_id"):
-        about.append("ledger id %s" % positionals["ledger_id"])
+    if positionals.get("canvas_id"):
+        about.append("Canvas identifier %s" % positionals["canvas_id"])
     if "root" in addressed:
         about.append("position root, the <canvas> element")
 
@@ -726,28 +728,35 @@ def _learn_the_command_line(parser, verbs):
 def build_parser():
     parser = _Parser(
         prog="canvas",
-        description="The canvas store: one XML file per ledger row, git-backed.",
+        description="The canvas store: one XML file per Canvas identifier, git-backed.",
     )
     verbs = parser.add_subparsers(dest="verb")
 
     create = verbs.add_parser(
         "create",
-        help="make the canvas for a ledger row, with its first nodes",
+        help="make a Canvas, minting its identifier when none is supplied",
         description=(
-            "Make the canvas for a ledger row. Three commits: the root alone, "
+            "Make a Canvas. Omit canvas-id to mint a stable, collision-safe "
+            "identifier and print it as Canvas-ID; supply canvas-id to use an "
+            "existing external identifier. Three commits: the root alone, "
             "then the problem, then the expected value, each node in its own "
-            "commit. Refuses if a canvas for that ledger id already exists."
+            "commit. Refuses if a Canvas for that identifier already exists."
         ),
     )
-    create.add_argument("ledger_id", help="the ledger row this canvas belongs to")
     create.add_argument(
-        "--problem", required=True, help="the problem the ledger row states"
+        "canvas_id",
+        metavar="canvas-id",
+        nargs="?",
+        help="identifier to use; omit it to have the CLI mint and print one",
+    )
+    create.add_argument(
+        "--problem", required=True, help="the problem the Canvas starts with"
     )
     create.add_argument(
         "--expected-value",
         required=True,
         dest="expected_value",
-        help="the expected value the ledger row states",
+        help="the expected value the Canvas starts with",
     )
     create.add_argument(
         "--author",
@@ -776,7 +785,7 @@ def build_parser():
             "only thing that refuses."
         ),
     )
-    read.add_argument("ledger_id", help="the ledger row whose canvas to print")
+    read.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier to read")
     _add_selection(read)
     read.add_argument(
         "--provenance",
@@ -809,7 +818,7 @@ def build_parser():
         "render",
         help="print the canvas as a standalone HTML page",
         description=(
-            "Print the canvas for a ledger row as a projection of it. The "
+            "Print the Canvas as a projection of it. The "
             "default is one standalone HTML document: no stylesheet to fetch, "
             "no script and no image. Either projection opens with an index "
             "naming every <question> in the document, every <question> "
@@ -821,16 +830,15 @@ def build_parser():
             "canvas. Redirect stdout to keep it."
         ),
     )
-    render.add_argument("ledger_id", help="the ledger row whose canvas to render")
+    render.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier to render")
     render.add_argument(
         "--format",
         choices=list(renderer.FORMS),
         default=renderer.PAGE,
         help=(
             "which projection to print: %s, a standalone HTML document, or "
-            "%s, the block-level Markdown a Basecamp comment renders, which "
-            "is what a ledger row carries in the one comment it rewrites in "
-            "place. Both are reads and neither writes anything"
+            "%s, block-level Markdown suitable for a Basecamp comment. Both "
+            "are reads and neither writes anything"
             % (renderer.PAGE, renderer.COMMENT)
         ),
     )
@@ -850,7 +858,7 @@ def build_parser():
             "and does not initialise a repository."
         ),
     )
-    history.add_argument("ledger_id", help="the ledger row this canvas belongs to")
+    history.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier")
     history.add_argument(
         "node_id",
         metavar="node-id",
@@ -868,7 +876,7 @@ def build_parser():
             "The type defaults to the one the node already has. One commit."
         ),
     )
-    replace.add_argument("ledger_id", help="the ledger row this canvas belongs to")
+    replace.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier")
     replace.add_argument("node_id", metavar="node-id", help="the node to replace")
     _add_payload(replace, None)
     _add_why(replace)
@@ -884,7 +892,7 @@ def build_parser():
             "that mints. One commit."
         ),
     )
-    insert.add_argument("ledger_id", help="the ledger row this canvas belongs to")
+    insert.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier")
     _add_position(insert)
     _add_payload(insert, "text")
     _add_why(insert)
@@ -901,7 +909,7 @@ def build_parser():
             "still has children is refused. One commit."
         ),
     )
-    remove.add_argument("ledger_id", help="the ledger row this canvas belongs to")
+    remove.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier")
     remove.add_argument("node_id", metavar="node-id", help="the node to remove")
     _add_why(remove)
     _add_base(remove)
@@ -916,7 +924,7 @@ def build_parser():
             "unchanged; only where it sits changes. One commit."
         ),
     )
-    move.add_argument("ledger_id", help="the ledger row this canvas belongs to")
+    move.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier")
     move.add_argument("node_id", metavar="node-id", help="the node to move")
     _add_position(move)
     _add_why(move)
@@ -928,16 +936,16 @@ def build_parser():
         "freeze",
         help="end the canvas: the last edit, and the reason it ended",
         description=(
-            "Freeze the canvas for a ledger row. One commit, naming no node "
+            "Freeze the Canvas. One commit, naming no node "
             "and changing no byte of the document: what it records is that "
             "the canvas has ended and why. Every write verb is refused "
             "against a frozen canvas at exit 1, read and history go on "
-            "working, and there is no unfreeze — a ledger row whose task "
-            "comes back gets a new ledger row and a new canvas. One verb for "
+            "working, and there is no unfreeze — resumed work gets a new "
+            "Canvas. One verb for "
             "both endings: done and abandoned are two things a --why says."
         ),
     )
-    freeze.add_argument("ledger_id", help="the ledger row whose canvas has ended")
+    freeze.add_argument("canvas_id", metavar="canvas-id", help="the Canvas identifier to freeze")
     _add_why(freeze)
     _add_author(freeze)
     freeze.set_defaults(handler=_freeze)
@@ -959,14 +967,14 @@ def _os_refusal(error, args):
     wrong against the store as it stands", and none of the four trailers.
 
     `args` is what the parser produced, or `None` if it never got that far. The
-    ledger id and the node id are on it where the verb takes them, and they are
+    Canvas identifier and the node id are on it where the verb takes them, and they are
     what makes the refusal name the thing the caller asked about rather than
     the path alone.
     """
     nodes = []
     about = []
     for attribute, label in (
-        ("ledger_id", "ledger id"),
+        ("canvas_id", "Canvas identifier"),
         ("base", "option --base"),
         ("since", "option --since"),
     ):
@@ -993,7 +1001,7 @@ def _os_refusal(error, args):
         aftermath=(
             "this is the tool's outermost guard, so whether anything was "
             "written before the error is not something it can see — "
-            "`bin/canvas read <ledger-id>` prints what the canvas holds now, "
+            "`bin/canvas read <canvas-id>` prints what the canvas holds now, "
             "and `git -C $OPENCLAW_WORKSPACE/state/canvas log` what was "
             "committed"
         ),
@@ -1031,7 +1039,7 @@ def main(argv):
             raise store.ToolProblem(
                 "a verb is required: %s" % _verb_names(parser),
                 "re-run with one of them: `bin/canvas <verb> --help` says what "
-                "each takes, and `bin/canvas read <ledger-id>` is the one that "
+                "each takes, and `bin/canvas read <canvas-id>` is the one that "
                 "changes nothing. Nothing was written",
                 about=["command canvas", "argument verb"],
             )

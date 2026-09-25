@@ -198,7 +198,7 @@ and the fix is a test change that belongs to whoever next widens the grammar.
   against this ruling** and it is named here rather than buried. The answer: a
   projection is not the document, and may say what the document does not —
   `canvas/render.py` already prints markers in words that exist nowhere in the
-  XML (*Open question*, *Answered question*, `README.md:624-626`). Whether the
+  XML (*Open question*, *Answered question*, `README.md:665-667`). Whether the
   renderer labels `create`'s two nodes is [`rendering.md`](rendering.md)'s
   business, and presentation was explicitly left free. **This ruling permits that
   and does not decide it.**

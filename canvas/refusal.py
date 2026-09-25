@@ -13,9 +13,9 @@ A refusal carries four things beyond its message:
   all of them.
 - **`about`** — what it names when it has no node to name, and *as well as* the
   nodes where both apply. A refusal with no node is not exempt from naming what
-  it is about: the ledger id, the file, the environment variable, the missing
+  it is about: the Canvas identifier, the file, the environment variable, the missing
   binary, the value that was rejected. Each entry reads `<what it is> <value>`,
-  so `ledger id a-row`, `command git`, `option --base`.
+  so `Canvas identifier a-row`, `command git`, `option --base`.
 - **`next_action`** — one concrete thing to do that would succeed, in the
   imperative, naming the command where there is one. Not what did not happen:
   "nothing was changed" is a fact about the past and an agent cannot act on it.
@@ -51,7 +51,7 @@ turns any `OSError` — `PermissionError`, `FileNotFoundError`,
 nobody has met yet — into a refusal of this shape, so that the question "is
 there any OS condition that leaves this tool as a traceback" is answered no by
 construction rather than by a list. The specific guards stay: a message that
-names the ledger id and says `chmod u+rx <that directory>` is better than the
+names the Canvas identifier and says `chmod u+rx <that directory>` is better than the
 generic one, and this is the floor, not a replacement for them.
 """
 
@@ -153,16 +153,16 @@ def lines(prefix, refused, code, meaning):
 #:   it exits `0`. It is the only one the word `run` may be put in front of,
 #:   and `tests/test_store.py`'s `assertRepairsRun` runs every one of them.
 #: - a **diagnostic** — `ls -ld`, `ls -l`, `df -h`, `ulimit -n`, and elsewhere
-#:   in the tool `bin/canvas read <ledger-id>` — is offered to show the state
+#:   in the tool `bin/canvas read <canvas-id>` — is offered to show the state
 #:   that produced the refusal. Its exit status is the answer, not a failure.
 #:   It may be `0`, and on the errno these templates exist for it is *usually*
 #:   not: every way of looking at a path that is gone reports that it is gone
 #:   by exiting non-zero. Forbidding those would leave a refusal about an
 #:   absent path unable to tell a caller to look at it, which is the one thing
 #:   a caller facing `ENOENT` most needs.
-#: - a **form** — `bin/canvas create <ledger-id> …` — has a placeholder in it
+#: - a **form** — `bin/canvas create <canvas-id> …` — has a placeholder in it
 #:   and is never run as printed by anybody. Run verbatim it exits `2` on the
-#:   ledger id `<ledger-id>`, so marking it `run` would be the same defect one
+#:   Canvas identifier `<canvas-id>`, so marking it `run` would be the same defect one
 #:   step along.
 _OS_NEXT_ACTION = {
     errno.EACCES: (
@@ -179,7 +179,7 @@ _OS_NEXT_ACTION = {
         "%(paths)s was there when the tool looked and is not there now, or a "
         "directory on the way to it is not there at all — `ls -ld %(path)s` "
         "says which; re-run, and if it is genuinely gone make it again with "
-        "`bin/canvas create <ledger-id> --problem \"<the problem>\" "
+        "`bin/canvas create <canvas-id> --problem \"<the problem>\" "
         "--expected-value \"<the expected value>\"`"
     ),
     errno.ENOTDIR: (
@@ -193,7 +193,7 @@ _OS_NEXT_ACTION = {
     ),
     errno.EEXIST: (
         "something is already at %(paths)s — `ls -ld %(path)s` shows what; "
-        "move it aside, or name a ledger id whose canvas does not exist yet, "
+        "move it aside, or name a Canvas identifier whose canvas does not exist yet, "
         "and re-run"
     ),
     errno.ELOOP: (
@@ -202,7 +202,7 @@ _OS_NEXT_ACTION = {
         "a real file or remove it, and re-run"
     ),
     errno.ENAMETOOLONG: (
-        "%(paths)s is longer than this filesystem allows — the ledger id "
+        "%(paths)s is longer than this filesystem allows — the Canvas identifier "
         "becomes the file name, so re-run with a shorter one, or point "
         "OPENCLAW_WORKSPACE at a shallower directory"
     ),
@@ -350,7 +350,7 @@ def os_next_action(error, aftermath=None, paths=None, need="reach"):
     """The imperative repair for this errno, naming the paths the error carries.
 
     One table for the whole tool, so a site that knows more than the outermost
-    guard — it has the ledger id, it knows nothing was written — still gets the
+    guard — it has the Canvas identifier, it knows nothing was written — still gets the
     repair that matches the condition rather than writing its own guess at one.
 
     `paths` overrides the paths the repair points at, for the one case where
@@ -413,7 +413,7 @@ def from_os_error(kind, error, nodes=(), about=(), aftermath=None, need="reach")
     knows what its exit codes mean, and this function does not decide one.
 
     `nodes` and `about` are whatever the call site had in hand — the node the
-    edit named, the ledger id it was for. The paths the error carries and the
+    edit named, the Canvas identifier it was for. The paths the error carries and the
     errno are added to `about` here, because those are the two things a caller
     cannot get anywhere else: the errno is what tells a permission problem from
     a missing one, and both `open()`s raise from the same line.

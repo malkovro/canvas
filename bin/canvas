@@ -5,15 +5,15 @@ A thin shim over canvas.cli.main. The store lives in canvas/store.py, the
 document in canvas/document.py and the vocabulary in schema/canvas.rng;
 nothing here knows anything about any of them.
 
-    bin/canvas create  <ledger_id> --problem TEXT --expected-value TEXT
-    bin/canvas read    <ledger_id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
-    bin/canvas render  <ledger_id> [--format page|comment]
-    bin/canvas history <ledger_id> <node-id>
-    bin/canvas replace <ledger_id> <node-id> --why TEXT
-    bin/canvas insert  <ledger_id> (--after <node-id> | --into <id>) --why TEXT
-    bin/canvas remove  <ledger_id> <node-id> --why TEXT
-    bin/canvas move    <ledger_id> <node-id> (--after <node-id> | --into <id>) --why TEXT
-    bin/canvas freeze  <ledger_id> --why TEXT
+    bin/canvas create  [<canvas-id>] --problem TEXT --expected-value TEXT
+    bin/canvas read    <canvas-id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA]
+    bin/canvas render  <canvas-id> [--format page|comment]
+    bin/canvas history <canvas-id> <node-id>
+    bin/canvas replace <canvas-id> <node-id> --why TEXT
+    bin/canvas insert  <canvas-id> (--after <node-id> | --into <id>) --why TEXT
+    bin/canvas remove  <canvas-id> <node-id> --why TEXT
+    bin/canvas move    <canvas-id> <node-id> (--after <node-id> | --into <id>) --why TEXT
+    bin/canvas freeze  <canvas-id> --why TEXT
 
 `--why` is required by all four editing verbs, and by `freeze`, and has no
 default. `read`, `render` and `history` are reads: they write nothing, commit
