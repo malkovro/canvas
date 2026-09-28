@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The shape of the only canvas in the live store that has ever used
+     <section>: duplicate-invoice-criterion-output-schema, read on 2026-09-28.
+     Two sections at the top level, two nodes outside both, and not one node
+     in it ever moved — which is why it carries no crossing and no reason.
+     The ids and the titles are that canvas's own, so a test naming them names
+     the real case; the figures are cut to one line each, because what this
+     fixture is for is where a node sits and not what it draws. -->
+<canvas ledger="duplicate-invoice-criterion-output-schema" schema="1">
+  <text id="q39f" v="2">The criterion writes the category as prose. The reducers parse a literal line. Nothing declares the contract between them.</text>
+  <text id="x6fk" v="2">Is DUPLICATE_INVOICE a candidate for an output schema?</text>
+  <section id="czfj" v="1" title="Problem space">
+    <figure id="lpaq" v="1">criterion -&gt; free prose -&gt; 7 reducers find nothing</figure>
+    <figure id="o3tk" v="1">parseable by any reducer: 3.0 %</figure>
+  </section>
+  <section id="jub8" v="1" title="Solution space">
+    <question id="bwbs" v="1">Does the schema mechanism support a pairwise assessment?</question>
+    <question id="v6k5" v="1">Is the split between the two reasoning fields structural?</question>
+    <section id="nhf8" v="1" title="Options against cost">
+      <text id="rh8b" v="1">Wording, schema, or routing on structured facts.</text>
+    </section>
+  </section>
+</canvas>

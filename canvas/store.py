@@ -103,6 +103,8 @@ import secrets
 import stat
 import subprocess
 
+from xml.etree import ElementTree as ET
+
 from canvas import document
 from canvas import refusal
 from canvas.validate import EnvironmentProblem, validate_file
@@ -2785,6 +2787,132 @@ def history(ledger_id, node_id):
         )
     return edits
 
+
+# --------------------------------------------------------------------------
+# Crossings: which nodes changed which space they sit in, and why
+# --------------------------------------------------------------------------
+#
+# `problem-and-solution-space.md`, settled 2026-09-28, at the top level of this
+# repository beside `node-state.md`. It rules that a node has crossed from one
+# of a canvas's spaces to the other when a `move` naming it changed which
+# `<section>` it sits in, and that the `--why` of the latest such move is the
+# assumption that carried it.
+#
+# **Nothing about this is in the document.** No element, no attribute and no
+# configuration file was added to serve it, and none may be: which `<section>`
+# a node sits in says where it is, and the reason of the edit that put it there
+# says why. The crossing is derived here, from the log and from two documents
+# per `move`, for the reason `node-state.md` section 3 gives — the document is
+# not the log, and a fact a reader reconstructs when they ask *why* belongs in
+# the reason.
+#
+# **The title is never read.** Which section is the problem space and which is
+# the solution space is the person's reading of their own heading. A rule keyed
+# on the characters of a `title` would be a reserved word nothing validates and
+# nothing catches — `<solution-space>` with the angle brackets taken off — and
+# `problem-and-solution-space.md` section 1 refuses it by that argument.
+#
+# The cost, stated where it is paid: this is the first read in this store that
+# is O(moves) git invocations rather than O(1), and it can fail in ways a read
+# of the working tree cannot — a shallow clone, a rewritten history, a commit
+# whose parent is gone. Every one of those answers "not a crossing" rather than
+# raising, because a projection that refused to render because one old commit
+# is unreachable would be worse than one that shows the document. Moves are
+# rare: there are none at all in the live store on 2026-09-28.
+
+
+def _document_at(canvas_dir, path, revision, seen):
+    """This canvas's document as it stood at one revision, or None.
+
+    None for every way the question cannot be answered — the revision does not
+    resolve, the file was not there, the bytes are not well-formed XML. The
+    caller reads None as "no comparison to make", which is the honest answer
+    and not a failure: `problem-and-solution-space.md` section 3 rules the one
+    reachable case, the first commit of a canvas, unreachable anyway.
+
+    `seen` caches by revision, so a node moved N times costs N+1 reads of the
+    file rather than 2N.
+    """
+    if revision in seen:
+        return seen[revision]
+    result = _git(
+        canvas_dir,
+        "show",
+        "%s:%s" % (revision, os.path.relpath(path, canvas_dir)),
+    )
+    root = None
+    if result.returncode == 0:
+        try:
+            root = ET.fromstring(result.stdout.decode("utf-8", "replace"))
+        except ET.ParseError:
+            root = None
+    seen[revision] = root
+    return root
+
+
+def _crosses(canvas_dir, path, sha, node_id, seen):
+    """Did the commit at `sha` change which `<section>` that node sits in?
+
+    `problem-and-solution-space.md` section 2, the whole of it: two documents
+    and one comparison. The position a `move` chose is not in the commit — the
+    subject carries the verb, the node and the reason, and `--after` / `--into`
+    appear in no trailer — so where a node went is not a thing the log can be
+    asked. It is a thing two documents are compared for.
+    """
+    after = _document_at(canvas_dir, path, sha, seen)
+    before = _document_at(canvas_dir, path, "%s^" % sha, seen)
+    if after is None or before is None:
+        return False
+    return (
+        document.section_of(after, node_id)
+        != document.section_of(before, node_id)
+    )
+
+
+def crossings(ledger_id):
+    """Every node of this canvas that has crossed, and the edit that carried it.
+
+    Returns `{node_id: Edit}`. A node with no crossing is not a key; a node
+    that crossed three times is one key with its **latest** crossing, because a
+    canvas holds the current answer and the assumption a reader needs is the one
+    that put the node where it is now (`problem-and-solution-space.md` section 3).
+
+    A read, on `read`'s own terms: it writes nothing, commits nothing and does
+    not initialise a repository.
+
+    Only a `move` can cross a node. An `insert` straight into a section is not
+    one — the node was born there and no assumption carried it anywhere — nor is
+    a `replace`, a `remove`, a reorder inside one section, or a `move` of some
+    container seen from a child. That last is not a limitation: a `move` on a
+    container names one node and its subtree travels untouched
+    (`node-identity.md` section 5), so no commit names the children, and this
+    only ever examines the edits in a node's own history.
+    """
+    canvas_dir = canvas_directory()
+    path = canvas_path(canvas_dir, ledger_id)
+
+    if not os.path.isfile(path):
+        raise _no_canvas(ledger_id, path)
+    if not is_repository(canvas_dir):
+        raise _not_a_repository(canvas_dir, "crossings to report")
+
+    seen = {}
+    found = {}
+    # Oldest first, so a node that crossed more than once ends on its latest
+    # crossing by being written over. That is the ruling's choice of which one
+    # to keep, expressed as the order the log is already read in.
+    for record in _log(
+        canvas_dir,
+        ["--", path],
+        "cannot search the canvas history for %s" % ledger_id,
+    ):
+        edit = _edit_from(record.sha, record.subject, record.author)
+        if edit.verb != "move":
+            continue
+        for node_id in record.named:
+            if _crosses(canvas_dir, path, edit.sha, node_id, seen):
+                found[node_id] = edit
+    return found
 
 
 # --------------------------------------------------------------------------

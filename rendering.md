@@ -206,6 +206,16 @@ the page claims rather than to how it looks.
 - **Anything else about the canvas file.** The eleven-element vocabulary is
   unchanged. A later renderer decision that needs a twelfth element or another
   payload/state attribute has found the tripwire rather than a requirement.
+- **How much of a node's `--why` history a projection shows.** Ruled on
+  2026-09-28 by `problem-and-solution-space.md` beside this file, not here.
+  **The renderer's non-presentation commitments are three and not two:** the
+  two above, and *exactly one reason per node that crossed between the
+  canvas's sections, none on any other node, and the full sha beside it*, on
+  both projections. It is a question of the same kind as these two — a
+  presentation choice that, taken quietly, would decide something about the
+  document — and it is ruled in a different file because it is stated in terms
+  of what a crossing is. That document's *Known tensions* asked for this
+  sentence to be written here; this is it.
 
 ## Known tensions
 

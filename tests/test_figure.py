@@ -72,7 +72,7 @@ class FigureValidation(unittest.TestCase):
 
     def test_schema_one_textual_figure_still_renders(self):
         root = ET.parse(fixture("valid.xml")).getroot()
-        output = render.page("legacy", "d" * 40, root)
+        output = render.page("legacy", "d" * 40, root, {})
         self.assertIn('<svg xmlns="http://www.w3.org/2000/svg"', output)
         self.assertIn("CD1_", output)  # legacy prose is visible, never fatal
 
@@ -107,13 +107,17 @@ class FigureProjections(unittest.TestCase):
         return ET.parse(fixture(name)).getroot()
 
     def test_page_draws_text_source_as_graphical_svg(self):
-        output = render.page("figure-text", "a" * 40, self._root("figure-text-v2.xml"))
+        output = render.page(
+            "figure-text", "a" * 40, self._root("figure-text-v2.xml"), {}
+        )
         self.assertIn('<svg xmlns="http://www.w3.org/2000/svg"', output)
         self.assertIn("<rect", output)
         self.assertNotIn('<pre class="figure-source">', output)
 
     def test_page_renders_sanitized_inline_svg(self):
-        output = render.page("figure-svg", "b" * 40, self._root("figure-svg-v2.xml"))
+        output = render.page(
+            "figure-svg", "b" * 40, self._root("figure-svg-v2.xml"), {}
+        )
         self.assertIn("inline SVG escape hatch", output)
         self.assertIn("figure-drawing", output)
         self.assertNotIn("&lt;svg", output)
@@ -124,7 +128,7 @@ class FigureProjections(unittest.TestCase):
             ("figure-svg-v2.xml", "inline SVG source"),
         ):
             with self.subTest(name=name):
-                output = render.comment("c" * 40, self._root(name))
+                output = render.comment("c" * 40, self._root(name), {})
                 self.assertIn(label, output)
                 self.assertIn("cannot display the picture", output)
                 self.assertNotIn("<", output)

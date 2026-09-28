@@ -35,6 +35,29 @@ Two questions this renderer had to settle rather than inherit, both argued in
   question free and required only that an open one be loud; this is the side
   taken, and `rendering.md` §2 says why omission was not.
 
+A third, ruled elsewhere and in the same way — `problem-and-solution-space.md`
+at the top level of this repository, settled 2026-09-28:
+
+- **A node that crossed between a canvas's spaces carries exactly one reason,
+  and no other node carries any.** A node has crossed when a `move` naming it
+  changed which `<section>` it sits in, with *no section* counted as a value;
+  its crossing is the latest such move, and what is shown is that move's
+  `--why`, verbatim, beside the full sha of the commit it came from. A node
+  that never crossed carries none, a node that crossed three times carries
+  one, and a canvas in which nothing has crossed — which is every canvas in
+  the live store today — renders with no reason in it at all. Showing every
+  reason on every node would make the page the transcript
+  `product-spec.md`'s *What it is not* refuses, and it would grow with the log
+  while the document stayed the same size.
+
+  **Nothing was added to the document to serve this.** There is no `space=`,
+  no `status=` and no twelfth element: the structure says where a node is, the
+  `--why` says why it is there, and `store.crossings` derives the move from the
+  stored history. Where the reason sits on the node, what introduces it and
+  how it looks are this module's, on `engineering-spec.md`'s *The substrate*'s
+  terms; *which* reasons appear is not, and both projections make the same
+  claim.
+
 The page carries the sha it was rendered from, in its own header, because a
 rendered page outlives the canvas it came from. A reader who has one has to be
 able to tell it from the canvas as it stands now, and the sha is the only thing
@@ -43,10 +66,11 @@ that answers that.
 **Two projections, one walk of the document.** `page` is the standalone HTML
 document. `comment` is the same canvas as the block-level Markdown a Basecamp
 comment actually renders, for the ledger row that rewrites its own live comment
-in place. Both are reached through `render`, both come off one `store.read`,
-both take their sha from the same place, and the three claims `rendering.md`
-§3 says are not free — every `<question>` id in the index, only `<question>`
-ids in it, a marker on every `<question>` node — are asserted against both.
+in place. Both are reached through `render`, both come off one `store.read`
+and one `store.crossings`, both take their sha from the same place, and the
+three claims `rendering.md` §3 says are not free — every `<question>` id in the
+index, only `<question>` ids in it, a marker on every `<question>` node — are
+asserted against both.
 
 `engineering-spec.md`'s *Projections* used to say the HTML page was
 *"pasteable into a Basecamp comment"*. It is not, and that sentence has been
@@ -80,6 +104,15 @@ ANSWERED = "answered"
 #: word beside its entry in the index cannot drift apart.
 OPEN_LABEL = "Open question"
 ANSWERED_LABEL = "Answered question"
+
+#: What a crossed node's one line is introduced by, in both projections. One
+#: string for the same reason the two above are one each: a reader who has the
+#: page and then the comment must not have to work out whether the two are
+#: making the same claim. The words say the event and not the space, because
+#: which section is the problem space and which is the solution space is read
+#: off the `title` by the person and by nobody else — this module never looks
+#: at those characters, and `problem-and-solution-space.md` section 1 is why.
+CROSSING_LABEL = "Carried across"
 
 #: The two projections this module emits, named once. `PAGE` is the default
 #: everywhere — every existing invocation of `bin/canvas render` predates the
@@ -131,6 +164,11 @@ STYLE = """
     .question-marker { display: inline-block; font-size: .75rem;
                        letter-spacing: .06em; text-transform: uppercase; }
     .question-text { margin: .2rem 0 0; }
+    .crossing { margin: .25rem 0 0; font-size: .82rem; opacity: .75; }
+    .crossing-label { text-transform: uppercase; letter-spacing: .06em;
+                      font-size: .72rem; }
+    .crossing-sha { font-size: .75rem; word-break: break-all; }
+    tr.crossing-row td { border-top: none; }
     .figure { margin: 1.25rem 0; }
     .figure-drawing { display: block; width: 100%; height: auto; overflow: visible;
                       border: 1px solid currentColor; border-radius: .3rem; }
@@ -222,7 +260,54 @@ def _question_index(questions):
     return out
 
 
-def _question(node):
+def _crossing_line(edit):
+    """The reason that carried a node across, and the sha it came from.
+
+    Verbatim, escaped for HTML and otherwise unaltered: no ellipsis, no first
+    sentence, no summary. `problem-and-solution-space.md` section 4 argues it
+    from `guidelines/canvas-why.md` in `malkovro/ledger-orchestrator` —
+    *"Quote verbatim, or do not use quotation marks"* — and the cost of it, an
+    uncapped four-hundred-word reason printed in full, is stated there and
+    paid here.
+
+    The sha is in full and is not optional. A reason on a page is a quotation
+    from a commit message, and the sha is what makes it resolvable — `git show
+    <sha>` in the canvas directory — by a reader who has a pasted page and
+    nothing else. It is forty characters for the reason the page's own header
+    is: an abbreviation stops being an identity key as the log grows.
+    """
+    return (
+        '<span class="crossing-label">%s</span>%s'
+        '<q class="crossing-why">%s</q>%s'
+        '<code class="crossing-sha">%s</code>'
+        % (CROSSING_LABEL, JOIN, _text(edit.reason), JOIN, _text(edit.sha))
+    )
+
+
+def _crossing(node, crossings):
+    """The one line a node that crossed carries, or nothing at all.
+
+    Exactly one per crossed node and none on any other: `crossings` holds a
+    node's *latest* crossing and holds nothing for a node that never crossed,
+    so the count is the dictionary's and not a decision taken here.
+
+    A `<tr>` may hold only cells, so a crossed `<row>` gets its line in a row
+    of its own spanning the columns of the row it is about. That is the only
+    element that needs a shape of its own, and it is a shape and not a second
+    claim: the label, the reason and the sha are `_crossing_line`'s in both.
+    """
+    edit = crossings.get(node.get("id"))
+    if edit is None:
+        return []
+    if node.tag == "row":
+        return [
+            '<tr class="crossing-row"><td class="crossing" colspan="%d">%s</td></tr>'
+            % (max(1, len(list(node))), _crossing_line(edit))
+        ]
+    return ['<p class="crossing">%s</p>' % _crossing_line(edit)]
+
+
+def _question(node, crossings):
     """One `<question>`, with the marker of its own that every one carries.
 
     The marker is a word and not a colour, because the done condition is that
@@ -239,11 +324,12 @@ def _question(node):
         '<span class="question-marker">%s</span>'
         % (ANSWERED_LABEL if answered else OPEN_LABEL),
         '<p class="question-text">%s</p>' % _text(node.text),
+    ] + _crossing(node, crossings) + [
         "</div>",
     ]
 
 
-def _figure(node):
+def _figure(node, crossings):
     """Draw one `<figure>` using its explicit schema-v2 payload distinction.
 
     No `payload` means repository-owned Canvas Diagram 1, including on old
@@ -264,11 +350,12 @@ def _figure(node):
         drawing,
         "<figcaption>figure <code>%s</code> — %s</figcaption>"
         % (_attribute(identity), caption),
+    ] + _crossing(node, crossings) + [
         "</figure>",
     ]
 
 
-def _link(node):
+def _link(node, crossings):
     """One `<link>`: the label, or the target where there is no label yet.
 
     A pointer with an empty label is a legal intermediate state — one edit is
@@ -280,10 +367,10 @@ def _link(node):
     return [
         '<p class="link"><a%s href="%s">%s</a></p>'
         % (_identity(node), _attribute(href), _text(node.text) or _text(href))
-    ]
+    ] + _crossing(node, crossings)
 
 
-def _node(node, depth, out):
+def _node(node, depth, out, crossings):
     """One node and everything under it, appended to `out`.
 
     The eleven element names are the whole of what can arrive: the document
@@ -292,6 +379,14 @@ def _node(node, depth, out):
     exist. It is still rendered — as a paragraph carrying its text — rather
     than dropped, because a projection that silently loses a node is worse
     than one that shows it plainly.
+
+    A node that crossed carries its one line here, beside itself, and every
+    element gets it in the one position that is valid HTML for that element:
+    inside the `<li>`, inside the `<td>`, inside the `<figure>`, and after the
+    `<p>`, the `<ul>` and the `<table>`, which cannot hold it. Adjacency is
+    what makes the line readable — the reason is about *this* node — and it is
+    the whole of what varies: which reasons appear is
+    `problem-and-solution-space.md`'s and identical in both projections.
     """
     tag = node.tag
     if tag == "section":
@@ -300,41 +395,55 @@ def _node(node, depth, out):
         out.append(
             "<%s>%s</%s>" % (heading, _text(node.get("title")), heading)
         )
+        out.extend(_crossing(node, crossings))
         for child in node:
-            _node(child, depth + 1, out)
+            _node(child, depth + 1, out, crossings)
         out.append("</section>")
     elif tag == "text":
         out.append('<p class="text"%s>%s</p>' % (_identity(node), _text(node.text)))
+        out.extend(_crossing(node, crossings))
     elif tag == "list":
         out.append('<ul class="list"%s>' % _identity(node))
         for child in node:
-            _node(child, depth, out)
+            _node(child, depth, out, crossings)
         out.append("</ul>")
+        out.extend(_crossing(node, crossings))
     elif tag == "item":
-        out.append('<li class="item"%s>%s</li>' % (_identity(node), _text(node.text)))
+        out.append('<li class="item"%s>%s%s</li>' % (
+            _identity(node),
+            _text(node.text),
+            "".join(_crossing(node, crossings)),
+        ))
     elif tag == "table":
         out.append('<table class="table"%s><tbody>' % _identity(node))
         for child in node:
-            _node(child, depth, out)
+            _node(child, depth, out, crossings)
         out.append("</tbody></table>")
+        out.extend(_crossing(node, crossings))
     elif tag == "row":
         out.append('<tr class="row"%s>' % _identity(node))
         for child in node:
-            _node(child, depth, out)
+            _node(child, depth, out, crossings)
         out.append("</tr>")
+        out.extend(_crossing(node, crossings))
     elif tag == "cell":
-        out.append('<td class="cell"%s>%s</td>' % (_identity(node), _text(node.text)))
+        out.append('<td class="cell"%s>%s%s</td>' % (
+            _identity(node),
+            _text(node.text),
+            "".join(_crossing(node, crossings)),
+        ))
     elif tag == "figure":
-        out.extend(_figure(node))
+        out.extend(_figure(node, crossings))
     elif tag == "link":
-        out.extend(_link(node))
+        out.extend(_link(node, crossings))
     elif tag == "question":
-        out.extend(_question(node))
+        out.extend(_question(node, crossings))
     else:
         out.append('<p class="text"%s>%s</p>' % (_identity(node), _text(node.text)))
+        out.extend(_crossing(node, crossings))
 
 
-def page(ledger_id, sha, root):
+def page(ledger_id, sha, root, crossings):
     """The whole page, as one string: a standalone HTML document.
 
     Standalone still means one self-contained file: no stylesheet, script,
@@ -347,6 +456,11 @@ def page(ledger_id, sha, root):
     index of questions, and the document follows it. The sha is above both,
     with the ledger id, because what a reader of a pasted page needs first is
     which canvas this is and which moment of it.
+
+    `crossings` is `{node_id: Edit}` — every node that crossed between the
+    canvas's sections, and the edit that carried it. It is not in the document
+    and could not be: it is derived from the stored history by
+    `store.crossings`, and what it costs is stated there.
     """
     questions = _questions(root)
     out = [
@@ -374,7 +488,7 @@ def page(ledger_id, sha, root):
     out.extend(_question_index(questions))
     out.append("<main>")
     for child in root:
-        _node(child, 0, out)
+        _node(child, 0, out, crossings)
     out.append("</main>")
     out.append("</body>")
     out.append("</html>")
@@ -493,6 +607,36 @@ def _comment_question(node):
     )
 
 
+def _comment_crossing(node, crossings):
+    """The one block a node that crossed carries in a comment, or nothing.
+
+    The same claim the page makes, in the projection that reaches a reader who
+    has only this. `problem-and-solution-space.md` section 4 requires the bound
+    to be identical across the two and leaves the drawing free, so this is a
+    block of plain Markdown carrying the same three things: the label, the
+    reason as it was written, and the full sha.
+
+    The node's id is on the line and it is not decoration. A comment has no
+    anchors, so a reader matching this line to the node it is about has nothing
+    but the id — which is the reason `_comment_question` puts the id beside its
+    marker, and the same one.
+    """
+    edit = crossings.get(node.get("id"))
+    if edit is None:
+        return []
+    return [
+        "**%s** `%s`%s%s%s`%s`"
+        % (
+            CROSSING_LABEL,
+            _inline(node.get("id")),
+            JOIN,
+            _inline(edit.reason),
+            JOIN,
+            _inline(edit.sha),
+        )
+    ]
+
+
 def _comment_row(node):
     """One `<row>` as one line: its cells, joined.
 
@@ -550,7 +694,7 @@ def _comment_link(node):
     return "[%s](%s)" % (_inline(node.text) or _inline(href), _inline(href))
 
 
-def _comment_node(node, out):
+def _comment_node(node, out, crossings):
     """One node and everything under it, as blocks appended to `out`.
 
     Same walk as the page's, and the same rule at the end of it: an element
@@ -563,39 +707,65 @@ def _comment_node(node, out):
     heading levels on the page and there is one weight of bold here. The order
     of the blocks is the document's, so nothing is lost but the nesting, and
     the page is where a reader goes for that.
+
+    A crossed node's line follows the block it is about. Two blocks of the
+    document fold several nodes into one — a `<list>`'s items are one bullet
+    block and a `<row>`'s cells are one line — so an item's or a cell's line
+    comes after the folded block rather than inside it, and names its id. That
+    is a position and not a second claim: every crossed node gets exactly one
+    line here and every uncrossed one gets none, which is what the page says
+    too.
     """
     tag = node.tag
     if tag == "section":
         title = _inline(node.get("title"))
         if title:
             out.append("**%s**" % title)
+        out.extend(_comment_crossing(node, crossings))
         for child in node:
-            _comment_node(child, out)
+            _comment_node(child, out, crossings)
     elif tag == "list":
         items = ["- %s" % _inline(child.text) for child in node
                  if child.tag == "item"]
         if items:
             out.append("\n".join(items))
+        out.extend(_comment_crossing(node, crossings))
         for child in node:
-            if child.tag != "item":
-                _comment_node(child, out)
+            if child.tag == "item":
+                out.extend(_comment_crossing(child, crossings))
+            else:
+                _comment_node(child, out, crossings)
     elif tag == "item":
         out.append("- %s" % _inline(node.text))
+        out.extend(_comment_crossing(node, crossings))
     elif tag == "table":
         out.extend(_comment_table(node))
+        out.extend(_comment_crossing(node, crossings))
+        for row in node:
+            if row.tag != "row":
+                continue
+            out.extend(_comment_crossing(row, crossings))
+            for cell in row:
+                if cell.tag == "cell":
+                    out.extend(_comment_crossing(cell, crossings))
     elif tag == "row":
         out.append(_comment_row(node))
+        out.extend(_comment_crossing(node, crossings))
     elif tag == "figure":
         out.extend(_comment_figure(node))
+        out.extend(_comment_crossing(node, crossings))
     elif tag == "link":
         out.append(_comment_link(node))
+        out.extend(_comment_crossing(node, crossings))
     elif tag == "question":
         out.append(_comment_question(node))
+        out.extend(_comment_crossing(node, crossings))
     else:
         out.append(_comment_text(node.text or "").strip())
+        out.extend(_comment_crossing(node, crossings))
 
 
-def comment(sha, root):
+def comment(sha, root, crossings):
     """The whole canvas as one block of a Basecamp comment.
 
     The ledger row rewrites one comment in place on every transition and is
@@ -609,6 +779,12 @@ def comment(sha, root):
     The order is the page's: the sha, then the index of questions, then the
     document. What a reader of the comment needs first is which canvas this is
     and which moment of it.
+
+    `crossings` is the page's, unchanged and used for the same bound: exactly
+    one reason per crossed node, none anywhere else. This reader has the
+    comment and never the canvas, which is why the bound has to be the same
+    one — `problem-and-solution-space.md` section 4 — and why a reason without
+    its sha would be a sentence in quotation marks nobody could get back to.
     """
     blocks = [
         "**Canvas**%srendered from `%s`" % (JOIN, _inline(sha)),
@@ -617,7 +793,7 @@ def comment(sha, root):
     ]
     blocks.extend(_comment_index(_questions(root)))
     for child in root:
-        _comment_node(child, blocks)
+        _comment_node(child, blocks, crossings)
     # One blank line between blocks and never two: a block boundary is one
     # separator, and the same document has to render as the same bytes for an
     # edited-in-place comment to be diffable.
@@ -643,7 +819,8 @@ def render(ledger_id, form=PAGE):
     `form` picks which projection: the standalone HTML page (the default, and
     what every caller that names no form gets), or the block-level Markdown a
     Basecamp comment renders. It is not a different read — one `store.read`,
-    one document, one sha, walked twice — and it is not a way to write: there
+    one `store.crossings`, one document, one sha, walked twice — and it is not
+    a way to write: there
     is nothing this can be set to that puts a byte anywhere.
     """
     # No selector and no provenance: a projection is of the whole document,
@@ -665,6 +842,12 @@ def render(ledger_id, form=PAGE):
             details=problems,
         )
     root = ET.fromstring(body)
+    # The second read, and the one that widens this module's input from a
+    # document to a document plus a walk of the log. It is still a read —
+    # `store.crossings` writes nothing and initialises nothing — and it is
+    # done once for both projections, so the two cannot disagree about which
+    # nodes crossed.
+    crossings = store.crossings(ledger_id)
     if form == COMMENT:
-        return comment(sha, root)
-    return page(ledger_id, sha, root)
+        return comment(sha, root, crossings)
+    return page(ledger_id, sha, root, crossings)
