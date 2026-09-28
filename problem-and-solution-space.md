@@ -501,7 +501,16 @@ stops holding, which is why the bound is the ruling and not a default.
 - **Whether an agent should be taught to build the shape**, and by what words in
   `skills/canvas/SKILL.md`. This document defines what the shape means, which is
   the half that had to be settled before the teaching could be written without
-  inventing a rule. The teaching is not written and is not ruled here.
+  inventing a rule. **Written 2026-09-28, on this branch.**
+  `skills/canvas/SKILL.md`'s *The shape over time* states the lifecycle and
+  restates §2's definition of a crossing in §2's terms rather than paraphrasing
+  it, and *Worked: the reason on a `move` that carries a node across* sits
+  beside that file's existing `--why` section. It teaches the shape as the
+  default way a canvas ends as an answer and says in as many words that none of
+  it is asked of a step, which is the *Genuinely open* item
+  `product-spec.md:130` settled on 2026-09-23. Whether agents then build it
+  unprompted is a post-ship observation about later runs and is not something
+  this branch can check.
 
 - **Whether a crossing should be visible in `bin/canvas read`**, which is what
   goes into a step's prompt. The projections are ruled above; `read` prints the

@@ -344,12 +344,12 @@ All one-way. A projection is never edited and never read back.
    all. A row whose task has no canvas renders the comment it renders today.
 3. **`watch-runs-web`** — a canvas tab, alongside the run list.
 
-Two renderers, one document: both live in `canvas/render.py`, both walk what
-one `store.read` returned, and both take their sha from the same place. The
-three claims `rendering.md` says are not free — every `<question>` id in the
-index, only `<question>` ids in it, a marker on every `<question>` node — are
-asserted against both in `tests/test_render.py`, which is what makes "keep them
-honest" a test that fails rather than a discipline somebody must remember.
+Two renderers, one document: both live in `canvas/render.py`, both come off one
+`store.read` and one `store.crossings`, and both take their sha from the same
+place. Four claims about what they say are not free, and `tests/test_render.py`
+and `tests/test_crossing.py` assert each against both: every `<question>` id in
+the index, only `<question>` ids in it, a marker on every `<question>` node, and
+one reason per node that crossed between sections, none elsewhere, with its sha.
 
 ## The write path, and one honest problem
 
