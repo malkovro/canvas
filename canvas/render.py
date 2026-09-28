@@ -161,8 +161,10 @@ HEADINGS = ["h2", "h3", "h4"]
 #: step. The names are the design vocabulary this page shares with the tab
 #: that frames it; the values are the only place either is written down.
 #:
-#: The document this is designed for is prose. Across the live store the node
-#: census is text 196, question 8, figure 3, section 2, list 1, link 1, so the
+#: The document this is designed for is prose. Counted over
+#: `state/canvas/*.xml` on 2026-09-28, the node census across the 71 canvases
+#: of the live store is text 266, question 8, figure 3, section 2, list 1,
+#: link 1 — a prose document with a handful of figures in it. So the
 #: reading colour, the measure and the leading are what the page is judged on,
 #: and the eleven elements are told apart by typographic role and one hairline
 #: rather than by eleven borders competing for the same attention. Two of them
