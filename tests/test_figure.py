@@ -54,6 +54,21 @@ class CanvasDiagramOneIsTotalAndGraphical(unittest.TestCase):
             with self.subTest(code=code):
                 self.assertIn(code, diagram.render_text(source))
 
+    def test_a_long_invalid_line_widens_the_diagnostic_viewbox(self):
+        source = "not-a-command " + "x" * 120
+        root = ET.fromstring(diagram.render_text(source))
+        width = int(root.get("viewBox").split()[2])
+        self.assertGreaterEqual(width, 1200)
+
+    def test_clean_source_keeps_its_exact_viewbox(self):
+        source = '\n'.join([
+            'box start 1 1 "Start"',
+            'box finish 1 2 "Finish"',
+            'edge start -> finish "next"',
+        ])
+        root = ET.fromstring(diagram.render_text(source))
+        self.assertEqual("0 0 500 188", root.get("viewBox"))
+
     def test_arbitrary_unicode_never_raises_or_returns_non_svg(self):
         generator = random.Random(10342088688)
         alphabet = ''.join(chr(value) for value in range(32, 512))
