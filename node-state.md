@@ -191,8 +191,8 @@ This is not a node state at all, and it is the one of the four that is
 misfiled by being on the list. It is a property of the canvas, and the canvas
 root is the one element that carries no `id` and no `v` and sits outside the
 identity rules entirely (`schema/canvas.rng:25-26`, `node-identity.md` §4). It
-is also already specified: `engineering-spec.md:369-380` gives the lifecycle —
-born at `open`, grows through `executing`, **frozen at `done`**, never deleted —
+is also already specified: `engineering-spec.md:372-392` gives the lifecycle —
+born at `open`, grows through `executing`, **ended at `done`**, never deleted —
 so what want 4 records is not a missing vocabulary item but a missing
 *mechanism*, the freeze the spec promises and `bin/canvas` does not implement.
 `FRICTION.md:127-129` says exactly that: `--help` lists seven subcommands and
@@ -690,7 +690,7 @@ These two lists are what goes into the orchestrator's
   rather than merely deprecated. *Why:* `validate.py:7-10`, `document.py:3-10`.
 - **"This document is finished" is not a node state.** Whatever ends a canvas is
   a property of the root or of the ledger. *Why:* §1, want 4;
-  `engineering-spec.md:369-380`; the root carries no `id` or `v`.
+  `engineering-spec.md:372-392`; the root carries no `id` or `v`.
 - **The decision rule behind all of the above:** a fact a reader of the rendered
   canvas must act on belongs in the document; a fact a reader reconstructs when
   they ask why belongs in the reason. *Why:* it is what reconciles
@@ -776,8 +776,8 @@ it was recorded. The other four stand.
   that would do most for the wants this ruling leaves in the reason.
 - **What ends a canvas.** Want 4, handed by name to
   [#10330567174](https://app.basecamp.com/3934852/buckets/48039419/todos/10330567174).
-  `engineering-spec.md:369-380` promises a freeze at `done` and `bin/canvas`
-  does not implement one. This document constrains that answer in exactly one
+  `engineering-spec.md:372-392` promises a freeze at `done` and `bin/canvas`
+  did not implement one when this was written. This document constrains that answer in exactly one
   way: it is not a node state.
 - **Whether authorship is the same shape.** `FRICTION.md:166-172` says what a
   canvas needs to say *about* a node has to be smuggled into the node, and names

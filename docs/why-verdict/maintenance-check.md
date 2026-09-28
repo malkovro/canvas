@@ -55,9 +55,9 @@ done
 
 ### How long a canvas was open to a tab edit
 
-A canvas can take a write from the page only between its birth and its freeze, and only
-while a server is up. Per canvas, intersected with the 14:46:37–18:08:08 window in which
-pid 33867 has been running — born / frozen / hours open:
+On the day this was measured a canvas could take a write from the page only between its
+birth and its freeze, and only while a server was up. Per canvas, intersected with the
+14:46:37–18:08:08 window in which pid 33867 has been running — born / frozen / hours open:
 
 | canvas | born | frozen | open |
 |---|---|---|--:|
@@ -72,6 +72,14 @@ pid 33867 has been running — born / frozen / hours open:
 
 Freeze times are `git log --grep='^Canvas-Freeze: <ledger-id>'`; the server's start is
 `ps -o lstart= -p 33867`.
+
+*Later note, 2026-09-28.* The freeze stopped refusing writes on that date — ledger row
+`bc-10348813099-remove-terminal-freeze`, [*Ending a canvas*](../../README.md#ending-a-canvas)
+— so the first sentence above is a fact about 2026-09-24 and not a standing rule. The
+numbers are not affected: they are what was measured on the day, under the rule as it
+then stood, and they still re-derive from the commands beside them. A reading taken now
+would need the window's upper bound stated differently, because a canvas whose freeze is
+recorded goes on accepting writes after it.
 
 ### The census
 

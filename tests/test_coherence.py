@@ -232,27 +232,62 @@ class TheCommonAndFailureCasesWriteNothing(CoherenceTestCase):
         self.assertEqual(0, result.returncode, result.stderr.decode())
 
 
-class ACoherenceWriteIsRefusedAgainstAFrozenCanvas(CoherenceTestCase):
-    """The checker is a writer, so it inherits the frozen-canvas idiom."""
+class ACoherenceCheckRunsAgainstAFrozenCanvas(CoherenceTestCase):
+    """The checker is a writer, and a frozen canvas takes writes.
 
-    def test_it_exits_one_before_calling_the_adapter_and_changes_nothing(self):
-        _, trigger = self.primary_write()
+    This class used to assert the opposite: the checker inherited the store's
+    exit-1 frozen refusal through `store._open_canvas`, so a canvas whose
+    ledger row had closed could not be checked. The store no longer refuses on
+    those grounds — ledger row `bc-10348813099-remove-terminal-freeze` — and
+    `coherence.md` section *Trigger boundary* says so. The checker has no
+    frozen check of its own and never had one, so there was nothing to delete
+    here; what there is to assert is that the inherited one is really gone.
+    """
+
+    def test_it_calls_the_adapter_and_writes_against_a_frozen_canvas(self):
+        self.primary_write()
         code, _, stderr = self.run_canvas(
             "freeze", "a-ledger-row", "--why",
             "done: the deliberately frozen fixture has completed its test work",
         )
         self.assertEqual(0, code, stderr)
-        before = self.state()
+        # A write after the freeze, which is the trigger the checker is run
+        # for — the same shape any other primary write has.
+        _, trigger = self.primary_write("A node written after the row closed.")
         marker = os.path.join(self.workspace, "adapter-was-called")
 
         result = self.run_coherence(trigger, self.adapter(
             {"schema": 1, "findings": []}, marker=marker
         ))
 
-        self.assertEqual(1, result.returncode, result.stderr.decode())
-        self.assertEqual(b"", result.stdout)
-        self.assertFalse(os.path.exists(marker))
-        self.assertEqual(before, self.state())
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        self.assertTrue(os.path.exists(marker))
+
+    def test_a_finding_is_inserted_into_a_frozen_canvas(self):
+        # The checker's write is an ordinary `store.insert`, so this is the
+        # removal reaching the one caller that writes without a person behind
+        # it.
+        self.primary_write()
+        self.run_canvas(
+            "freeze", "a-ledger-row", "--why",
+            "done: the deliberately frozen fixture has completed its test work",
+        )
+        node_id, trigger = self.primary_write("A node written after the row closed.")
+        result = self.run_coherence(trigger, self.adapter({
+            "schema": 1,
+            "findings": [{
+                "question": "Does node %s contradict the node written after "
+                            "the row closed?" % node_id,
+                "reason": "node %s says the queue absorbs write bursts and the "
+                          "node after it says the row closed; a reader cannot "
+                          "tell which the canvas now asserts" % node_id,
+                "node_ids": [node_id],
+            }],
+        }))
+        self.assertEqual(0, result.returncode, result.stderr.decode())
+        self.assertIn("coherence check after", self.git("log", "-1", "--format=%s"))
+        with open(self.canvas_file(), encoding="utf-8") as handle:
+            self.assertIn("<question", handle.read())
 
     def test_a_stale_trigger_is_refused_before_calling_the_adapter(self):
         _, stale = self.primary_write()

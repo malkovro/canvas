@@ -814,8 +814,9 @@ class RenderWritesNothingToTheStore(RenderTestCase):
 
 class RenderIsAReadLikeTheOtherTwo(unittest.TestCase):
     """`read` and `history` write nothing, initialise nothing, and go on
-    working on a frozen canvas. So does this one. Its own workspace, because a
-    freeze is a write."""
+    working on a frozen canvas. So does this one, and so — since 2026-09-28 —
+    do the four editing verbs. Its own workspace, because a freeze is a
+    write."""
 
     def setUp(self):
         self.workspace = tempfile.mkdtemp(prefix="canvas-render-frozen-")
@@ -829,7 +830,7 @@ class RenderIsAReadLikeTheOtherTwo(unittest.TestCase):
             "ended",
             "--why",
             "done: the renderer landed and this canvas is the page it was "
-            "checked against; nodes are read-only history from here",
+            "checked against, so the work this canvas held is over",
         )
         self.assertEqual(0, code, stderr)
         code, stdout, stderr = run_canvas(self.workspace, "render", "ended")
@@ -1291,7 +1292,7 @@ class TheCommentProjectionIsAReadLikeThePage(unittest.TestCase):
         code, _, stderr = run_canvas(
             self.workspace, "freeze", "ended", "--why",
             "done: the comment projection landed and this canvas is what it "
-            "was checked against; nodes are read-only history from here",
+            "was checked against, so the work this canvas held is over",
         )
         self.assertEqual(0, code, stderr)
         code, stdout, stderr = run_canvas(

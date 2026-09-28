@@ -11,12 +11,18 @@ other half of that todo, which is not about the bug at all: **there is no verb
 that removes a canvas, and one half-made canvas sitting in the live store made
 somebody ask whether there should be.**
 
+> **Amended 2026-09-28.** The ruling in §1 stands. The *mechanism* §2 used to
+> carry it out does not: a freeze no longer stops writes, so freezing a
+> non-row canvas no longer disposes of it. §4 says exactly which sentences
+> that reopens and what replaces them. Read §2 as the dated record of what was
+> done on 2026-09-24, which is what it is.
+
 ---
 
 ## 1. The ruling: no, and the rule that says so already existed
 
 `engineering-spec.md` §*Lifecycle* gives a canvas a life with an end in it —
-born at `open`, grown through `executing`, frozen at `done` — and the word it
+born at `open`, grown through `executing`, ended at `done` — and the word it
 uses for what happens to it afterwards is **never deleted**. `README.md`'s
 [*Ending a canvas*](../README.md#ending-a-canvas) carries that forward and
 settles the shape of the question in advance:
@@ -83,8 +89,9 @@ byte of the document:
 
 Frozen at `d7d4c79dfb1997ece103d4470db3670002e7f7d6`, 2026-09-24. The document
 is unchanged — a freeze writes no byte of it — `bin/canvas read
-probe-empty-problem-20260924` still returns it, and an `insert` against it is
-now refused at exit `1` naming the freeze and its reason.
+probe-empty-problem-20260924` still returns it, and an `insert` against it was
+refused at exit `1` naming the freeze and its reason. *(That last clause was
+true when it was written and is no longer — see §4.)*
 
 That is the same call, for the same reason, that `skill-validation-b-20260924`
 already got at `c25aaf0` — *"a validation canvas that stays writable is one
@@ -116,3 +123,55 @@ the head it pins is not affected by anything after it.
   in this store knows what a ledger row is — `README.md`'s first constraint is
   that nothing here reads or writes `state/ledger` — so a guard like that would
   have to live in `bin/task-ledger`, and no evidence yet says it is needed.
+
+## 4. Amendment, 2026-09-28: the disposal mechanism is reopened, the ruling is not
+
+*Written for ledger row `bc-10348813099-remove-terminal-freeze`, which removed
+the Canvas terminal freeze: a frozen canvas now takes writes like any other,
+and the exit-1 refusal that used to stand behind the word "frozen" is gone.*
+
+**What stands.** §1 in full. There is still no verb that removes a canvas, and
+not one of the three arguments for that turns on the refusal: *never deleted*
+is the spec's word, an append-only store with a delete in it is not one, and
+nothing is harmed by a canvas that is not a row's, because every reader of the
+store joins on a ledger id. The *What would reopen this* clause is unchanged
+and this is not it. §3 stands too.
+
+**What is reopened: the three sentences in §2 that say a freeze disposes of
+anything.**
+
+- *"It is frozen rather than removed: a canvas is never deleted, and one left
+  writable is one somebody later mistakes for a live row mid-birth"* — the
+  first clause stands, the second no longer follows. Every frozen canvas is
+  left writable now; that is what the removal did.
+- *"a validation canvas that stays writable is one somebody later mistakes for
+  a live task"* (quoted from `skill-validation-b-20260924`'s freeze reason) —
+  same.
+- *"Frozen, it takes no more writes"* — false as written.
+
+**What replaces them.** A freeze is now an end marker and not a gate, so what
+it does for a non-row canvas is what it does for every other one: it records,
+in the log, that this canvas's work ended and why. `bin/canvas read <id>
+--frozen` prints that reason. For a half-made probe canvas the reason is
+exactly the thing a reader who finds it needs — *this is not a live row, here
+is what it is* — and that was always the more load-bearing half of §2's
+argument. What the freeze no longer supplies is the *guarantee* that nobody
+writes to it. Nothing supplies that now, for any canvas, by design.
+
+**The three canvases this makes writable again**, named because leaving them
+unnamed would be leaving the reader to find out: `probe-empty-problem-20260924`
+(frozen at `d7d4c79dfb1997ece103d4470db3670002e7f7d6`),
+`skill-validation-20260924` (frozen at
+`058d95f143394a1f32ae24fbc21fcc6091e30aa1`) and `skill-validation-b-20260924`
+(frozen at `c25aaf0795c1f2f9fdbc745aa32590a929d307a1`). All three keep their
+freeze commits, all three still answer `read --frozen` with the reason that
+says what they are, and all three now accept an edit. That is accepted rather
+than mitigated: the cost of somebody editing a dead probe canvas is one more
+commit in a log that records who wrote it and why, and the removal was taken
+on the ground that a refusal is the more expensive of the two.
+
+**What would reopen *this*.** Somebody actually mistaking one of the three for
+a live row and writing to it as though it were. That would be evidence for a
+guard, and the place for the guard is the one §3 already names — `bin/task-ledger`,
+which is the only thing that knows what a ledger row is — and not a return of
+the refusal, which would take the whole store back with it.

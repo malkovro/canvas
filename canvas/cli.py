@@ -13,12 +13,13 @@ Nine subcommands, and no more:
     canvas freeze  <canvas-id> --why TEXT
 
 Still **four editing verbs**, and now two writes that are not one of them:
-`create`, which is the birth of a canvas, and `freeze`, which is its end. A
-freeze edits no node — it records that the canvas has ended and changes not a
-byte of it — so the four that edit are still `replace`, `insert`, `remove` and
-`move`. `history` reads the log all of them write, and `read` reads the
-document they leave behind; both go on working on a frozen canvas, and every
-write verb is refused against one at exit 1.
+`create`, which is the birth of a canvas, and `freeze`, which records that its
+work ended. A freeze edits no node — it records that the canvas has ended and
+changes not a byte of it — so the four that edit are still `replace`,
+`insert`, `remove` and `move`. `history` reads the log all of them write, and
+`read` reads the document they leave behind. All of them go on working on a
+frozen canvas, the four editing verbs included: a freeze is an end marker and
+not a gate.
 
 `render` is the third read and is not a verb either: it prints the canvas as a
 projection and writes nothing at all — not the page, not a file, not a commit.
@@ -40,9 +41,11 @@ makes IWE's `--expect` match-count guard unnecessary, and the day a *write*
 takes a selector `--expect` has to exist beside it. `read --id` and `read
 --type` are not that and do not reopen it — they apply nothing, mint nothing and
 commit nothing, and the matches are the output, so there is no unseen second
-match for a guard to catch. There is no `unfreeze`, no `reopen` and no `thaw`: a
-freeze is final, and a ledger row whose task comes back gets a new ledger row and
-therefore a new canvas.
+match for a guard to catch. There is no `unfreeze`, no `reopen` and no `thaw`, and
+none of the three has anything to undo: a freeze refuses nothing, so a canvas
+whose ledger row has closed takes writes exactly as it did before, and work
+that comes back is written where it already lives rather than into a new
+Canvas identifier.
 
 `--why` is required by all four, and by `freeze`, with no default and no
 fallback. An absent one is argparse's own refusal and an empty or
@@ -170,7 +173,8 @@ def _read(args):
     is exit `0` and an empty root. The unflagged shape is unchanged — a read
     with no flags prints one header line and then the document, frozen canvas
     or not, so `canvas read <id> | tail -n +2` is not falsified by anybody
-    freezing anything.
+    freezing anything. Nor is anything else: the flag reports an end and no
+    verb acts on the report.
 
     The cost, stated because it is real: stdout is not itself a valid XML
     document. **The document begins at the `<?xml` declaration line, and
@@ -365,6 +369,9 @@ def _freeze(args):
     Then the sha, under the same name a read hands it out under. There is no
     news to print after it, because a freeze declares no `--base` and so asks
     no staleness question.
+
+    Nothing here changes what the canvas will accept next: the verbs that
+    write go on writing against it.
     """
     sha = store.freeze(args.canvas_id, args.why, author=args.author)
     sys.stdout.write(
@@ -962,14 +969,14 @@ def build_parser():
 
     freeze = verbs.add_parser(
         "freeze",
-        help="end the canvas: the last edit, and the reason it ended",
+        help="record that the canvas's work ended, and the reason it ended",
         description=(
             "Freeze the Canvas. One commit, naming no node "
             "and changing no byte of the document: what it records is that "
-            "the canvas has ended and why. Every write verb is refused "
-            "against a frozen canvas at exit 1, read and history go on "
-            "working, and there is no unfreeze — resumed work gets a new "
-            "Canvas. One verb for "
+            "the canvas has ended and why. It is an end marker and not a "
+            "gate — every verb, the four that write included, goes on working "
+            "against a frozen canvas, and a second freeze is legal though the "
+            "recorded ending stays the first one. One verb for "
             "both endings: done and abandoned are two things a --why says."
         ),
     )

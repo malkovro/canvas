@@ -1119,7 +1119,7 @@ def render(ledger_id, form=PAGE):
 
     A read, on exactly `read`'s terms: it goes through `store.read`, which
     writes no file, makes no commit and does not initialise a repository, and
-    it works on a frozen canvas like every other read.
+    it works on a frozen canvas like every other verb.
 
     **An invalid stored canvas is refused, at exit 1, with the diagnostics.**
     That is the one place this differs from `read`, and deliberately: `read`

@@ -1,8 +1,8 @@
 """The external, synchronous coherence check run after a successful write.
 
 This module owns model I/O and the response contract only.  Findings go
-through ``canvas.store.insert`` so ids, reasons, bases, validation, freeze
-guards and one-node commits continue to have one implementation.
+through ``canvas.store.insert`` so ids, reasons, bases, validation and
+one-node commits continue to have one implementation.
 """
 
 import argparse
@@ -127,12 +127,11 @@ def build_request(ledger_id, trigger):
             about=["option --trigger", "value %r" % trigger],
         )
 
-    # This is the ordinary write preflight.  In particular, its first answer
-    # for an ended canvas is the store's exit-1 frozen refusal, before a model
-    # process can start and before an id can be minted.
-    canvas_dir, path, root, head = store._open_canvas(
-        ledger_id, "run coherence check"
-    )
+    # This is the ordinary write preflight, and it is ordinary for a canvas
+    # whose ledger row has closed too: a frozen canvas is checked like any
+    # other.  The store used to refuse one here at exit 1, before a model
+    # process could start, and no longer does.
+    canvas_dir, path, root, head = store._open_canvas(ledger_id)
     if head != trigger:
         raise store.Refusal(
             "refusing coherence check for trigger %s: the current canvas head "
