@@ -72,6 +72,16 @@ three claims `rendering.md` §3 says are not free — every `<question>` id in t
 index, only `<question>` ids in it, a marker on every `<question>` node — are
 asserted against both.
 
+**Markdown is repaired per form, and the two forms differ because their
+transports do.** A node's character data is Markdown. The page renders it —
+`_prose` escapes the text and then emits `<strong>`, `<em>` and `<code>` for
+the inline Markdown the live store actually holds — following the convention
+`_unfold_markdown_tables` in `orchestrator/basecamp.py` sets for this system:
+text it did not write is repaired into what the destination renders. The
+comment does not, and must not: its transport *is* a Markdown converter, so
+the repair is already performed downstream, and a `<strong>` in that body
+would trip the rule below and cost the whole comment its formatting.
+
 `engineering-spec.md`'s *Projections* used to say the HTML page was
 *"pasteable into a Basecamp comment"*. It is not, and that sentence has been
 corrected there. Two facts about the transport kill it, and they compound: the
@@ -85,6 +95,8 @@ every class the page's meaning is carried in. So the comment projection emits
 `<` in a canvas is written `&lt;`. That is the one rule everything below bends
 to.
 """
+
+import re
 
 from xml.etree import ElementTree as ET
 
@@ -143,40 +155,269 @@ EMPTY_INDEX = (
 #: about a document the validator has already accepted.
 HEADINGS = ["h2", "h3", "h4"]
 
+#: The palette, the type scale and the measure — every colour, size and
+#: spacing in the stylesheet below is one of these, so the dark scheme is one
+#: block of overrides and there is no second copy of the design to keep in
+#: step. The names are the design vocabulary this page shares with the tab
+#: that frames it; the values are the only place either is written down.
+#:
+#: The document this is designed for is prose. Counted over
+#: `state/canvas/*.xml` on 2026-09-28, the node census across the 71 canvases
+#: of the live store is text 266, question 8, figure 3, section 2, list 1,
+#: link 1 — a prose document with a handful of figures in it. So the
+#: reading colour, the measure and the leading are what the page is judged on,
+#: and the eleven elements are told apart by typographic role and one hairline
+#: rather than by eleven borders competing for the same attention. Two of them
+#: get more than that and both earn it: `<figure>` is the one genuinely
+#: graphical element and gets a panel of its own, and `<question>` is the one
+#: that must stay findable and gets the only saturated colour on the page.
+#:
+#: Inline and nothing else: no web font, no external stylesheet, no image and
+#: no script, so the page opens from a `file://` path with nothing to fetch.
+#: That is `rendering.md` §1's standalone promise, and
+#: `test_the_drawn_figure_fetches_nothing` is what keeps it.
 STYLE = """
-    :root { color-scheme: light dark; }
-    body { margin: 0 auto; max-width: 46rem; padding: 2rem 1.25rem 4rem;
-           font: 16px/1.55 -apple-system, "Segoe UI", system-ui, sans-serif; }
-    h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
-    h2 { font-size: 1.2rem; margin: 2rem 0 .5rem; }
-    h3 { font-size: 1.05rem; margin: 1.5rem 0 .5rem; }
-    .rendered-from { margin: 0 0 1.5rem; font-size: .8rem; opacity: .7; }
-    .rendered-from code { font-size: .8rem; word-break: break-all; }
-    .question-index { border: 2px solid currentColor; border-radius: .4rem;
-                      padding: .75rem 1rem; margin: 0 0 2rem; }
-    .question-index h2 { margin: 0 0 .5rem; font-size: 1.05rem; }
-    .question-index ol { margin: 0; padding-left: 1.4rem; }
-    .question-index li { margin: .25rem 0; }
-    .question-index .answered { opacity: .55; }
-    .question { border-left: .35rem solid currentColor; padding: .4rem 0 .4rem .75rem;
-                margin: 1rem 0; }
-    .question.answered { opacity: .55; border-left-style: dotted; }
-    .question-marker { display: inline-block; font-size: .75rem;
-                       letter-spacing: .06em; text-transform: uppercase; }
-    .question-text { margin: .2rem 0 0; }
-    .crossing { margin: .25rem 0 0; font-size: .82rem; opacity: .75; }
-    .crossing-label { text-transform: uppercase; letter-spacing: .06em;
-                      font-size: .72rem; }
-    .crossing-sha { font-size: .75rem; word-break: break-all; }
-    tr.crossing-row td { border-top: none; }
-    .figure { margin: 1.25rem 0; }
-    .figure-drawing { display: block; width: 100%; height: auto; overflow: visible;
-                      border: 1px solid currentColor; border-radius: .3rem; }
-    figcaption { font-size: .78rem; opacity: .7; margin-top: .3rem; }
-    table { border-collapse: collapse; margin: 1.25rem 0; }
-    td { border: 1px solid currentColor; padding: .3rem .6rem; vertical-align: top; }
-    .empty { opacity: .5; font-style: italic; }
+    /* --- tokens: the palette, the type scale, the measure ---------------- */
+    :root {
+      color-scheme: light dark;
+
+      /* Surfaces, warm rather than neutral, so the page sits in the same
+         family as the dark chrome that frames it in the Canvas tab. */
+      --paper:       #fdfcfa;
+      --paper-sunk:  #f6f2ec;
+      --panel:       #f4efe8;
+      --rule:        #e3ddd4;
+      --rule-firm:   #cbc3b8;
+
+      /* Three weights of ink and no opacity: a dimmed element is a colour,
+         because opacity dims the background through it as well and stacks
+         unpredictably when two dim things nest. */
+      --ink:         #1d1a17;
+      --ink-soft:    #554e47;
+      --ink-faint:   #756c64;
+
+      /* The one saturated hue, and it means one thing: an open question. */
+      --accent:      #b4530f;
+      --accent-soft: #fbf0e6;
+      --accent-rule: #e6a874;
+
+      /* The figure's ink. Canvas Diagram 1 draws in `currentColor`, so
+         setting `color` on the drawing is the whole of how a figure is
+         coloured, and nothing in `canvas/diagram.py` had to learn a palette. */
+      --diagram:     #2b5f73;
+
+      --link:        #0b5c86;
+
+      --font-prose: -apple-system, "Segoe UI", system-ui, sans-serif;
+      --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+      /* A 1.2 modular scale on a 17px body. */
+      --text-xs:    0.74rem;
+      --text-sm:    0.885rem;
+      --text-base:  1.0625rem;
+      --text-lg:    1.275rem;
+      --text-xl:    1.53rem;
+      --text-2xl:   1.836rem;
+
+      --leading-body:  1.65;
+      --leading-tight: 1.2;
+
+      /* Prose is held to a measure; a figure and a table are not, because a
+         diagram and a grid are read across rather than down. */
+      --measure: 34rem;
+      --page:    46rem;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper:       #181513;
+        --paper-sunk:  #1f1b18;
+        --panel:       #201c19;
+        --rule:        #302a25;
+        --rule-firm:   #473f38;
+
+        --ink:         #efe9e4;
+        --ink-soft:    #b6ada5;
+        --ink-faint:   #8b827b;
+
+        --accent:      #f0a35c;
+        --accent-soft: #2a1d12;
+        --accent-rule: #8a5a2c;
+
+        --diagram:     #8fc4d8;
+
+        --link:        #79bde4;
+      }
+    }
+
+    /* --- the page, and <canvas> itself ----------------------------------- */
+    body { margin: 0 auto; max-width: var(--page); padding: 3rem 1.5rem 6rem;
+           background: var(--paper); color: var(--ink);
+           font-family: var(--font-prose); font-size: var(--text-base);
+           line-height: var(--leading-body);
+           -webkit-text-size-adjust: 100%; }
+    code { font-family: var(--font-mono); font-size: 0.9em; }
+    strong { font-weight: 650; color: var(--ink); }
+
+    /* --- the header ------------------------------------------------------ */
+    header { margin: 0 0 2rem; }
+    h1 { font-size: var(--text-2xl); line-height: var(--leading-tight);
+         letter-spacing: -.012em; margin: 0 0 .4rem; }
+    .rendered-from { max-width: var(--measure); margin: 0;
+                     font-size: var(--text-xs); line-height: 1.5;
+                     color: var(--ink-faint); }
+    .rendered-from code { font-size: var(--text-xs); word-break: break-all;
+                          color: var(--ink-soft); }
+
+    /* --- the index of questions ------------------------------------------ */
+    .question-index { margin: 1.5rem 0 2.75rem; padding: .85rem 1.1rem;
+                      background: var(--panel);
+                      border: 1px solid var(--rule);
+                      border-left: 3px solid var(--accent);
+                      border-radius: .1rem .4rem .4rem .1rem; }
+    .question-index h2 { margin: 0 0 .5rem; border: 0; padding: 0;
+                         font-size: var(--text-xs); font-weight: 700;
+                         letter-spacing: .1em; text-transform: uppercase;
+                         color: var(--ink-faint); }
+    .question-index ol { margin: 0; padding-left: 1.3rem;
+                         font-size: var(--text-sm); }
+    .question-index li { margin: .35rem 0; }
+    .question-index li::marker { color: var(--ink-faint); }
+    .question-index li.open { color: var(--ink); }
+    .question-index li.open a { color: var(--accent);
+                                text-decoration-color: var(--accent-rule); }
+    .question-index li.answered { color: var(--ink-faint); }
+    .question-index li.answered a { color: var(--ink-soft); }
+
+    /* An index of nothing is not a section. 66 of the 71 canvases in the live
+       store hold no <question> at all, so the loudest thing on almost every
+       page was a box announcing its own emptiness. The claim still stands and
+       is still made in the same place and the same order — the nav is here,
+       before the document, and it still says in words that nothing is open —
+       but it is set at the weight of the provenance line above it rather than
+       at the weight of a section, and it loses the panel, the rule and the
+       heading. `rendering.md` §2 records the decision and its reason. */
+    .question-index[data-questions="none"] { margin: .3rem 0 2.5rem;
+                                             padding: 0; background: none;
+                                             border: 0; border-radius: 0; }
+    .question-index[data-questions="none"] .empty {
+        max-width: var(--measure); margin: 0; font-size: var(--text-xs);
+        font-style: normal; color: var(--ink-faint); }
+
+    /* --- <section>: a heading, and a rule that says a part has started ---- */
+    .section { margin: 2.75rem 0; }
+    .section > h2 { margin: 0 0 1rem; padding-top: .8rem;
+                    border-top: 1px solid var(--rule-firm);
+                    font-size: var(--text-xl); line-height: var(--leading-tight);
+                    letter-spacing: -.008em; }
+    .section .section { margin: 2rem 0; }
+    .section > h3 { margin: 0 0 .75rem; font-size: var(--text-lg);
+                    line-height: var(--leading-tight); color: var(--ink-soft); }
+
+    /* --- <text>: the document, and what everything else is measured by ---- */
+    .text { max-width: var(--measure); margin: 0 0 1.1rem; }
+
+    /* --- <list> and <item> ----------------------------------------------- */
+    .list { max-width: var(--measure); margin: 1.1rem 0; padding-left: 1.2rem;
+            list-style: square; }
+    .item { margin: .4rem 0; padding-left: .2rem; }
+    .item::marker { color: var(--accent-rule); }
+
+    /* --- <table>, <row> and <cell>: rules where a grid needs them and
+           nowhere else. A tint tells one row from the next, a hairline tells
+           one cell from the next, and the table has no outer box. ---------- */
+    /* No width: a two-column table stretched to the page is a grid pretending
+       to be a layout. It is as wide as it needs to be and no wider. */
+    .table { max-width: 100%; margin: 1.75rem 0; border-collapse: collapse;
+             font-size: var(--text-sm); line-height: 1.45;
+             border-top: 1px solid var(--rule-firm);
+             border-bottom: 1px solid var(--rule-firm); }
+    .row:nth-child(even) { background: var(--paper-sunk); }
+    .row + .row .cell { border-top: 1px solid var(--rule); }
+    .cell { padding: .5rem .75rem; vertical-align: top;
+            font-variant-numeric: tabular-nums; }
+    .cell + .cell { border-left: 1px solid var(--rule); }
+    tr.crossing-row .crossing { border-top: 1px solid var(--rule); }
+
+    /* --- <figure>: the one genuinely graphical element ------------------- */
+    .figure { margin: 2rem 0; padding: 1.25rem 1.25rem 1rem;
+              background: var(--panel); border: 1px solid var(--rule);
+              border-radius: .5rem; color: var(--diagram); }
+    .figure-drawing { display: block; width: 100%; height: auto;
+                      overflow: visible; }
+    figcaption { margin: .9rem 0 0; padding-top: .7rem;
+                 border-top: 1px solid var(--rule);
+                 font-size: var(--text-xs); line-height: 1.5;
+                 color: var(--ink-faint); }
+    figcaption code { color: var(--ink-soft); }
+
+    /* --- <link> ---------------------------------------------------------- */
+    a { color: var(--link); text-decoration-thickness: 1px;
+        text-underline-offset: .18em;
+        text-decoration-color: var(--accent-rule); }
+    .link { max-width: var(--measure); margin: 1.1rem 0; }
+
+    /* --- <question>: the one element that has to stay findable ----------- */
+    .question { max-width: var(--measure); margin: 1.75rem 0;
+                padding: .8rem 1.1rem;
+                border-left: 3px solid var(--accent);
+                border-radius: .1rem .4rem .4rem .1rem;
+                background: var(--accent-soft); }
+    .question-marker { display: block; margin-bottom: .25rem;
+                       font-size: var(--text-xs); font-weight: 700;
+                       letter-spacing: .1em; text-transform: uppercase;
+                       color: var(--accent); }
+    .question-text { margin: 0; }
+    /* An answered question keeps its marker and its entry and loses its
+       loudness — `rendering.md` §2. It gives up the wash and the saturated
+       rule, not the shape, so it is still recognisably the same kind of
+       thing. */
+    .question.answered { background: none; color: var(--ink-soft);
+                         border-left: 3px dotted var(--rule-firm); }
+    .question.answered .question-marker { color: var(--ink-faint); }
+
+    /* --- a node that crossed between the canvas's spaces ------------------ */
+    .crossing { max-width: var(--measure); margin: .6rem 0 0;
+                font-size: var(--text-sm); line-height: 1.5;
+                color: var(--ink-soft); }
+    .crossing-label { display: inline-block; margin-right: .35rem;
+                      font-size: var(--text-xs); font-weight: 700;
+                      letter-spacing: .1em; text-transform: uppercase;
+                      color: var(--ink-faint); }
+    .crossing-why { font-style: italic; }
+    .crossing-sha { font-size: var(--text-xs); word-break: break-all;
+                    color: var(--ink-faint); }
+
+    .empty { color: var(--ink-faint); font-style: italic; }
 """
+
+
+
+#: The inline Markdown a canvas really holds, and nothing else.
+#:
+#: Measured over the 71 canvases of the live store on 2026-09-28: 77 backtick
+#: code spans, 4 `**bold**` runs and 2 `*emphasis*` runs, and no heading, no
+#: Markdown link, no blockquote and no list marker in any node's character
+#: data. This pattern is that census and not a Markdown grammar: a general
+#: engine would be a second parser to keep, and every construct it added would
+#: be a way for prose nobody meant as markup to come out rewritten.
+#:
+#: Two deliberate narrownesses, each paid for by something in the store. A code
+#: span is matched first, so the `**Unrepaired finding:**` that a node quotes
+#: *inside* backticks keeps its asterisks and only the one outside them goes
+#: bold — which is what its author meant and what a Markdown reader would do.
+#: And emphasis requires a non-space character at both ends, so the cron
+#: expression `30 4 * * 1,4` on canvas `bc-10336256184` is not two asterisks
+#: around a space; it is a cron expression, and it stays one.
+INLINE_MARKDOWN = re.compile(
+    r"`(?P<code>[^`\n]+)`"
+    r"|\*\*(?P<strong>\S(?:[^*]*?\S)?)\*\*"
+    r"|\*(?P<em>\S(?:[^*]*?\S)?)\*"
+)
+
+#: What each of those three becomes. The tags are this module's own, written
+#: here and never taken from the canvas.
+INLINE_TAGS = {"code": "code", "strong": "strong", "em": "em"}
 
 
 def _text(value):
@@ -187,6 +428,55 @@ def _text(value):
         .replace("<", "&lt;")
         .replace(">", "&gt;")
     )
+
+
+def _prose(value):
+    """Character data as the inline Markdown it is, repaired for the page.
+
+    A `<text>` node's content is Markdown — that is what every agent and every
+    person writing to a canvas types — and the page had no Markdown layer at
+    all, so `**Unrepaired finding:**` on canvas
+    `bc-10333741223-review-clean-20260925-k` arrived as four literal asterisks
+    where its author meant bold.
+
+    **This follows the convention already set for this system's Markdown**, in
+    `_unfold_markdown_tables` in `orchestrator/basecamp.py` in
+    `malkovro/ledger-orchestrator`: *"the second repair this module performs on
+    text it did not write"*. Text this system did not write is repaired into
+    what the destination renders, rather than passed through and left to
+    arrive wrong. The destination here is a browser, so the repair is to emit
+    the tags the browser renders.
+
+    **Escape first, format second, and never the other way round.** `_text`
+    runs over the whole string before this pattern sees any of it, so a `<` a
+    writer really typed is already `&lt;` and cannot become a tag: a `<text>`
+    node holding `<script>alert(1)</script>` comes out inert, exactly as
+    before. The only `<` characters in the result are the ones `INLINE_TAGS`
+    put there, around text that has already been escaped. Nothing from the
+    canvas is ever passed through as HTML.
+
+    **Decided per form, and the `comment` form does not get this.** There the
+    body is handed to a Markdown converter — Basecamp's, via the `basecamp`
+    CLI — which performs this very repair itself, so `_comment_text` leaves
+    `*` alone and must go on leaving it alone: the same bytes are a defect on
+    the page and correct on the comment, because only one of the two
+    transports reads Markdown. And the comment form could not do this even if
+    it wanted to. Its one absolute rule is that no raw HTML tag of any kind
+    and no `<` character at all reaches its output, because one tag turns the
+    CLI's Markdown conversion off for the whole comment, including the ledger
+    row's own status blocks around it. A `<strong>` emitted there would cost
+    the comment the very formatting it was emitted to produce.
+    """
+    escaped = _text(value)
+
+    def one(match):
+        for group, tag in INLINE_TAGS.items():
+            found = match.group(group)
+            if found is not None:
+                return "<%s>%s</%s>" % (tag, found, tag)
+        return match.group(0)
+
+    return INLINE_MARKDOWN.sub(one, escaped)
 
 
 def _attribute(value):
@@ -233,12 +523,23 @@ def _question_index(questions):
     Nothing else is named here. No section, no text node, no link: the index
     is the question ledger and an id in it is a question's id.
     """
+    if not questions:
+        # The empty case, which is what 66 of the 71 canvases in the live
+        # store render. Same block, same place, same sentence: the nav is
+        # still here and still before the document, and it still says in
+        # words that nothing is open. What it loses is the weight — the
+        # heading and the panel go, and the one line is set at the size of
+        # the provenance line above it. `data-questions` and not a second
+        # class, because the class attribute is `question-index` exactly and
+        # three tests find this block by that literal string.
+        return [
+            '<nav class="question-index" id="question-index" '
+            'data-questions="none">',
+            '<p class="empty">%s</p>' % EMPTY_INDEX,
+            "</nav>",
+        ]
     out = ['<nav class="question-index" id="question-index">']
     out.append("<h2>%s</h2>" % INDEX_HEADING)
-    if not questions:
-        out.append('<p class="empty">%s</p>' % EMPTY_INDEX)
-        out.append("</nav>")
-        return out
     out.append("<ol>")
     for node in questions:
         answered = _is_answered(node)
@@ -252,7 +553,7 @@ def _question_index(questions):
                 node_id,
                 node_id,
                 "answered" if answered else "open",
-                _text(node.text),
+                _prose(node.text),
             )
         )
     out.append("</ol>")
@@ -275,6 +576,11 @@ def _crossing_line(edit):
     <sha>` in the canvas directory — by a reader who has a pasted page and
     nothing else. It is forty characters for the reason the page's own header
     is: an abbreviation stops being an identity key as the log grows.
+
+    `_text` and not `_prose`, and that is the same decision said again: this
+    is a quotation, and a quotation whose asterisks the page decided were
+    emphasis is no longer verbatim. A node's own character data is prose the
+    page renders; a `--why` is a commit message the page quotes.
     """
     return (
         '<span class="crossing-label">%s</span>%s'
@@ -323,7 +629,7 @@ def _question(node, crossings):
         ),
         '<span class="question-marker">%s</span>'
         % (ANSWERED_LABEL if answered else OPEN_LABEL),
-        '<p class="question-text">%s</p>' % _text(node.text),
+        '<p class="question-text">%s</p>' % _prose(node.text),
     ] + _crossing(node, crossings) + [
         "</div>",
     ]
@@ -380,6 +686,14 @@ def _node(node, depth, out, crossings):
     than dropped, because a projection that silently loses a node is worse
     than one that shows it plainly.
 
+    A node's character data is Markdown wherever it is prose — `<text>`,
+    `<item>`, `<cell>`, `<question>` — and goes through `_prose`, which
+    escapes it and then emits the tags for the inline Markdown a canvas
+    really holds. What does not: a `<section>`'s `title` and a `<link>`'s
+    label, which are labels rather than prose and whose fallback is a URL;
+    a `<figure>`'s source, which is a diagram's own notation; and a crossing
+    reason, which is a quotation.
+
     A node that crossed carries its one line here, beside itself, and every
     element gets it in the one position that is valid HTML for that element:
     inside the `<li>`, inside the `<td>`, inside the `<figure>`, and after the
@@ -400,7 +714,7 @@ def _node(node, depth, out, crossings):
             _node(child, depth + 1, out, crossings)
         out.append("</section>")
     elif tag == "text":
-        out.append('<p class="text"%s>%s</p>' % (_identity(node), _text(node.text)))
+        out.append('<p class="text"%s>%s</p>' % (_identity(node), _prose(node.text)))
         out.extend(_crossing(node, crossings))
     elif tag == "list":
         out.append('<ul class="list"%s>' % _identity(node))
@@ -411,7 +725,7 @@ def _node(node, depth, out, crossings):
     elif tag == "item":
         out.append('<li class="item"%s>%s%s</li>' % (
             _identity(node),
-            _text(node.text),
+            _prose(node.text),
             "".join(_crossing(node, crossings)),
         ))
     elif tag == "table":
@@ -429,7 +743,7 @@ def _node(node, depth, out, crossings):
     elif tag == "cell":
         out.append('<td class="cell"%s>%s%s</td>' % (
             _identity(node),
-            _text(node.text),
+            _prose(node.text),
             "".join(_crossing(node, crossings)),
         ))
     elif tag == "figure":
@@ -439,7 +753,7 @@ def _node(node, depth, out, crossings):
     elif tag == "question":
         out.extend(_question(node, crossings))
     else:
-        out.append('<p class="text"%s>%s</p>' % (_identity(node), _text(node.text)))
+        out.append('<p class="text"%s>%s</p>' % (_identity(node), _prose(node.text)))
         out.extend(_crossing(node, crossings))
 
 

@@ -179,11 +179,78 @@ names the job; the entries are complete.
   document's, and the id in the page is the id in the canvas, so a reader who has
   found a node in one has found it in the other.
 
+### What the index looks like when there is no question at all
+
+**Decision, settled 2026-09-28: on a canvas with no `<question>` node, the index
+is one line of small, quiet text under the provenance line — no panel, no
+border, no heading. The `<nav class="question-index">` block is still emitted,
+still before the document, and still says in words that nothing is open. Only
+its weight changes.**
+
+This was implemented and tested and never *decided*. The zero case printed the
+same 2px box as a canvas with three open questions, under the same `Open
+questions` heading, above all content — so the loudest element on the page was
+the page announcing its own emptiness. Counted over
+`/Users/lfigea/.openclaw/workspace/state/canvas/*.xml` on 2026-09-28, that is
+66 of 71 canvases: it is not an edge case, it is what a canvas page normally
+looks like. A design that gives its most prominent element to the most common
+absence is spending its loudest voice on its least informative sentence.
+
+Three things were considered and two refused. **Dropping the index entirely
+when it is empty** was refused: a reader who has a pasted page and not the
+canvas could then not tell "nobody asked anything" from "this renderer is older
+than the index", which is exactly the distinction the rest of this section
+exists to protect. **Moving it below the document** was refused for the reason
+*Nothing is moved and nothing is collapsed* gives above: a block whose position
+depends on its contents is a second layout to keep in your head. **Setting it
+at the weight of the provenance line** keeps the claim, keeps the place, keeps
+the order, and costs the page nothing — the sentence is still there for the
+reader who wants it, sized like the other thing on the page that says what this
+document is rather than what it contains.
+
+The heading goes with the panel in the empty case. `Open questions` names a job,
+and *Why the heading still says "Open questions"* above argues it from what a
+reader scans the index *for*; there is nothing to scan, so the line says the
+whole thing on its own. The wording is unchanged and is still the single
+`EMPTY_INDEX` constant both projections read, so the page and the comment go on
+making one claim in one sentence.
+
+**The comment projection is unchanged.** Its index is already two blocks of
+plain text with no box to remove, and its transport gives it no way to be
+quieter; the decision above is about visual weight and there is no such thing
+in that form.
+
+**Nothing here weakens the three claims below, and it could not.** All three are
+statements about the `<question>` nodes of the document — every one's id in the
+index, only those ids in it, a marker on every one — and on a canvas with no
+`<question>` node they are true of the empty set, whatever the index looks like.
+There is no question whose id could be missing, no non-question id that appears
+(the index names nothing at all), and no question node that could be unmarked.
+`test_the_index_names_nothing_on_a_canvas_with_no_questions` and
+`test_a_canvas_with_no_question_at_all_carries_no_marker` assert exactly that
+and both still pass **unchanged**: the first still finds the block by
+`<nav class="question-index"` and still reads zero entries out of it, which is
+why the empty state is marked by a `data-questions="none"` attribute and not by
+a second class — the class attribute is that literal string and three tests find
+the block by it. What changed is CSS and one heading, both named in the list
+below.
+
 ### Free to change, without reopening this
 
 The label wording, the dimming, the CSS, the `<ol>`, the caption, the heading
 level, whether an entry shows the question's text as well as its id. All
-presentation, all `canvas/render.py`'s.
+presentation, all `canvas/render.py`'s. The palette, the type scale and the
+measure are in that list too, and they are `canvas/render.py`'s `STYLE`
+constant's: there is no stylesheet file, no colour in the document and nothing
+outside that constant that a change to either has to be kept in step with.
+
+One item has come off this list by being decided rather than by being taken
+away: what the index looks like with nothing in it, settled in the subsection
+above. It was always free — it is the CSS and the heading level — but it was
+free *and undecided*, and an undecided default is what put a box announcing an
+absence at the top of 66 of 71 pages. Changing it again needs no ruling
+reopened; it needs that subsection rewritten, so the next reader is told what
+was chosen and why rather than finding a shape nobody argued for.
 
 What is not free without reopening this section: that **every** `<question>` id
 appears in the index, that **only** `<question>` ids appear in it, and that

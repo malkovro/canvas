@@ -940,6 +940,119 @@ class RenderRefusesInTheShapeEveryRefusalTakes(unittest.TestCase):
         self.assertRefusalShape(stderr, 2)
 
 
+class MarkdownInAProseNodeIsRepairedForThePage(unittest.TestCase):
+    """A `<text>` node's content is Markdown, and the page has to render it.
+
+    The defect this pins: on the live canvas
+    `bc-10333741223-review-clean-20260925-k`, a node reading *"It reads:
+    `**Unrepaired finding:**` what ..."* arrived in the page as four literal
+    asterisks, because `_text` escaped three characters and nothing looked at
+    the rest. The repair follows the convention
+    `orchestrator/basecamp.py`'s `_unfold_markdown_tables` sets for this
+    system's Markdown — text it did not write is repaired into what the
+    destination renders — and it is decided per form: the comment's transport
+    is itself a Markdown converter, so the identical bytes are correct there
+    and are left alone.
+
+    Its own workspace, because it needs nodes the shared one does not carry.
+    """
+
+    #: The reproduction, near enough verbatim from that canvas: two `**bold**`
+    #: runs quoted *inside* backticks, and one outside them that is really
+    #: bold. A code span is matched first, so only the third goes bold.
+    REPRODUCTION = (
+        "A stood-down step is carried under the heading "
+        "`**Unrepaired finding:**` and never `**Deliverable:**`. "
+        "It reads: **Unrepaired finding:** what <step> found."
+    )
+
+    #: The cron expression on canvas `bc-10336256184`, which is the one place
+    #: in the live store where a pair of asterisks is not emphasis.
+    CRON = "The installed cron is '30 4 * * 1,4' - Monday and Thursday."
+
+    #: A tag a writer really typed. Escaping runs before formatting, so this
+    #: can only ever come out inert.
+    TAGGED = "A writer typed <script>alert(1)</script> and meant **it**."
+
+    def setUp(self):
+        self.workspace = tempfile.mkdtemp(prefix="canvas-render-markdown-")
+        self.addCleanup(shutil.rmtree, self.workspace, True)
+        self.assertTrue(self.workspace.startswith(tempfile.gettempdir()))
+        build(self.workspace, "markdown", "none")
+        self.ids = {}
+        for name, text in (
+            ("reproduction", self.REPRODUCTION),
+            ("cron", self.CRON),
+            ("tagged", self.TAGGED),
+        ):
+            self.ids[name] = insert(
+                self.workspace,
+                "markdown",
+                type="text",
+                text=text,
+                into="root",
+                why=(
+                    "the page renders a text node's Markdown and this node is "
+                    "the %s case it is measured against; it retires when the "
+                    "live store stops holding character data of this shape"
+                    % name
+                ),
+            )
+
+    def page(self):
+        code, stdout, stderr = run_canvas(self.workspace, "render", "markdown")
+        self.assertEqual(0, code, stderr)
+        return stdout
+
+    def paragraph(self, name):
+        page = self.page()
+        found = re.search(
+            r'<p class="text" id="%s">(.*?)</p>' % self.ids[name], page, re.S
+        )
+        self.assertIsNotNone(found, "text node %s is not in the page" % name)
+        return found.group(1)
+
+    def test_bold_in_a_text_node_reaches_the_page_as_strong_and_not_asterisks(self):
+        # The named defect. Before the repair this paragraph carried
+        # `**Unrepaired finding:**` and no <strong> at all.
+        body = self.paragraph("reproduction")
+        self.assertIn("<strong>Unrepaired finding:</strong>", body)
+        self.assertNotIn("**Unrepaired finding:** what", body)
+
+    def test_a_backticked_span_is_code_and_keeps_the_asterisks_inside_it(self):
+        # A code span is matched first, so a node quoting the literal markup
+        # of a heading still shows it as the characters it quoted.
+        body = self.paragraph("reproduction")
+        self.assertIn("<code>**Unrepaired finding:**</code>", body)
+        self.assertIn("<code>**Deliverable:**</code>", body)
+
+    def test_a_cron_expression_is_not_emphasis(self):
+        # `30 4 * * 1,4` on canvas bc-10336256184. Emphasis needs a non-space
+        # character at both ends, which is what keeps a schedule a schedule.
+        body = self.paragraph("cron")
+        self.assertIn("'30 4 * * 1,4'", body)
+        self.assertNotIn("<em>", body)
+
+    def test_a_tag_a_writer_typed_is_still_inert_after_the_markdown_pass(self):
+        # Escape first, format second. The only tags in the output are the
+        # ones this renderer wrote; nothing from the canvas is passed through.
+        body = self.paragraph("tagged")
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body)
+        self.assertNotIn("<script", self.page())
+        self.assertIn("<strong>it</strong>", body)
+
+    def test_the_comment_form_leaves_its_markdown_for_its_own_converter(self):
+        # The same bytes, correct in this form: the transport is a Markdown
+        # converter, and a <strong> here would turn that conversion off for
+        # the whole comment.
+        code, body, stderr = run_canvas(
+            self.workspace, "render", "markdown", "--format", "comment"
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertNotIn("<", body)
+        self.assertIn("**Unrepaired finding:** what", body)
+
+
 class TheCommentProjectionIsWhatABasecampCommentRenders(RenderTestCase):
     """The second projection's shape, which is dictated by the transport and
     not by taste. A Basecamp comment body is plain block-level Markdown —
