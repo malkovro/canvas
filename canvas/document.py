@@ -54,9 +54,10 @@ and it loses it on its first edit, visibly, in that edit's own diff.
 
 from xml.etree import ElementTree as ET
 
-#: The schema version this writer emits. Pinned by `schema/canvas.rng` to the
-#: literal 1; a file declaring anything else fails against the grammar.
-SCHEMA_VERSION = "1"
+#: New canvases use schema 2. The grammar retains an explicit schema-1 branch,
+#: and edits never rewrite an existing root's version, so old canvases remain
+#: readable and editable without migration.
+SCHEMA_VERSION = "2"
 
 #: `node-identity.md` section 4: a node is born at v="1".
 BIRTH_VERSION = "1"

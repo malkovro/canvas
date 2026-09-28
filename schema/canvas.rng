@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  The Canvas file format, schema version 1.
+  The Canvas file format, schema versions 1 and 2.
 
   This grammar is the definition of the canvas vocabulary. It is normative and
   it is the only place the vocabulary is written down: the validator in
@@ -19,27 +19,43 @@
          datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 
   <start>
-    <ref name="canvas"/>
+    <choice>
+      <ref name="canvas-v1"/>
+      <ref name="canvas-v2"/>
+    </choice>
   </start>
 
   <!-- The root. It is the one node that carries neither `id` nor `v`:
        node-identity.md §4 puts <canvas> outside the identity rules entirely. -->
-  <define name="canvas">
+  <define name="canvas-v1">
     <element name="canvas">
       <attribute name="ledger">
         <data type="token">
           <param name="minLength">1</param>
         </data>
       </attribute>
-      <!-- The schema version. Pinned to 1, so a file declaring a future
-           version fails against this schema rather than being read by it. -->
       <attribute name="schema">
         <value>1</value>
       </attribute>
       <zeroOrMore>
         <choice>
-          <ref name="section-outer"/>
-          <ref name="leaf"/>
+          <ref name="section-outer-v1"/>
+          <ref name="leaf-v1"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="canvas-v2">
+    <element name="canvas">
+      <attribute name="ledger">
+        <data type="token"><param name="minLength">1</param></data>
+      </attribute>
+      <attribute name="schema"><value>2</value></attribute>
+      <zeroOrMore>
+        <choice>
+          <ref name="section-outer-v2"/>
+          <ref name="leaf-v2"/>
         </choice>
       </zeroOrMore>
     </element>
@@ -72,37 +88,69 @@
   <!-- Section nests one level: two levels of <section> in total, a third is
        invalid. The depth limit is why there are two patterns for one element
        name rather than one recursive pattern. -->
-  <define name="section-outer">
+  <define name="section-outer-v1">
     <element name="section">
       <ref name="node-attributes"/>
       <attribute name="title"/>
       <zeroOrMore>
         <choice>
-          <ref name="section-inner"/>
-          <ref name="leaf"/>
+          <ref name="section-inner-v1"/>
+          <ref name="leaf-v1"/>
         </choice>
       </zeroOrMore>
     </element>
   </define>
 
-  <define name="section-inner">
+  <define name="section-inner-v1">
     <element name="section">
       <ref name="node-attributes"/>
       <attribute name="title"/>
       <zeroOrMore>
-        <ref name="leaf"/>
+        <ref name="leaf-v1"/>
       </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="section-outer-v2">
+    <element name="section">
+      <ref name="node-attributes"/>
+      <attribute name="title"/>
+      <zeroOrMore>
+        <choice>
+          <ref name="section-inner-v2"/>
+          <ref name="leaf-v2"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="section-inner-v2">
+    <element name="section">
+      <ref name="node-attributes"/>
+      <attribute name="title"/>
+      <zeroOrMore><ref name="leaf-v2"/></zeroOrMore>
     </element>
   </define>
 
   <!-- Every non-section node. <item>, <row> and <cell> are not here: they
        exist only inside their own parent and nowhere else. -->
-  <define name="leaf">
+  <define name="leaf-v1">
     <choice>
       <ref name="text"/>
       <ref name="list"/>
       <ref name="table"/>
-      <ref name="figure"/>
+      <ref name="figure-v1"/>
+      <ref name="link"/>
+      <ref name="question"/>
+    </choice>
+  </define>
+
+  <define name="leaf-v2">
+    <choice>
+      <ref name="text"/>
+      <ref name="list"/>
+      <ref name="table"/>
+      <ref name="figure-v2"/>
       <ref name="link"/>
       <ref name="question"/>
     </choice>
@@ -160,14 +208,20 @@
     </element>
   </define>
 
-  <!-- A diagram. In schema v1 a <figure> holds a textual source only.
-       Admitting inline SVG means admitting a foreign namespace with an open
-       element set, which is the HTML problem the closed vocabulary exists to
-       prevent; the engineering spec leaves the renderer's source open, and
-       settling it the other way is a v2 change with its own reasoning. -->
-  <define name="figure">
+  <!-- A schema-v1 figure remains character data, preserving every existing
+       canvas without migration. Schema v2 distinguishes the repository-owned
+       Canvas Diagram 1 default from the validated inline-SVG escape hatch. -->
+  <define name="figure-v1">
     <element name="figure">
       <ref name="node-attributes"/>
+      <text/>
+    </element>
+  </define>
+
+  <define name="figure-v2">
+    <element name="figure">
+      <ref name="node-attributes"/>
+      <optional><attribute name="payload"><value>svg</value></attribute></optional>
       <text/>
     </element>
   </define>

@@ -4,10 +4,10 @@ Every read and every write of a canvas goes through `validate_file`. The four
 verbs validate the document they are about to write *before* committing it, so
 an invalid canvas is never reachable on disk.
 
-The vocabulary is not restated here. Every rule about what is legal lives in
-`schema/canvas.rng` and nowhere else; this module knows about `id` and `v` only
-as labels to print in a diagnostic, because that is how a canvas node is
-addressed. The verdict is always xmllint's, never this module's.
+The canvas vocabulary is not restated here. Every rule about its shape lives in
+`schema/canvas.rng`. Schema-v2 inline SVG is escaped character data rather than
+canvas child elements, so after RELAX NG accepts the document this module asks
+the closed payload validator to enforce that escape hatch's inert subset.
 """
 
 import os
@@ -16,8 +16,10 @@ import stat
 import subprocess
 import sys
 from xml.parsers import expat
+from xml.etree import ElementTree as ET
 
 from canvas import refusal
+from canvas import svg
 
 SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -272,7 +274,19 @@ def validate_file(path):
         )
 
     if result.returncode == 0:
-        return []
+        root = ET.parse(path).getroot()
+        if root.get("schema") != "2":
+            return []
+        problems = []
+        for figure in root.iter("figure"):
+            if figure.get("payload") != "svg":
+                continue
+            for problem in svg.validate(figure.text or ""):
+                problems.append(
+                    "%s: <figure> (id=\"%s\", v=\"%s\"): %s"
+                    % (path, figure.get("id"), figure.get("v"), problem)
+                )
+        return problems
     if result.returncode not in _XMLLINT_DOCUMENT_PROBLEM:
         raise EnvironmentProblem(
             "xmllint exited %d validating %s against %s:\n%s"

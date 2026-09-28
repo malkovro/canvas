@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="figure-text" schema="2">
+  <figure id="f2gx" v="1">box start 1 1 "Start"
+box finish 1 2 "Finish"
+edge start -&gt; finish "next"</figure>
+</canvas>

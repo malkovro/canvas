@@ -3290,6 +3290,7 @@ def insert(
     answered=False,
     author=None,
     base=None,
+    payload=None,
 ):
     """Add one node. The only verb that mints an id. Returns (node_id, sha, news).
 
@@ -3332,6 +3333,7 @@ def insert(
             # node-state.md: `true` or nothing. Absence means open, so a
             # False here writes no attribute at all.
             "answered": "true" if answered else None,
+            "payload": payload,
         },
     )
     _place(root, node, after, into, ledger_id)
@@ -3361,6 +3363,7 @@ def replace(
     answered=False,
     author=None,
     base=None,
+    payload=None,
 ):
     """Replace one node's content, possibly with a node of a different type.
 
@@ -3442,6 +3445,7 @@ def replace(
             # node-state.md: `true` or nothing. Absence means open, so a
             # False here writes no attribute at all.
             "answered": "true" if answered else None,
+            "payload": payload,
         },
     )
     replacement.extend(children)

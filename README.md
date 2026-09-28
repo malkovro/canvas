@@ -24,7 +24,8 @@ schema violation is an exit code rather than a code review.
 
 Eleven element names, and no twelfth: `canvas`, `section`, `text`, `list`,
 `item`, `table`, `row`, `cell`, `figure`, `link`, `question`. `<canvas>` is the
-root and carries `ledger` and `schema="1"`. `<section>` is the only container,
+root and carries `ledger` and a schema version. New canvases are schema 2;
+schema 1 remains a fully supported read/edit/render compatibility branch. `<section>` is the only container,
 carries `title`, and nests one level — two levels of section in total, a third
 is invalid. Every node except the root carries `id` and `v`.
 
@@ -185,13 +186,12 @@ render, history, freeze, or a question inserted by the checker itself.
   document schema can see. The schema checks the *shape* of an id; `insert` checks that it is free.
 - **That `v` agrees with the commit count.** Same reason — checkable against the
   log, not against the file.
-- **`<figure>` content beyond a textual source.** Admitting inline SVG means
-  admitting a foreign namespace with an open element set, which is the HTML
-  problem the closed vocabulary exists to prevent, so schema v1 admits a
-  textual source only. Settling it the other way is a v2 change with its own
-  reasoning. What the renderer does with that source is now settled too, and
-  separately: [`rendering.md`](rendering.md) §1 rules that it prints it
-  verbatim and takes no drawing step, so nothing about the grammar moves.
+- **The meaning of arbitrary figure languages.** Schema v2 admits Canvas
+  Diagram 1 character data by default and `payload="svg"` character data only
+  through the closed inline-SVG validator. It does not admit Mermaid, dot,
+  PlantUML, raw child elements or another payload value. Schema v1 remains an
+  explicit compatibility branch. [`rendering.md`](rendering.md) §1 owns the
+  reversed decision and the notation contract.
 
 ## The store
 
@@ -214,8 +214,8 @@ hand out an id another canvas already used.
     bin/canvas read    <canvas-id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
     bin/canvas render  <canvas-id>
     bin/canvas history <canvas-id> <node-id>
-    bin/canvas replace <canvas-id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
-    bin/canvas insert  <canvas-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT] [--title TEXT] [--href URL] [--answered] [--author TEXT]
+    bin/canvas replace <canvas-id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT | --svg-file FILE] [--title TEXT] [--href URL] [--answered] [--author TEXT]
+    bin/canvas insert  <canvas-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT | --svg-file FILE] [--title TEXT] [--href URL] [--answered] [--author TEXT]
     bin/canvas remove  <canvas-id> <node-id> --why TEXT [--base SHA] [--author TEXT]
     bin/canvas move    <canvas-id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--author TEXT]
     bin/canvas freeze  <canvas-id> --why TEXT [--author TEXT]
@@ -419,7 +419,7 @@ output rather than a separate lookup:
     $ bin/canvas read my-task
     Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
     <?xml version="1.0" encoding="UTF-8"?>
-    <canvas ledger="my-task" schema="1">
+    <canvas ledger="my-task" schema="2">
       <text id="y8dk" v="1">The store does not exist.</text>
       <text id="itpe" v="1">A writer can learn what to write against.</text>
     </canvas>
@@ -458,7 +458,7 @@ node type:
     $ bin/canvas read my-task --type question
     Canvas-Base: e4a864130afb88ad2abc17f1b4889df707b15ded
     <?xml version="1.0" encoding="UTF-8"?>
-    <canvas ledger="my-task" schema="1">
+    <canvas ledger="my-task" schema="2">
       <question id="mqxd" v="2">Does the store re-read before it writes?</question>
     </canvas>
 
@@ -476,7 +476,7 @@ node type:
   document and is the thing that validates. Nothing runs the validator over a
   selection. A read with no selector still prints the file byte for byte.
 - **A `--type` that matches nothing is exit `0` and an empty root:**
-  `<canvas ledger="my-task" schema="1"/>`. A type is a predicate and "none" is
+  `<canvas ledger="my-task" schema="2"/>`. A type is a predicate and "none" is
   its answer, not its failure — *are there any `question` nodes left* is the
   question this exists to answer, and a tool that refuses to say "none" has not
   answered it. **An unknown type name is not refused either**: `--type decision`
@@ -651,9 +651,12 @@ stdout is how the page becomes a file, and **there is no `--output`** — a
 projection this command could write anywhere is a projection somebody
 eventually writes into `state/canvas`.
 
-**One standalone document.** No stylesheet to fetch, no script, no font and no
-image. It opens from a `file://` path and survives being pasted somewhere with
-no network.
+**One standalone document.** The promise survives: one file, no stylesheet,
+script, font, image or other asset to fetch. Figures are actual inline SVG,
+generated or safely reserialized by standard-library Python in the render
+process. It opens from a `file://` path with no install, virtualenv, subprocess
+or network. “No image” now means no external image dependency, not “no drawn
+picture”.
 
 What the page carries:
 
@@ -675,12 +678,15 @@ What the page carries:
   comment does — and this line is the only thing that tells it apart from the
   canvas as it stands now.
 
-**A `<figure>` is its textual source, printed verbatim. This renderer does not
-draw.** Schema v1 admits a textual source only, so there is no inline SVG to
-pass through; and a drawing step would be a diagram toolchain this repository
-would then own — an install, a dependency and a second grammar validated by a
-binary rather than by `schema/canvas.rng`. [`rendering.md`](rendering.md) §1
-settles it, with what it costs and what would reopen it.
+**A `<figure>` is drawn.** With no payload attribute its source is Canvas
+Diagram 1: `box ID ROW COLUMN "label"`, `edge FROM -> TO "label"` (also `--`
+and `-x`), and `text ROW COLUMN "label"`; coordinates run from 1 to 1000. Source mistakes render as visible
+diagnostic rows, so accepted textual source is total. `payload="svg"` is the
+explicit escape hatch; `--svg-file FILE` stores it as escaped character data
+only after a closed validator rejects script, CSS, links, URLs, external
+entities and foreign content. Existing schema-v1 figures use the same textual
+drawer. [`rendering.md`](rendering.md) §1 records the 2026-09-25 reversal and
+why commit `a56db5b` had shipped a grammar without settling the product choice.
 
 #### `--format comment`: the projection a ledger row carries
 
@@ -707,8 +713,10 @@ output, and the output is dictated by the transport:
 - **A `<table>` is a header line and one bullet per row**, cells joined by
   ` — `, because the Markdown table extension is off and a real table leaks
   its own pipes as literal text.
-- **A `<figure>` keeps its source in a fenced block**, which is the one
-  block-level Markdown that keeps a diagram's columns.
+- **A `<figure>` keeps an honest labelled fallback in a fenced block** — Canvas
+  Diagram 1 source or entity-escaped inline SVG markup. Basecamp cannot display
+  the picture; the standalone page is the drawn projection. No literal `<`
+  reaches the comment body.
 - **The index and the markers are the page's**, unchanged in substance: every
   `<question>` named with its state, nothing that is not a `<question>` named,
   and a marker on every `<question>` node. `tests/test_render.py` asserts all

@@ -15,19 +15,19 @@ canvas: the one thing it can do with what it read is hand it back.
 to change. The vocabulary gained no element, no attribute and no configuration
 file to serve this renderer, which is the constraint the closed vocabulary
 exists for. What this module reads out of a canvas is what was already in one:
-eleven element names, `title`, `href`, `id`, `v`, and the one state
+eleven element names, `title`, `href`, `payload`, `id`, `v`, and the one state
 `node-state.md` settled — `answered` on `<question>`.
 
 Two questions this renderer had to settle rather than inherit, both argued in
 `rendering.md` at the top of this repository:
 
-- **`<figure>` holds a textual source and this renderer does not draw it.** It
-  prints the source verbatim, in a monospaced block, as the figure. Schema v1
-  admits a textual source only (`schema/canvas.rng`, `<define name="figure">`),
-  so inline SVG never reaches here in a valid canvas; and a drawing step is a
-  dependency, an install and a subprocess this tool would then own. The figure
-  a reader sees is the text the canvas stores, which is also the text that
-  diffs.
+- **`<figure>` is drawn in the standalone page.** Schema 2 distinguishes the
+  default repository-owned Canvas Diagram 1 source from `payload="svg"`, the
+  closed inline-SVG escape hatch. Schema-1 textual figures remain readable and
+  use the same total diagram renderer. Drawing is paid for in standard-library
+  Python in this repository: no install, subprocess, network or runtime script.
+  The comment projection cannot display the picture and labels an honest fenced
+  source/markup fallback instead.
 - **The index names every `<question>` in the document, answered ones
   included, and says of each which it is.** An answered question is quiet in
   the index and quiet in the body — it keeps its marker and its entry, and
@@ -64,7 +64,7 @@ to.
 
 from xml.etree import ElementTree as ET
 
-from canvas import store
+from canvas import diagram, store, svg
 
 
 #: The one state a canvas carries, and the only attribute this module reads
@@ -132,9 +132,8 @@ STYLE = """
                        letter-spacing: .06em; text-transform: uppercase; }
     .question-text { margin: .2rem 0 0; }
     .figure { margin: 1.25rem 0; }
-    .figure-source { margin: 0; padding: .75rem; overflow-x: auto;
-                     border: 1px solid currentColor; border-radius: .3rem;
-                     font: 13px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+    .figure-drawing { display: block; width: 100%; height: auto; overflow: visible;
+                      border: 1px solid currentColor; border-radius: .3rem; }
     figcaption { font-size: .78rem; opacity: .7; margin-top: .3rem; }
     table { border-collapse: collapse; margin: 1.25rem 0; }
     td { border: 1px solid currentColor; padding: .3rem .6rem; vertical-align: top; }
@@ -245,19 +244,26 @@ def _question(node):
 
 
 def _figure(node):
-    """One `<figure>`: its textual source, printed as the figure.
+    """Draw one `<figure>` using its explicit schema-v2 payload distinction.
 
-    The decision `rendering.md` §1 settles. Schema v1 admits a textual source
-    only, so there is no inline SVG to pass through; and drawing it would mean
-    a diagram toolchain — an install, a dependency and a subprocess — that this
-    tool would then own, against a house rule of standard library only. What a
-    reader sees is what the canvas stores and what the next diff will show.
+    No `payload` means repository-owned Canvas Diagram 1, including on old
+    schema-v1 canvases. `payload="svg"` has already passed the closed validator;
+    it is parsed and reserialized rather than copied. The renderer therefore
+    has no document-only failure after validation: textual input is total and
+    SVG input reaches here only after acceptance.
     """
+    identity = node.get("id") or ""
+    if node.get("payload") == "svg":
+        drawing = svg.render(node.text or "", "inline SVG figure %s" % identity)
+        caption = "inline SVG escape hatch, validated and rendered"
+    else:
+        drawing = diagram.render_text(node.text or "")
+        caption = "Canvas Diagram 1 source, drawn by the standalone projection"
     return [
         '<figure class="figure"%s>' % _identity(node),
-        '<pre class="figure-source">%s</pre>' % _text(node.text),
-        "<figcaption>figure <code>%s</code> — the textual source as stored</figcaption>"
-        % _attribute(node.get("id") or ""),
+        drawing,
+        "<figcaption>figure <code>%s</code> — %s</figcaption>"
+        % (_attribute(identity), caption),
         "</figure>",
     ]
 
@@ -331,10 +337,11 @@ def _node(node, depth, out):
 def page(ledger_id, sha, root):
     """The whole page, as one string: a standalone HTML document.
 
-    Standalone means what it says — one file, no stylesheet to fetch, no
-    script, no font and no image. It is pasted into a Basecamp comment and
-    opened from a file:// path, and a projection that needs a server to look
-    right is not a projection of anything.
+    Standalone still means one self-contained file: no stylesheet, script,
+    font, image or other asset is fetched. Figures are real inline SVG generated
+    or safely reserialized in-process, so the promise now includes drawing
+    rather than excluding pictures. It opens from a file:// path and needs no
+    install, subprocess or network.
 
     The order is fixed and is the done condition's: the page opens with the
     index of questions, and the document follows it. The sha is above both,
@@ -517,16 +524,22 @@ def _comment_table(node):
 
 
 def _comment_figure(node):
-    """One `<figure>`: its source in a fence, and the caption the page gives it.
+    """Represent a figure honestly where Basecamp cannot display the picture.
 
-    `rendering.md` §1 again — the figure is the text the canvas stores, and
-    this renderer does not draw it either.
+    Canvas Diagram 1 source and entity-escaped SVG markup are each labelled and
+    fenced. No literal less-than sign reaches the comment transport.
     """
     source = _source(node.text or "").strip("\n")
     fence = _fence(source)
+    label = (
+        "inline SVG source (picture available in the standalone HTML projection)"
+        if node.get("payload") == "svg"
+        else "Canvas Diagram 1 source (picture available in the standalone HTML projection)"
+    )
     return [
+        "**%s**" % label,
         "%s\n%s\n%s" % (fence, source, fence),
-        "figure `%s`%sthe textual source as stored"
+        "figure `%s`%ssource fallback; Basecamp comments cannot display the picture"
         % (_inline(node.get("id")), JOIN),
     ]
 

@@ -89,7 +89,7 @@ Deliberately tiny, deliberately generic.
 | `<text>` | a paragraph |
 | `<list>` / `<item>` | bullets |
 | `<table>` / `<row>` / `<cell>` | anything with two or more columns, including a comparison of options |
-| `<figure>` | a diagram, as the textual source `schema/canvas.rng` admits for it; printed verbatim rather than drawn ([rendering.md](rendering.md) section 1) |
+| `<figure>` | a diagram: Canvas Diagram 1 textual source by default, or validated inline SVG as an explicit schema-v2 escape hatch; both are drawn in the standalone projection ([rendering.md](rendering.md) section 1) |
 | `<link>` | a pointer out: a PR, a file and line, a Basecamp todo, a run id |
 | `<question>` | something open |
 
@@ -321,6 +321,9 @@ All one-way. A projection is never edited and never read back.
 
 1. **HTML** — `bin/canvas render <ledger-id>`. One standalone document:
    shareable as a file, viewable in a browser, openable from a `file://` path.
+   Figures are inline SVG generated or safely reserialized in-process. The
+   document still fetches no stylesheet, script, font, image or other asset and
+   needs no install, subprocess or network.
    **Not pasteable into a Basecamp comment.** That is a correction: this line
    said it was, and it is not, for two reasons about the transport that
    compound. The `basecamp` CLI converts a comment body from Markdown to HTML
@@ -540,16 +543,14 @@ away from where the question was asked.
   [same document](https://github.com/malkovro/ledger-orchestrator/blob/main/docs/canvas-in-prompts.md).
   Nothing is left open in this bullet.
 - **Whether the renderer should draw `<figure>` from a textual source or only
-  pass through inline SVG. — Settled 2026-09-23 in
-  [rendering.md](rendering.md) section 1.** Inline SVG diffs badly; a textual
-  source needs a drawing step the canvas tool would have to own. Neither side as
-  posed survived. Half of it was never the renderer's to take: `schema/canvas.rng`
-  had already shipped, admitting character data in a `<figure>`, so there is no
-  inline SVG for a renderer to pass through and putting it there is a schema v2
-  change with its own reasoning. The half that was left — the drawing step — is
-  refused: a `<figure>` is rendered as its own source, the stored text verbatim
-  in a monospaced block, with no drawing step, no diagram toolchain, no
-  subprocess and no new dependency, implemented at `canvas/render.py:206`. What
-  that costs is stated there and not argued away: a figure in a rendered page is
-  text in a box and nobody gets a picture. What would reopen it is stated there
-  too. Nothing is left open in this bullet.
+  pass through inline SVG. — The 2026-09-23 ruling is reversed by the spec
+  author's 2026-09-25 decision; [rendering.md](rendering.md) section 1 carries
+  the full trail.** The textual grammar shipped at `a56db5b` while the product
+  question remained open and was then mistakenly treated as a product decision.
+  Schema v2 makes repository-owned Canvas Diagram 1 the default and validated
+  inline SVG the explicit escape hatch. The standalone page draws both; the
+  Basecamp comment labels and fences source/markup because it cannot display the
+  picture. The drawer and validator are standard-library Python, so clean-checkout
+  rendering adds no install, subprocess or network failure. Textual rendering is
+  total and SVG is refused at validation, so no accepted figure fails only at
+  render time. Nothing is left open in this bullet.

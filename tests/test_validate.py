@@ -144,16 +144,16 @@ class OutOfVocabularyNodesAreRejected(unittest.TestCase):
 
     def test_the_grammar_declares_exactly_these_attributes(self):
         # The mirror of the element invariant, and node-state.md section 6's
-        # tripwire: the ruling adds `answered` and nothing else, so a twelfth
-        # attribute — or a second legal value for `answered` — must break a
-        # test and send somebody back to node-state.md before it lands.
+        # tripwire: node state adds `answered`, and schema-v2 figures add only
+        # their payload distinction. Any further attribute — or a second legal
+        # value for `answered` — must break a test before it lands.
         declared = {
             e.get("name")
             for e in ElementTree.parse(SCHEMA).iter()
             if strip_namespace(e.tag) == "attribute"
         }
         self.assertEqual(
-            {"ledger", "schema", "id", "v", "title", "href", "answered"},
+            {"ledger", "schema", "id", "v", "title", "href", "answered", "payload"},
             declared,
         )
 
@@ -321,8 +321,8 @@ class RootAttributesAreRequired(unittest.TestCase):
         self.assertEqual(1, run_shim(fixture("missing-schema.xml"))[0])
 
     def test_a_root_declaring_a_future_schema_version_is_rejected(self):
-        # The point of pinning the version: a v2 file is not read by the v1
-        # schema, it fails against it.
+        # The point of pinning the version: a future file is not read by the
+        # current schema, it fails against it.
         problems = validate_file(fixture("future-schema.xml"))
         self.assertIn("the root", "\n".join(problems))
         self.assertEqual(1, run_shim(fixture("future-schema.xml"))[0])
