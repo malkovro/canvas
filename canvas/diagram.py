@@ -189,6 +189,12 @@ def render_text(source):
                 columns.append(statement[2])
         diagram_height = max(rows) * CELL_HEIGHT + PADDING * 2
         width = max(columns) * CELL_WIDTH + PADDING * 2
+        if diagnostics:
+            widest_diagnostic = max(
+                "line %d [%s] %s" % diagnostic
+                for diagnostic in diagnostics
+            )
+            width = max(width, PADDING * 2 + len(widest_diagnostic) * 8)
         height = diagram_height + max(1, len(diagnostics)) * 28
         root = _svg("svg", {
             "class": "figure-drawing", "viewBox": "0 0 %d %d" % (width, height),
