@@ -276,6 +276,32 @@ def parent_of(root, node_id):
     return _parents(root).get(id(node))
 
 
+def section_of(root, node_id):
+    """The id of the nearest `<section>` ancestor of that node, or None.
+
+    None is a value and not an absence: it is what `problem-and-solution-space.md`
+    section 2 calls the sentinel *none*, the answer for a node that sits at the
+    top level of the canvas outside every section, and it is unequal to every
+    section id. A node that is not in this document at all answers None too —
+    it has no `<section>` ancestor here, which is what the question asked.
+
+    `<section>` nests one level (`engineering-spec.md:88`), so "nearest" is at
+    most two elements up and is never ambiguous. This does not read the
+    section's `title` and nothing that calls it may: which section is a problem
+    space and which is a solution space is the person's reading of their own
+    heading, and `problem-and-solution-space.md` section 1 is why no rule, test,
+    renderer or tool reads those characters.
+    """
+    stack = [(child, None) for child in reversed(list(root))]
+    while stack:
+        element, section = stack.pop()
+        if element.get("id") == node_id:
+            return section
+        inner = element.get("id") if element.tag == "section" else section
+        stack.extend((child, inner) for child in reversed(list(element)))
+    return None
+
+
 def replace_node(root, node_id, replacement):
     """Put `replacement` at the position the named node currently occupies.
 

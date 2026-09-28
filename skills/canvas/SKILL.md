@@ -5,12 +5,14 @@ description: >-
   understanding of one task between a person and the agents working on it. A Canvas may
   stand alone or use an identifier supplied by a task-ledger integration. Use whenever
   you need to read what is already understood,
-  record a decision or an open question, settle one, render the canvas for a person, or
+  record a decision or an open question, settle one, carry something from the problem
+  space into the solution space, render the canvas for a person, or
   end it. Covers the whole safe workflow for `bin/canvas`: read first and carry the sha
-  into `--base`, one node per edit, a `--why` a later reader can resolve, and never
-  editing the XML by hand. Triggers on "canvas", "bin/canvas", `--why`, "the shared
-  understanding of this task", a `Canvas-Base:` / `Canvas-Node:` / `Canvas-Frozen:` line,
-  or a Canvas identifier.
+  into `--base`, one node per edit, a `--why` a later reader can resolve, never
+  editing the XML by hand, and the shape a canvas takes from the problem it opened as to
+  the answer it ends as. Triggers on "canvas", "bin/canvas", `--why`, "the shared
+  understanding of this task", "problem space", "solution space", a `Canvas-Base:` /
+  `Canvas-Node:` / `Canvas-Frozen:` line, or a Canvas identifier.
 allowed-tools: Bash, Read
 ---
 
@@ -247,6 +249,39 @@ There is no required form, no `Evidence:` line, no length floor. For calibration
 reasons that met the bar ran 151–975 characters; every one that failed was under 115.
 That is a symptom, not a rule — do not pad.
 
+### Worked: the reason on a `move` that carries a node across
+
+A `move` between two `<section>`s is the one edit whose reason a reader gets without
+asking for it — both projections print that reason under the node, verbatim, with its sha
+(`problem-and-solution-space.md`, and *The shape over time* below). So it is the reason
+worth the most care, and what it owes a reader is the **assumption**: the thing you
+believed that made this node belong on the other side, and the thing that, if it turns out
+to be false, puts it back.
+
+**Good.**
+
+    --why "Carries n4tz from the problem section czfj into the solution section jub8: we
+    are taking the single-writer queue. The assumption that carries it is that nothing but
+    the sweep writes to state/claims — every write in bin/claim-sync and
+    orchestrator/sweep.py at 4f1a2c9 goes through claim_store.write. If a second writer
+    appears, n4tz goes back under czfj and the option rejected in t8wm comes back with it."
+
+It states the assumption as an assumption, in its own words; it names evidence a reader can
+resolve without already knowing the answer — two paths and the sha they were true at,
+rather than a role like *the sync path*; and it says what would retire it and what goes
+back if it does. A reader who finds a second writer next month knows which node to move and
+where to, and does not have to ask anybody what was believed.
+
+**Bad.** `--why "moved to the solution space"` — it states where the node went, which the
+heading above it already states, and names no assumption at all, so the one line a reader
+is shown under that node tells them nothing they could not see and nothing they could ever
+find false.
+
+**Bad.** `--why "moved now that we agreed the second-writer worry was overblown"` — an
+agreement is not an artifact: there is nothing named here that a reader can open, so they
+cannot check whether the thing you assumed still holds, which is the one question a
+crossing's reason exists to let them ask.
+
 ## `--author`
 
 Say who you are, in the shape the tool already uses (`'<user> | by-hand'` is the default).
@@ -270,6 +305,11 @@ all, so a canvas made by hand afterwards could never be called untouched, howeve
 row ran without a single step writing to it.
 
 ## When to do what over a Canvas's life
+
+A Canvas opens as the problem, gains what the work learns while it runs, and ends as the
+answer with the assumptions it rests on still stated. The verbs below are how each of
+those happens; *The shape over time*, further down, is what the document looks like while
+it does.
 
 ### `create` — standalone by default, explicit integration when needed
 
@@ -327,6 +367,69 @@ Write when the *shared understanding changed*:
 
 Do not write: progress, status, what you are about to do, or a summary of your own diff.
 That is the ledger row and the run log.
+
+### The shape over time — the problem it opened as, the answer it ends as
+
+A Canvas is born as the problem: the two nodes `create` writes are the problem and the
+expected value, and at that moment they are the whole document. It should end as the
+answer — what is now believed, with the assumptions under it stated where a reader can
+disagree with them. In between it gains what the work learns. A Canvas that only ever
+accumulates paragraphs in the order they were written never got there, and a reader of it
+cannot tell the problem you started with from what you now think.
+
+You build that with what already exists and nothing else: `<section>`, where you put a
+node, and `move`. There is no `<decision>` node, no `space=` attribute, no `status=`, and
+no twelfth element — a step that finds itself wanting one has found the tripwire rather
+than a gap.
+
+```bash
+# a second space, once the work has actually produced one
+$CANVAS insert <canvas-id> --into root --type section --title "Solution space" \
+  --why "..." --base "$canvas_base" --author "..."
+
+# what you now believe, written where it belongs
+$CANVAS insert <canvas-id> --into <section-id> --type text --text "..." \
+  --why "..." --base "$canvas_base" --author "..."
+
+# and the node that changed sides
+$CANVAS move <canvas-id> <node-id> --into <section-id> \
+  --why "<the assumption that carried it>" --base "$canvas_base" --author "..."
+```
+
+**A node has crossed from one space to the other when a `move` naming it changed which
+`<section>` it sits in.** Precisely: its nearest `<section>` ancestor in the document at
+that commit differs from its nearest `<section>` ancestor at that commit's parent, where
+*having no `<section>` ancestor* counts as one of the two values and is equal to no
+section. A node with at least one such edit **has crossed**; the **latest** one is its
+crossing, and that move's `--why` is the assumption that carried it. Nothing else is a
+crossing: not an `insert` straight into a section, not a `replace`, not a `remove`, not a
+`move` that left the nearest `<section>` the same, and not a `move` of a container seen
+from a child — there the container crossed, the container carries the one reason that was
+written, and its children carry none.
+
+**Nothing reads the title.** Which of your sections is the problem space and which is the
+solution space is your reading of your own heading, and no rule, test, renderer or tool
+reads those characters. Sections titled `Symptoms` and `Fixes`, or `Before` and `After`,
+behave identically. So a title cannot be spelled wrong, and a privileged one would be a
+node type declared in character data — which is the tripwire above, wearing a `title=`.
+
+**What a reader gets.** Both projections show exactly one reason per crossed node — that
+crossing's `--why`, verbatim, beside the full sha of its commit — and no reason anywhere
+else. A node born where it stands carries none; a node that crossed three times carries
+one; no node carries two. A Canvas in which nothing has moved between sections renders
+with no reason in it at all, and that is correct rather than a gap. The rule is
+`problem-and-solution-space.md` in the canvas repository.
+
+**When your step is the one that settles something**, leaving the Canvas as an answer is
+two kinds of edit and no more: put what is now believed under the solution section, `move`
+the nodes the work resolved into it, and let the `--why` of each move say the assumption
+you are making and what would make it false. The assumption is the part a later reader most needs and the
+part nobody writes down — and on a crossing it is the one sentence they are shown by
+default. There is a worked one under `--why` above.
+
+None of this is asked of you as a step. A Canvas with no sections is a valid Canvas and
+almost all of them are; a second space earns its node when the work has produced one, not
+before, and a Canvas that never grew one renders exactly as it renders today.
 
 ### Keep it small — resolution, not deletion
 

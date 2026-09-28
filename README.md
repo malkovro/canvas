@@ -677,6 +677,21 @@ What the page carries:
   projection outlives the canvas it came from — that is what carrying one to a
   comment does — and this line is the only thing that tells it apart from the
   canvas as it stands now.
+- **One reason on every node that crossed between the canvas's sections, and
+  none anywhere else.** A node has crossed when a `move` naming it changed
+  which `<section>` it sits in — *no section* counts as one of the two values
+  — and what the page shows beside it is the `--why` of the **latest** such
+  move, verbatim, with the full sha of that commit. A node born where it
+  stands carries nothing; a node reordered inside one section carries nothing;
+  a node carried along by its container's move carries nothing, and the
+  container carries the one reason that was written. So a canvas in which
+  nothing has moved between sections renders with no reason in it at all.
+  Nothing in the document says any of this: the structure says where a node
+  is, the `--why` says why, and the move is derived from the log.
+  [`problem-and-solution-space.md`](problem-and-solution-space.md) rules it —
+  including why nothing reads the characters of a section `title`, so which
+  space is which is your reading of your own heading — and
+  `tests/test_crossing.py` holds the count on both projections.
 
 **A `<figure>` is drawn.** With no payload attribute its source is Canvas
 Diagram 1: `box ID ROW COLUMN "label"`, `edge FROM -> TO "label"` (also `--`
@@ -721,6 +736,13 @@ output, and the output is dictated by the transport:
   `<question>` named with its state, nothing that is not a `<question>` named,
   and a marker on every `<question>` node. `tests/test_render.py` asserts all
   three on this form as well as on the page.
+- **A crossed node's reason is the page's too**, and the bound on it is
+  identical: one reason per crossed node, none on any other, the full sha
+  beside it. It is drawn as its own block — `**Carried across** \`<node-id>\`
+  — <the reason> — \`<sha>\`` — because a comment has no anchors and the id is
+  all a reader has to match the line to its node. `tests/test_crossing.py`
+  asserts the two projections name the same crossed nodes with the same
+  reasons and the same shas.
 
 What it cannot carry is the *depth* of a section — two heading levels on the
 page, one weight of bold here. The blocks are in the document's order, so

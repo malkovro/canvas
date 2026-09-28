@@ -3312,8 +3312,15 @@ class ThePublicImportSurfaceHasNoWholeDocumentWrite(VerbTestCase):
         # `history`'s node id and refuses a blank one. No document, no write.
         "require_node_id",
         "preflight", "frozen", "Freeze",
+        # A read, and classified with `history` and `provenance` because it is
+        # one: it asks the log which nodes crossed between this canvas's
+        # sections and hands back the edit that carried each, taking no
+        # document and writing nothing. `problem-and-solution-space.md` rules
+        # what a crossing is; the renderer is the caller.
+        "crossings",
         # Imported modules, not API.
         "collections", "errno", "os", "re", "secrets", "stat", "subprocess",
+        "ET",
         "document",
         "validate_file",
         "EnvironmentProblem",
