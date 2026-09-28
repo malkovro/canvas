@@ -136,7 +136,7 @@ would be spelled `title=` instead of `status=`, and that is the only difference.
 
 **It is the tripwire in another spelling.** The *Risks and open decisions* table
 in `product-spec.md` gives the growing vocabulary a row of its own, and the
-landing place in that row, at `product-spec.md:123`, is a tripwire that fires the
+landing place in that row, at `product-spec.md:125`, is a tripwire that fires the
 day somebody proposes a decision or a risk node type — at which point, in its own
 words, *"the taxonomy has started growing"*. A privileged section
 title is a node type declared in character data rather than in the grammar. It
@@ -352,7 +352,7 @@ edits, which is the defining property of the wiki the first bullet refuses, and
 it would do it while the document it projects stayed the same size.
 
 **Because the budget is a hard number and this projection goes in every prompt.**
-`product-spec.md:131` settles it at 20,000 characters of the canvas as
+`product-spec.md:133` settles it at 20,000 characters of the canvas as
 `bin/canvas read` prints it. A canvas near that budget with a long edit history
 would, under an unbounded rule, render several times its own size. The document
 is the thing the budget was measured on; a projection that multiplies it defeats
@@ -508,7 +508,7 @@ stops holding, which is why the bound is the ruling and not a default.
   beside that file's existing `--why` section. It teaches the shape as the
   default way a canvas ends as an answer and says in as many words that none of
   it is asked of a step, which is the *Genuinely open* item
-  `product-spec.md:130` settled on 2026-09-23. Whether agents then build it
+  `product-spec.md:132` settled on 2026-09-23. Whether agents then build it
   unprompted is a post-ship observation about later runs and is not something
   this branch can check.
 

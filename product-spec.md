@@ -65,7 +65,7 @@ flowchart LR
   O[ledger: open] --> C[canvas born]
   C --> R[runs and steps<br/>read and write]
   R --> D[ledger: done]
-  D --> F[canvas frozen]
+  D --> F[canvas's end recorded]
   C -.-> P1[rendered HTML]
   C -.-> P2[Basecamp comment]
   C -.-> P3[watch-runs-web]
@@ -73,7 +73,9 @@ flowchart LR
 
 Solid arrows are the lifecycle; dotted ones are projections, which are one-way and never edited.
 
-The canvas is born at `open`, where the ledger already requires a problem and an expected value — those become its first two nodes. It grows through `executing`. At `done` it freezes, and the structured artifact the done gate already demands becomes one more projection of it.
+The canvas is born at `open`, where the ledger already requires a problem and an expected value — those become its first two nodes. It grows through `executing`. At `done` the ledger records its ending on it — the reason the work is over — and the structured artifact the done gate already demands becomes one more projection of it.
+
+**Recording the end does not close the document.** A canvas whose row has closed goes on taking edits, on the same terms as any other: one node, a reason, a declared base. The work being over is when a canvas is most improvable, because that is when its writer finally knows what it should have said — so the ending is something the canvas says about itself, not something that stops it being written to.
 
 **The end state is that a step's prompt carries the canvas instead of the Basecamp task.** That is the highest-value use and the hardest constraint: it puts a size budget on the canvas that has nothing to do with human readability, and it means a badly maintained canvas actively misleads every worker rather than being a stale document nobody reads. It also decouples us from Basecamp, which becomes a place the rendered canvas is posted rather than a place work is defined.
 

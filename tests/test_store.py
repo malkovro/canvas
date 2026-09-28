@@ -6705,15 +6705,16 @@ class FrozenCanvasTestCase(VerbTestCase):
 
 
 class FreezingACanvas(FrozenCanvasTestCase):
-    """The done condition's first clause: one command freezes a canvas, taking
-    `--why` like every other write, so the last thing in the canvas's history
-    is the reason it ended.
+    """One command records that a canvas's work ended, taking `--why` like
+    every other write, so the reason it ended is in the canvas's history.
 
     `engineering-spec.md` section *Lifecycle* is the sentence being made true:
-    frozen at `done`, "and after it the canvas is read-only history", and
-    "`abandoned` freezes it the same way, with the reason as the last edit". An
-    edit in this store is a commit and a reason lives in the commit subject, so
-    a freeze that is a commit is literally the last edit with the reason on it.
+    ended at `done`, and "`abandoned` ends it the same way, with the reason as
+    the last edit". An edit in this store is a commit and a reason lives in
+    the commit subject, so a freeze that is a commit carries the reason where
+    every other reason already is. It is not necessarily the *last* edit —
+    writes after a freeze are legal, and
+    `EveryWriteVerbGoesOnWorkingAgainstAFrozenCanvas` is where that is pinned.
     """
 
     def test_freeze_exits_zero_and_reports_the_ledger_row_and_the_new_sha(self):
@@ -6842,116 +6843,141 @@ class FreezingACanvas(FrozenCanvasTestCase):
         )
 
 
-class EveryWriteVerbIsRefusedAgainstAFrozenCanvas(
+class EveryWriteVerbGoesOnWorkingAgainstAFrozenCanvas(
     RefusalSurface, FrozenCanvasTestCase
 ):
-    """The done condition's second clause: every write verb — `replace`,
-    `insert`, `remove`, `move`, and the freeze itself applied twice — is
-    refused against a frozen canvas, with a refusal naming the freeze, its
-    reason and its commit, at the exit code `README.md` section *Exit codes*
-    justifies.
+    """A freeze is an end marker and not a gate: `replace`, `insert`, `remove`,
+    `move` and a second `freeze` all land against a canvas that has ended.
 
-    **Exit `1`, asserted as `1` and not merely as non-zero.** `1` is "the
-    request is wrong against the store as it stands", whose listed members
-    include a node that moved since the `--base` declared for it — a store that
-    moved under a well-formed request. `2` is "the tool or its environment is
-    wrong". A `replace` against a frozen canvas is a well-formed invocation of
-    a tool in perfect health, so the code is the half of this clause a test has
-    to pin.
+    This class used to assert the opposite — every write verb refused at exit
+    `1`, on the ground that a frozen canvas is read-only history. That
+    restriction was removed on 2026-09-28 (ledger row
+    `bc-10348813099-remove-terminal-freeze`) because it landed exactly when a
+    canvas is most improvable: the work is over and the writer finally knows
+    what the document should have said. `README.md` section *Ending a canvas*
+    carries the reversal and `engineering-spec.md` section *Lifecycle* states
+    the rule.
 
-    These assert behaviour and exit codes and never the wording of a
-    diagnostic, like everything else here — what is asserted about the message
-    is that it carries the freeze's sha and the reason the writer needs to act
-    on, both of which are values this test put there.
+    What is asserted here is that the writes **land** — a refused write and a
+    write that silently does nothing look the same from the exit code alone —
+    and that the freeze survives them: `frozen()` still names it, and still
+    names the *oldest* one, so a canvas's recorded ending does not move.
+
+    The three rules that make a canvas safe are untouched and are asserted
+    elsewhere: one edit is one node, every edit carries a `--why`, and `--base`
+    refuses a stale write. The one of the three that has to be re-checked here
+    is the reason, because it is the guard that used to run beside the one
+    being deleted: `test_an_absent_or_empty_why_is_still_the_invocation_being_wrong`.
     """
 
     def setUp(self):
         FrozenCanvasTestCase.setUp(self)
         self.freeze_sha = self.froze()
-        self.frozen_state = self.state()
 
     def writes(self):
-        """One invocation per write verb, each of them well formed."""
+        """One invocation per write verb, each of them well formed.
+
+        Each names its own canvas, because `remove` and `move` cannot both
+        have the problem node and a second `freeze` is only a second one on a
+        canvas that already has a first.
+        """
         return (
-            ("replace", "a-ledger-row", self.problem_id, "--text", "restated"),
-            ("insert", "a-ledger-row", "--into", "root", "--text", "a note"),
-            ("remove", "a-ledger-row", self.problem_id),
-            ("move", "a-ledger-row", self.problem_id, "--into", "root"),
-            ("freeze", "a-ledger-row"),
+            ("replace", self.problem_id, "--text", "restated"),
+            ("insert", "--into", "root", "--text", "a note"),
+            ("remove", self.problem_id),
+            ("move", self.problem_id, "--into", "root"),
+            ("freeze",),
         )
 
-    def test_every_write_verb_exits_one(self):
+    def a_frozen_canvas(self, ledger_id):
+        """A second canvas of this test's own, created and then frozen."""
+        self.create(ledger_id=ledger_id)
+        code, stdout, stderr = self.run_canvas(
+            "freeze", ledger_id, "--why", self.REASON
+        )
+        self.assertEqual(0, code, stderr)
+        return stdout.decode("utf-8").splitlines()[1].split(": ", 1)[1]
+
+    def test_every_write_verb_exits_zero(self):
         for args in self.writes():
+            ledger_id = "row-for-%s" % args[0]
+            self.create(ledger_id=ledger_id)
+            problem_id = [
+                node.get("id")
+                for node in self.tree(ledger_id).iter()
+                if node.get("id")
+            ][0]
+            self.run_canvas("freeze", ledger_id, "--why", self.REASON)
+            invocation = tuple(
+                problem_id if each == self.problem_id else each for each in args
+            )
             code, stdout, stderr = self.run_canvas(
-                *(args + ("--why", "a reason this edit is being made"))
+                args[0],
+                ledger_id,
+                *(invocation[1:] + ("--why", "a reason this edit is being made"))
             )
-            self.assertEqual(1, code, (args, stderr))
-            self.assertEqual(b"", stdout, args)
+            self.assertEqual(0, code, (args, stderr))
+            self.assertEqual("", stderr, args)
+            self.assertTrue(stdout, args)
 
-    def test_the_refusal_names_the_freeze_its_reason_and_its_commit(self):
-        for args in self.writes():
-            code, _, stderr = self.run_canvas(
-                *(args + ("--why", "a reason this edit is being made"))
-            )
-            trailers = self.assertSurface(
-                1, code, stderr, msg=args,
-                about=["Canvas identifier a-ledger-row", "freeze %s" % self.freeze_sha],
-            )
-            # The reason it ended, so the writer learns what ended it without a
-            # second command; and the commit, so they can go and read it.
-            self.assertIn(self.REASON, stderr, args)
-            self.assertIn(self.freeze_sha, stderr, args)
-            self.assertTrue(trailers["Canvas-Next"][0].strip(), args)
-
-    def test_nothing_is_applied_committed_or_minted(self):
-        for args in self.writes():
-            self.run_canvas(*(args + ("--why", "a reason this edit is being made")))
-            self.assertEqual(self.frozen_state, self.state(), args)
-            self.assertEqual(
-                [], [each for each in os.listdir(self.canvas_dir) if ".tmp-" in each]
-            )
-
-    def test_the_editing_verbs_still_name_the_node_they_were_refused_for(self):
-        for args in (
-            ("replace", "a-ledger-row", self.problem_id, "--text", "restated"),
-            ("remove", "a-ledger-row", self.problem_id),
-            ("move", "a-ledger-row", self.problem_id, "--into", "root"),
-        ):
-            code, _, stderr = self.run_canvas(*(args + ("--why", "a reason")))
-            self.assertSurface(1, code, stderr, msg=args, nodes=[self.problem_id])
-
-    def test_a_second_freeze_is_refused_naming_the_first(self):
+    def test_the_write_lands_in_the_document(self):
+        # The exit code alone cannot tell a write that was allowed from one
+        # that was quietly dropped, so this asserts the bytes.
         code, _, stderr = self.run_canvas(
+            "replace", "a-ledger-row", self.problem_id,
+            "--text", "restated after the row closed",
+            "--why", "the row closed and this node did not say what the work "
+                     "turned out to be about; it does now",
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertEqual("restated after the row closed", self.node(self.problem_id).text)
+
+    def test_the_freeze_survives_the_write_and_still_names_the_ending(self):
+        self.run_canvas(
+            "insert", "a-ledger-row", "--into", "root", "--text", "a late note",
+            "--why", "the row closed and this note is what it should have said",
+        )
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row", "--frozen")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(
+            "Canvas-Frozen: %s %s" % (self.freeze_sha, self.REASON),
+            stdout.decode("utf-8"),
+        )
+
+    def test_a_second_freeze_is_legal_and_the_ending_stays_the_first(self):
+        code, stdout, stderr = self.run_canvas(
             "freeze", "a-ledger-row", "--why", "abandoned: a second ending"
         )
-        self.assertSurface(
-            1, code, stderr, msg="a second freeze",
-            about=["freeze %s" % self.freeze_sha],
-        )
-        self.assertEqual(self.frozen_state, self.state())
-        # And the canvas is still ended by the first freeze, not the second.
+        self.assertEqual(0, code, stderr)
+        second = stdout.decode("utf-8").splitlines()[1].split(": ", 1)[1]
+        self.assertNotEqual(self.freeze_sha, second)
+        # Oldest wins, so the canvas's recorded ending is the first one.
         self.assertEqual(
             self.freeze_sha,
             self.the_store().frozen(self.canvas_dir, "a-ledger-row").sha,
         )
 
-    def test_create_against_a_frozen_ledger_id_names_the_freeze(self):
-        # `create` cannot reach the shared guard — it refuses earlier, on the
-        # file already being there — and its ordinary advice, change it one
-        # node at a time, cannot work against a frozen canvas.
+    def test_create_over_a_frozen_canvas_gets_the_ordinary_refusal(self):
+        # `create` used to refuse a frozen canvas with a second, sterner
+        # refusal naming the freeze and telling the caller to make a new
+        # Canvas. It now gets the one refusal that was always right for it —
+        # the canvas is already there — whose advice, change it one node at a
+        # time, is advice that works.
         code, _, stderr = self.run_canvas(
             "create", "a-ledger-row", "--problem", "P", "--expected-value", "V"
         )
         self.assertSurface(
             1, code, stderr, msg="create over a frozen canvas",
-            about=["Canvas identifier a-ledger-row", "freeze %s" % self.freeze_sha],
+            about=["Canvas identifier a-ledger-row"],
         )
-        self.assertIn(self.REASON, stderr)
-        self.assertEqual(self.frozen_state, self.state())
+        self.assertIn("already exists", stderr)
+        self.assertNotIn("freeze %s" % self.freeze_sha, stderr)
 
     def test_an_absent_or_empty_why_is_still_the_invocation_being_wrong(self):
-        # Ordering, stated so it is not discovered later: `require_reason` runs
-        # first, so an unexplained edit is exit 2 whatever the store's state is.
+        # `require_reason` ran before the frozen guard and still runs: an
+        # unexplained edit is exit 2 whatever the store's state is, and a
+        # canvas whose row closed does not get a cheaper reason than any other.
+        before = self.state()
         for args in (
             ("replace", "a-ledger-row", self.problem_id, "--text", "x"),
             ("freeze", "a-ledger-row"),
@@ -6960,51 +6986,78 @@ class EveryWriteVerbIsRefusedAgainstAFrozenCanvas(
             self.assertEqual(2, code, (args, stderr))
             code, _, stderr = self.run_canvas(*(args + ("--why", "  ")))
             self.assertEqual(2, code, (args, stderr))
-        self.assertEqual(self.frozen_state, self.state())
+        self.assertEqual(before, self.state())
 
-    def test_the_guard_binds_a_caller_that_only_imports_the_store(self):
-        # The rule is a property of the write path and not of the command
-        # line, exactly as `--why` and "one edit is one node" are: a caller
-        # that never goes near `canvas/cli.py` gets the same refusal.
+    def test_a_stale_base_is_still_refused_against_a_frozen_canvas(self):
+        # `_refuse_if_frozen` used to run before `_check_base`; with it gone,
+        # `_check_base` is the first thing a stale write meets, and it answers
+        # the same way it always did.
+        stale = self.git("log", "--format=%H").split()[-1]
+        code, _, stderr = self.run_canvas(
+            "replace", "a-ledger-row", self.problem_id, "--text", "x",
+            "--why", "a reason this edit is being made", "--base", stale,
+        )
+        self.assertEqual(1, code, stderr)
+        self.assertIn(self.problem_id, stderr)
+
+    def test_a_caller_that_only_imports_the_store_writes_too(self):
+        # The rule was a property of the write path and not of the command
+        # line, so its removal has to be one too: a caller that never goes
+        # near `canvas/cli.py` is refused by nothing either.
         store = self.the_store()
-        for call in (
-            lambda: store.replace("a-ledger-row", self.problem_id, "w", text="x"),
-            lambda: store.remove("a-ledger-row", self.problem_id, "w"),
-            lambda: store.move("a-ledger-row", self.problem_id, "w", into="root"),
-            lambda: store.insert("a-ledger-row", "w", into="root", text="x"),
-            lambda: store.freeze("a-ledger-row", "w"),
+        for ledger_id, call in (
+            ("in-process-replace", lambda i: store.replace(
+                i, self.first_node(i), "the row closed and this node was wrong", text="x")),
+            ("in-process-remove", lambda i: store.remove(
+                i, self.first_node(i), "the row closed and this node says nothing now")),
+            ("in-process-move", lambda i: store.move(
+                i, self.first_node(i), "the row closed and this node belongs last",
+                into="root")),
+            ("in-process-insert", lambda i: store.insert(
+                i, "the row closed and this is what it should have said",
+                into="root", text="x")),
+            ("in-process-freeze", lambda i: store.freeze(
+                i, "abandoned: a second ending, recorded in the log")),
         ):
-            with self.assertRaises(store.Refusal) as caught:
-                call()
-            self.assertIn(self.freeze_sha, str(caught.exception))
-            self.assertIn("freeze %s" % self.freeze_sha, caught.exception.about)
-        self.assertEqual(self.frozen_state, self.state())
+            self.a_frozen_canvas(ledger_id)
+            call(ledger_id)
 
-    def test_the_write_path_itself_refuses_a_write_to_a_frozen_canvas(self):
-        # The second call site of the one guard: `_write_and_commit` is the
-        # only function that puts a canvas on its real path, and it will not
-        # put one there for a canvas that has ended.
+    def first_node(self, ledger_id):
+        return [
+            node.get("id") for node in self.tree(ledger_id).iter() if node.get("id")
+        ][0]
+
+    def test_the_write_path_itself_accepts_a_write_to_a_frozen_canvas(self):
+        # `_write_and_commit` is the only function that puts a canvas on its
+        # real path, and it carried the second copy of the guard. Both are
+        # gone, so this is the same assertion made at the lowest level there
+        # is.
         store = self.the_store()
+        before = self.state()
         rewritten = document.parse(self.canvas_file())
-        with self.assertRaises(store.Refusal) as caught:
-            store._write_and_commit(
-                self.canvas_dir,
-                self.canvas_file(),
-                rewritten,
-                "replace",
-                self.problem_id,
-                "a reason this edit is being made",
-                "audit | by-hand",
-                node_id=self.problem_id,
-            )
-        self.assertIn(self.freeze_sha, str(caught.exception))
-        self.assertEqual(self.frozen_state, self.state())
+        for node in rewritten:
+            if node.get("id") == self.problem_id:
+                node.text = "rewritten by the write path"
+                node.set("v", str(int(node.get("v")) + 1))
+        store._write_and_commit(
+            self.canvas_dir,
+            self.canvas_file(),
+            rewritten,
+            "replace",
+            self.problem_id,
+            "the row closed and this node did not say what the work was about",
+            "audit | by-hand",
+            node_id=self.problem_id,
+        )
+        self.assertNotEqual(before, self.state())
+        self.assertEqual("rewritten by the write path", self.node(self.problem_id).text)
 
     def test_a_freeze_may_not_smuggle_a_document_rewrite_in_with_it(self):
         # The freeze is the second write that names no node, so it gets the
         # second guard: it may change no byte. A tree handed in with a node
         # rewritten is a whole-document rewrite arriving under the one trailer
-        # that names nothing, and it is refused like any other.
+        # that names nothing, and it is refused like any other. This guard is
+        # not about freezing and survives the removal untouched.
         store = self.the_store()
         self.create(ledger_id="b-row")
         rewritten = document.parse(self.canvas_file("b-row"))
@@ -7026,6 +7079,88 @@ class EveryWriteVerbIsRefusedAgainstAFrozenCanvas(
             self.assertIn(named, str(caught.exception))
         self.assertEqual(before, self.state())
         self.assertIsNone(store.frozen(self.canvas_dir, "b-row"))
+
+
+class ACanvasFrozenTheWayAClosedLedgerRowFreezesItStillAcceptsAWrite(
+    FrozenCanvasTestCase
+):
+    """The symptom that opened `bc-10348813099-remove-terminal-freeze`, as a test.
+
+    An `insert` against `bc-10347386804-annual-limit-metabase` was refused at
+    exit `1` because the ledger row had reached `done`, `bin/task-ledger` had
+    automatically frozen the canvas, and every write verb was refused against a
+    frozen one. This reproduces that freeze exactly as `bin/task-ledger`'s
+    `_the_canvas_ends` makes it — `freeze` with the `done:` reason composed
+    from the row's gate text, authored `task-ledger | close` — and asserts the
+    write it used to refuse now lands.
+
+    It is separate from the class above, which exercises the verbs against a
+    freeze this suite made itself. The point of this one is the *provenance* of
+    the freeze: a canvas frozen by the ledger at a terminal row is the case the
+    row was opened about, and it must be the case a test names.
+    """
+
+    #: `bin/task-ledger`'s `orchestrator/canvas.py::CLOSE_AUTHOR`.
+    CLOSE_AUTHOR = "task-ledger | close"
+
+    #: The shape `bin/task-ledger`'s `_freeze_why` composes at `done`.
+    CLOSE_REASON = (
+        "done: ledger row 'a-ledger-row' passed its done gate. The delivered "
+        "artifact is PR #21, merged 2026-09-23; nodes gjxb and qrpa carry the "
+        "outcome it rests on"
+    )
+
+    def setUp(self):
+        FrozenCanvasTestCase.setUp(self)
+        code, stdout, stderr = self.run_canvas(
+            "freeze", "a-ledger-row",
+            "--why", self.CLOSE_REASON,
+            "--author", self.CLOSE_AUTHOR,
+        )
+        self.assertEqual(0, code, stderr)
+        self.freeze_sha = stdout.decode("utf-8").splitlines()[1].split(": ", 1)[1]
+
+    def test_the_freeze_is_the_one_a_closed_ledger_row_makes(self):
+        # If this stops matching what the ledger does, the test below stops
+        # being about the reported symptom, so it is asserted rather than
+        # assumed.
+        self.assertIn(
+            "Canvas-Author: %s" % self.CLOSE_AUTHOR,
+            self.git("log", "-1", "--format=%B", self.freeze_sha),
+        )
+        self.assertEqual(
+            self.freeze_sha,
+            self.the_store().frozen(self.canvas_dir, "a-ledger-row").sha,
+        )
+
+    def test_it_still_accepts_a_write(self):
+        code, stdout, stderr = self.run_canvas(
+            "insert", "a-ledger-row",
+            "--into", "root",
+            "--type", "text",
+            "--text", "The annual-limit figure the row shipped is 1,500 EUR.",
+            "--why",
+            "the row closed before this figure was written down, and the "
+            "canvas is where the next reader of this task looks for it; node "
+            "%s states the problem it answers" % self.problem_id,
+        )
+        self.assertEqual(0, code, stderr)
+        header = stdout.decode("utf-8").splitlines()
+        self.assertTrue(header[0].startswith("Canvas-Node: "), header)
+        minted = header[0].split(": ", 1)[1]
+        self.assertIsNotNone(self.node(minted))
+
+    def test_the_row_s_recorded_ending_is_unchanged_by_that_write(self):
+        self.run_canvas(
+            "insert", "a-ledger-row", "--into", "root", "--text", "a late note",
+            "--why", "the row closed and this note is what it should have said",
+        )
+        code, stdout, stderr = self.run_canvas("read", "a-ledger-row", "--frozen")
+        self.assertEqual(0, code, stderr)
+        self.assertIn(
+            "Canvas-Frozen: %s %s" % (self.freeze_sha, self.CLOSE_REASON),
+            stdout.decode("utf-8"),
+        )
 
 
 class ReadingAndHistoryStillWorkOnAFrozenCanvas(FrozenCanvasTestCase):
@@ -7168,17 +7303,19 @@ class ReadingAndHistoryStillWorkOnAFrozenCanvas(FrozenCanvasTestCase):
         self.assertEqual({"Canvas-Wrote"}, set(names[2:]))
 
 
-class AFreezeIsFinal(RefusalSurface, FrozenCanvasTestCase):
-    """The done condition's fourth clause, at the level a test can hold: the
-    behaviour `README.md` describes when a frozen canvas's task reopens.
+class AFreezeIsNotTakenBack(RefusalSurface, FrozenCanvasTestCase):
+    """What `README.md` describes when a frozen canvas's task reopens.
 
-    The answer README states is that there is no unfreeze. The frozen canvas
-    stays where it is — readable, `history`-able, never deleted — and a ledger
-    row whose task comes back gets a new ledger row and therefore a new canvas,
-    which points at the frozen one. So what a test can hold is that the tool
-    has no verb that would unfreeze anything, that a frozen canvas is still
-    frozen after every refused write, and that the route README names does
-    work.
+    The answer README states is: write to the canvas that is already there.
+    There is still no `unfreeze`, no `reopen` and no `thaw` — but not because
+    a freeze may not be undone; because there is nothing for them to undo. A
+    freeze stops no write, so what such a verb could only really do is erase
+    the record that the work ended, and this store erases no fact it recorded.
+
+    So what a test can hold is that the tool has no verb that would unfreeze
+    anything, that the freeze survives every write that follows it, and that
+    both routes README names — continuing the canvas, and starting a second
+    one that links back — work.
     """
 
     #: Every verb `bin/canvas` has, and all of it. A tenth added here fails
@@ -7212,26 +7349,53 @@ class AFreezeIsFinal(RefusalSurface, FrozenCanvasTestCase):
             self.assertEqual(b"", stdout, verb)
             self.assertEqual(before, self.state(), verb)
 
-    def test_a_frozen_canvas_is_still_frozen_after_every_refused_write(self):
+    def test_a_frozen_canvas_is_still_frozen_after_every_write_that_lands(self):
+        # The writes land now. What this asserts is the half that did not
+        # change: the freeze stays in the log, and stays the *oldest* one, so
+        # the canvas's recorded ending is not moved by anything written after
+        # it — a second `freeze` included.
         sha = self.froze()
         store = self.the_store()
         for args in (
-            ("replace", "a-ledger-row", self.problem_id, "--text", "x"),
             ("insert", "a-ledger-row", "--into", "root", "--text", "x"),
-            ("remove", "a-ledger-row", self.problem_id),
+            ("replace", "a-ledger-row", self.problem_id, "--text", "x"),
             ("move", "a-ledger-row", self.problem_id, "--into", "root"),
+            ("remove", "a-ledger-row", self.problem_id),
             ("freeze", "a-ledger-row"),
         ):
-            self.run_canvas(*(args + ("--why", "a reason this edit is made")))
+            code, _, stderr = self.run_canvas(
+                *(args + ("--why", "a reason this edit is made"))
+            )
+            self.assertEqual(0, code, (args, stderr))
             ended = store.frozen(self.canvas_dir, "a-ledger-row")
             self.assertIsNotNone(ended, args)
             self.assertEqual(sha, ended.sha, args)
 
-    def test_the_reopening_route_readme_names_is_one_that_works(self):
+    def test_the_reopening_route_readme_names_first_is_one_that_works(self):
+        # README's first answer: write to the canvas that is already there.
+        frozen_sha = self.froze()
+        code, stdout, stderr = self.run_canvas(
+            "insert", "a-ledger-row", "--into", "root", "--type", "text",
+            "--text", "Reopened: the work this canvas recorded has restarted.",
+            "--why", "a-ledger-row's work was recorded as ended at %s and has "
+                     "restarted; this node states what the row is now for, "
+                     "which node %s no longer does"
+                     % (frozen_sha, self.problem_id),
+        )
+        self.assertEqual(0, code, stderr)
+        self.assertIsNotNone(
+            self.node(stdout.decode("utf-8").splitlines()[0].split(": ", 1)[1])
+        )
+        # And the record that it once ended is not taken back by that.
+        self.assertEqual(
+            frozen_sha,
+            self.the_store().frozen(self.canvas_dir, "a-ledger-row").sha,
+        )
+
+    def test_the_second_route_readme_names_still_works_too(self):
         # A new ledger row, a new canvas, and a <link> node on the live one
-        # pointing back at the frozen one. The old canvas is not edited to say
-        # it was superseded — that would be a write to a frozen canvas, and the
-        # pointer belongs on the document that is still alive.
+        # pointing back at the one that ended. Still available, now a choice
+        # rather than the only route.
         frozen_sha = self.froze()
         code, _, stderr = self.run_canvas(
             "create", "a-ledger-row-reopened",
@@ -7247,20 +7411,29 @@ class AFreezeIsFinal(RefusalSurface, FrozenCanvasTestCase):
                      "restarted here" % frozen_sha,
         )
         self.assertEqual(0, code, stderr)
-        # And the frozen one is untouched by any of it.
+        # And the one that ended is untouched by any of it — and may now be
+        # edited to point forward as well, which is the part that changed.
         self.assertEqual(
             frozen_sha,
             self.the_store().frozen(self.canvas_dir, "a-ledger-row").sha,
         )
         code, _, stderr = self.run_canvas("read", "a-ledger-row")
         self.assertEqual(0, code, stderr)
+        code, _, stderr = self.run_canvas(
+            "insert", "a-ledger-row", "--into", "root",
+            "--type", "link", "--href", "a-ledger-row-reopened.xml",
+            "--text", "The canvas that continues this one.",
+            "--why", "a-ledger-row-reopened was created to continue this row's "
+                     "work, and a reader who opens this canvas has no other "
+                     "way to reach it",
+        )
+        self.assertEqual(0, code, stderr)
 
 
 class TheReadmeAnswersTheReopeningCase(unittest.TestCase):
-    """The done condition's fourth clause at the level it is actually written:
-    `README.md` answers, in its own words, what happens when a frozen canvas's
-    task reopens — as prose a reader can act on, not as a note that the
-    question exists.
+    """`README.md` answers, in its own words, what happens when a frozen
+    canvas's task reopens — as prose a reader can act on, not as a note that
+    the question exists.
 
     Narrow on purpose, so that it is not a wording test. What it holds is that
     the section is there, that it names the command it is about, and that it
@@ -7287,11 +7460,16 @@ class TheReadmeAnswersTheReopeningCase(unittest.TestCase):
         self.assertIn("--why", section)
 
     def test_it_says_what_a_write_against_a_frozen_canvas_does(self):
+        # It lands. The section used to say the four verbs were refused at
+        # exit `1` and now says they are not, so this asserts the four are
+        # still named — a reader's question is "may I write" and the four are
+        # the answer's subject — and that the section does not still promise a
+        # refusal.
         section = self.section("Ending a canvas")
         for verb in ("replace", "insert", "remove", "move"):
             self.assertIn(verb, section)
-        # The exit code, which is the half of the refusal a caller branches on.
-        self.assertIn("`1`", section)
+        self.assertNotIn("is refused against a frozen canvas", section)
+        self.assertIn("goes on working", section)
 
     def test_it_says_that_read_and_history_still_work(self):
         section = self.section("Ending a canvas")
@@ -7299,22 +7477,26 @@ class TheReadmeAnswersTheReopeningCase(unittest.TestCase):
         self.assertIn("history", section)
 
     def test_it_answers_what_happens_when_the_task_reopens(self):
-        # The question itself, and the answer — a new ledger row, a new canvas
-        # made with `create`, and a link back — rather than a note that the
-        # question exists.
+        # The question itself, and the answer — write to the canvas that is
+        # already there — rather than a note that the question exists. The
+        # second route, a new canvas linked back, is still named as a choice,
+        # so both are asserted.
         section = self.section("Ending a canvas")
         self.assertIn("reopen", section.lower())
         self.assertIn("unfreeze", section.lower())
-        self.assertIn("bin/canvas create", section)
+        self.assertIn("bin/canvas insert my-task", section)
         self.assertIn("<link>", section)
 
     def test_the_store_section_lists_the_command(self):
         self.assertIn("bin/canvas freeze  <canvas-id> --why TEXT", self.readme())
 
     def test_what_the_store_does_not_do_says_it_does_not_unfreeze(self):
-        self.assertIn(
-            "unfreeze", self.section("What the store deliberately does not do")
-        )
+        # Still true, and now true for a different reason: there is nothing to
+        # unfreeze. Both halves are asserted, because the bullet saying only
+        # the first half is the one that went stale.
+        section = self.section("What the store deliberately does not do")
+        self.assertIn("unfreeze", section)
+        self.assertIn("nothing to unfreeze", section)
 
     def test_every_verb_readme_lists_is_a_verb_the_tool_has(self):
         # The bridge from the prose to the behaviour: README's own command list

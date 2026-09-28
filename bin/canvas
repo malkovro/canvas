@@ -17,8 +17,9 @@ nothing here knows anything about any of them.
 
 `--why` is required by all four editing verbs, and by `freeze`, and has no
 default. `read`, `render` and `history` are reads: they write nothing, commit
-nothing and initialise nothing — and they go on working once a canvas has been
-frozen, which every write verb is refused against at exit 1. `read`'s four
+nothing and initialise nothing. A canvas that has been frozen goes on taking
+all nine subcommands, the four editing verbs included: `freeze` records that
+the work ended and why, and refuses nothing afterwards. `read`'s four
 flags are reads on the same terms and acquire nothing: `--id` and `--type`
 select part of the document, `--provenance` says who last wrote each node
 printed and at which commit, and `--since` says what changed between a sha and

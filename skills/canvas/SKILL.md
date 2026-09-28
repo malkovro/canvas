@@ -49,7 +49,7 @@ whole point — it tells you whether to fix your edit or stop touching the canva
 | exit | meaning | what you do |
 |---|---|---|
 | `0` | it worked | carry on |
-| `1` | **your request is wrong against the store as it stands** — no Canvas for that identifier, no such node, the node you are writing moved since your `--base`, an unknown `--base` sha, the Canvas is frozen, the document is invalid | re-read and re-decide. The refusal names the node and hands you its diff |
+| `1` | **your request is wrong against the store as it stands** — no Canvas for that identifier, no such node, the node you are writing moved since your `--base`, an unknown `--base` sha, the document is invalid | re-read and re-decide. The refusal names the node and hands you its diff |
 | `2` | **the tool or its environment is wrong** — `OPENCLAW_WORKSPACE` unset or unusable, `git` or `xmllint` missing, a malformed Canvas identifier, an absent or empty `--why`, a `--base` that is not a sha | **do not touch the canvas.** Fix the environment or the invocation. Retrying the edit will not help |
 
 A `1` is information about the task. A `2` is information about your machine. Do not
@@ -446,7 +446,7 @@ become one sentence and the argument stays in `history`. Not deletion.
     $CANVAS render <canvas-id> --format comment       # block-level Markdown for a Basecamp comment
 
 Both open with an index of every `<question>` and name the sha they were rendered from. A
-render is a read: it writes nothing and works on a frozen canvas. There is no `--output`;
+render is a read: it writes nothing, and like every verb here it works on a frozen canvas. There is no `--output`;
 redirect stdout.
 
 Redirect carefully: these shells run with `noclobber`, so `> canvas.html` **fails rather
@@ -466,29 +466,36 @@ Prints every edit that named that node, oldest first: sha, author, verb, reason.
 before a `move` are included, because a move keeps the id. Read this before you `replace`
 something that looks wrong — it may be right for a reason the current text does not carry.
 
-### `freeze` — at `done` and at `abandoned`, and once
+### `freeze` — at `done` and at `abandoned`
 
     $CANVAS freeze <canvas-id> \
       --why "done: the delivered artifact is PR #26, merged 2026-09-24; nodes c4kc and ezwq carry the decisions it rests on"
 
 One commit, naming no node and changing no byte of the document: what it records is that
 the canvas has ended and why. One verb for both endings — *done* and *abandoned* are two
-things a `--why` says. Afterwards every write verb is refused at exit `1`; `read`, `render`
-and `history` go on working.
+things a `--why` says. Everything goes on working afterwards: `read`, `render` and
+`history`, and the four editing verbs too.
 
-**There is no unfreeze.** Resumed work gets a new Canvas identifier and a new Canvas.
+**A freeze is a marker and not a gate.** It refuses nothing and there is nothing to
+unfreeze. A Canvas whose ledger row has closed still takes `replace`, `insert`, `remove`
+and `move`, on the ordinary terms — one node, a `--why`, a `--base`. That is deliberate:
+the moment a canvas is most improvable is the moment the work is over, because that is
+when you finally know what it should have said. **Resumed work does not need a new Canvas
+identifier** — write to the one that is already there.
+
+`$CANVAS read <canvas-id> --frozen` is how you find out that a canvas ended and why; it
+answers at exit `0` either way, and it is a report, not a warning.
 
 For a standalone Canvas, you own this transition: freeze it when the work is done or
-abandoned. For a ledger-integrated Canvas, do not run it first. The ledger does it for you:
+abandoned. For a ledger-integrated Canvas, the ledger does it for you:
 `apply_transition` in `bin/task-ledger` freezes on `done` and on `abandoned`,
 both of them, composing the `--why` from the row's own gate text and authoring it
 `task-ledger | close` (ledger-orchestrator `docs/canvas-ends-at-terminal.md`).
 
-A freeze you ran first makes that one fail, because there is no second freeze. The row still
-closes — it is designed to close whether or not the freeze lands — but it records a
-`canvas:failed` event reading `freeze: exit 1`, and the row is the only thing that could have
-said the canvas ended properly. You get a defect in the record in exchange for a step that
-was already being taken for you.
+A second `freeze` is legal, so running one first no longer breaks the ledger's: both
+commits land, and the canvas's recorded ending is the **oldest** of them — the first one
+anybody declared. Still leave it to the ledger on an integrated row, so that the reason
+on record is the one composed from the row's own gate text rather than yours.
 
 For an integrated Canvas, run `freeze` by hand only when:
 
@@ -504,8 +511,8 @@ For an integrated Canvas, run `freeze` by hand only when:
 - **`bin/canvas-validate <file>`** — validating a file by hand, for when you are debugging
   the store rather than driving a task.
 - **An integrated Canvas's freeze at `done` and `abandoned`** — `bin/task-ledger` runs it,
-  and running it first is how you break it. Standalone Canvases are different: you freeze
-  those yourself. See above.
+  and the reason it composes from the row's gate text is the one worth having on record.
+  Standalone Canvases are different: you freeze those yourself. See above.
 
 ## The three rules underneath all of this
 

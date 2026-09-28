@@ -18,8 +18,8 @@ tests* keeps `bin/canvas` install-free, network-free and standard-library-only;
 `rendering.md` section 1 records why adding a dependency and failure mode to a
 cheap local Canvas operation would be a product change rather than an
 implementation detail. The store remains the single writer, so its existing
-id minting, required reason, declared base, author trailer, schema validation,
-one-node commit and frozen-canvas refusal apply without being reimplemented.
+id minting, required reason, declared base, author trailer, schema validation
+and one-node commit apply without being reimplemented.
 
 The trade is explicit: model latency and provider failure are visible to the
 orchestrator after the primary write rather than hidden inside its commit path.
@@ -39,13 +39,18 @@ does not invoke it after `read`, `render`, `history` or `freeze`, and does not
 invoke it for `<question>` inserts authored by `canvas-coherence`.
 
 The trigger is the full forty-character head returned by the successful write.
-Before starting the adapter, the checker uses the store's write preflight to
-refuse a frozen canvas, requires that trigger to still be the current head, and
-requires the commit to be a one-node Canvas write whose only changed path is
-the requested ledger's XML file. Repository HEAD alone is insufficient because
-one store contains multiple canvases. It checks the head again before writing
-findings. A frozen canvas, stale trigger, or trigger belonging to another
-canvas is exit `1`, with no model call and no write.
+Before starting the adapter, the checker uses the store's write preflight,
+requires that trigger to still be the current head, and requires the commit to
+be a one-node Canvas write whose only changed path is the requested ledger's
+XML file. Repository HEAD alone is insufficient because one store contains
+multiple canvases. It checks the head again before writing findings. A stale
+trigger, or a trigger belonging to another canvas, is exit `1`, with no model
+call and no write.
+
+A frozen canvas is **not** refused. The checker used to inherit an exit-1
+refusal from the store's write preflight for one whose ledger row had closed;
+the store no longer refuses a write on those grounds, so a canvas whose work
+has ended is checked like any other.
 
 ## Adapter contract
 
@@ -117,8 +122,8 @@ refused.
 - One or more findings: exit `0` after the sequential store inserts.
 - Adapter launch, timeout, non-zero exit, invalid UTF-8/JSON or invalid response
   contract: exit `2`; no finding is written and the primary commit remains.
-- Store refusal, including frozen canvas or stale trigger: exit `1`; nothing is
-  written by the refused operation.
+- Store refusal, such as a stale trigger: exit `1`; nothing is written by the
+  refused operation.
 
 This checker answers coherence inside the document. It does not verify the
 canvas against reality; `engineering-spec.md` keeps that separate and continues

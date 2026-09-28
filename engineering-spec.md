@@ -376,10 +376,19 @@ invariant honest rather than quietly false:
   exists from the moment the task does.
 - **Grows through `executing`.** Runs and steps write to it; the person writes
   to it; it resolves as it goes.
-- **Frozen at `done`.** The `done` gate already demands a structured
+- **Ended at `done`.** The `done` gate already demands a structured
   What/Why/Evidence/Verification/Links artifact. That artifact is a projection
-  of the canvas, and after it the canvas is read-only history.
-- **Never deleted.** `abandoned` freezes it the same way, with the reason as the
+  of the canvas, and the ledger records the ending on the canvas as a freeze:
+  one commit, naming no node and changing no byte, whose reason says the work
+  is over and why.
+- **Never closed.** The ending is a marker and not a gate. A frozen canvas
+  goes on taking `replace`, `insert`, `remove` and `move` on the ordinary
+  terms — one node, a `--why`, a `--base` — because the moment a canvas is
+  most improvable is the moment the work is over and its writer finally knows
+  what the document should have said. A canvas whose task resumes is edited
+  where it is; it does not need a new Canvas identifier, and there is no
+  `unfreeze` because there is nothing to undo.
+- **Never deleted.** `abandoned` ends it the same way, with the reason as the
   last edit.
 
 ## Does this already exist
