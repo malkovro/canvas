@@ -294,12 +294,14 @@ def _edited(args, node_id, sha, news=None):
 
 
 def _replace(args):
+    svg = _read_svg(args.svg_file)
     sha, news = store.replace(
         args.canvas_id,
         args.node_id,
         args.why,
         node_type=args.node_type,
-        text=args.text,
+        text=svg if svg is not None else args.text,
+        payload="svg" if svg is not None else None,
         title=args.title,
         href=args.href,
         answered=args.answered,
@@ -310,13 +312,15 @@ def _replace(args):
 
 
 def _insert(args):
+    svg = _read_svg(args.svg_file)
     node_id, sha, news = store.insert(
         args.canvas_id,
         args.why,
         after=args.after,
         into=args.into,
         node_type=args.node_type,
-        text=args.text,
+        text=svg if svg is not None else args.text,
+        payload="svg" if svg is not None else None,
         title=args.title,
         href=args.href,
         answered=args.answered,
@@ -489,9 +493,10 @@ def _add_selection(parser):
 def _add_payload(parser, default_type):
     """How new content arrives, which no spec settled and this command line does.
 
-    A node type by name, and the three attributes the closed vocabulary has
-    that are not identity: `<section>`'s title, `<link>`'s href and
-    `<question>`'s answered. Named flags rather than a general `--attr
+    A node type by name, character data or the explicit SVG-file path, and the
+    closed vocabulary's named attributes: `<section>`'s title, `<link>`'s href,
+    `<question>`'s answered and schema-v2 `<figure>`'s SVG payload marker.
+    Named flags rather than a general `--attr
     name=value`, because a general one could set `id` and `v`, and `insert`
     mints ids — a caller cannot supply one.
 
@@ -513,7 +518,15 @@ def _add_payload(parser, default_type):
             )
         ),
     )
-    parser.add_argument("--text", help="the node's character data")
+    content = parser.add_mutually_exclusive_group()
+    content.add_argument("--text", help="the node's character data")
+    content.add_argument(
+        "--svg-file",
+        help=(
+            "UTF-8 inline SVG for a schema-v2 <figure>; mutually exclusive "
+            "with --text and stored as escaped character data"
+        ),
+    )
     parser.add_argument("--title", help="the title attribute a <section> requires")
     parser.add_argument("--href", help="the href attribute a <link> requires")
     # node-state.md: the one state a canvas carries. A store-true flag and not
@@ -526,6 +539,21 @@ def _add_payload(parser, default_type):
         action="store_true",
         help="mark a <question> answered; absence means open",
     )
+
+
+def _read_svg(path):
+    """Read the explicit SVG escape hatch; ordinary figures keep `--text`."""
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+    except UnicodeError as error:
+        raise store.ToolProblem(
+            "cannot read --svg-file %s as UTF-8: %s" % (path, error),
+            "save the SVG as UTF-8 and re-run the same command; nothing was written",
+            about=["file %s" % path, "option --svg-file"],
+        )
 
 
 #: The verbs, as the subparsers know them. Filled in by `build_parser` so that
@@ -819,8 +847,8 @@ def build_parser():
         help="print the canvas as a standalone HTML page",
         description=(
             "Print the Canvas as a projection of it. The "
-            "default is one standalone HTML document: no stylesheet to fetch, "
-            "no script and no image. Either projection opens with an index "
+            "default is one standalone HTML document: no stylesheet, script "
+            "or external image to fetch; figures draw as inline SVG. Either projection opens with an index "
             "naming every <question> in the document, every <question> "
             "carries a marker of its own, and both name the sha they were "
             "rendered from — a projection outlives the canvas it came from "

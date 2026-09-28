@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="figure-svg-unsafe" schema="2">
+  <figure id="f2gx" v="1" payload="svg">&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" onload="alert(1)"&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;/svg&gt;</figure>
+</canvas>

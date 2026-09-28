@@ -129,6 +129,80 @@ The vocabulary is closed: `canvas`, `section`, `text`, `list`, `item`, `table`, 
 no config of allowed elements. `<section>` nests one level (two deep in total). `<link>`
 requires `--href`, `<section>` requires `--title`.
 
+## Figures
+
+Use a `<figure>` when the spatial relationship is the understanding: a flow,
+dependency, boundary, sequence of handoffs, or small topology that a reader can
+grasp faster as a picture than as prose. A figure earns its node when it removes
+real scanning or ambiguity. Do not draw one merely because several facts exist;
+a short list or paragraph is cheaper, easier to edit, and clearer when order and
+connection are not the point. Keep the figure small enough that its labels are
+readable in the standalone page, and put conclusions or caveats that must be
+searched as prose in a neighbouring `<text>` node.
+
+The default is **Canvas Diagram 1**, owned and versioned by this repository. It
+is explicit-grid, line-oriented text stored directly in the `<figure>` with no
+`payload` attribute:
+
+```text
+box ID ROW COLUMN "label"
+edge FROM -> TO "label"
+edge FROM -- TO "label"
+edge FROM -x TO "label"
+text ROW COLUMN "label"
+```
+
+Ids begin with a lowercase letter and then use lowercase letters, digits, `_`
+or `-`; rows and columns are positive integers up to 1000. Labels are quoted and may use
+`\n` for an intentional line break. `->` is directed, `--` undirected and `-x`
+blocked. Source order is paint order. Unknown or malformed statements remain
+visible as diagnostic rows in the drawing rather than making a validated canvas
+fail later at render time.
+
+Create the normal textual figure through the store, never by editing XML:
+
+```bash
+$CANVAS insert my-canvas --into root --type figure \
+  --text 'box request 1 1 "Request"
+box review 1 2 "Review"
+edge request -> review "submit"' \
+  --why "This node makes the request-to-review handoff and its direction scannable; retire it if the workflow becomes a single step." \
+  --base "$canvas_base" --author "<model> | <step-or-role>"
+```
+
+The stored node is ordinary leaf character data, one of the same eleven element
+names; the CLI escapes it when serialising:
+
+```xml
+<figure id="f2gx" v="1">box request 1 1 "Request"
+box review 1 2 "Review"
+edge request -&gt; review "submit"</figure>
+```
+
+Inline SVG is an escape hatch for geometry Canvas Diagram 1 cannot express:
+
+```bash
+$CANVAS insert my-canvas --into root --type figure --svg-file ./shape.svg \
+  --why "Canvas Diagram 1 cannot express the supplied geometry; this node is the reviewed self-contained drawing and should return to textual source if the relationship can be expressed there." \
+  --base "$canvas_base" --author "<model> | <step-or-role>"
+```
+
+That produces `<figure payload="svg">` containing escaped markup. The validator
+admits only a bounded, inert SVG shape/text subset and refuses scripts, handlers,
+styles, links, URLs, images, reuse, foreign objects, animation, entities and
+foreign namespaces before the write commits. SVG is not the default because a
+small visual edit rewrites noisy markup inside one node and makes that node's
+per-edit history much harder to read. The explicit `--svg-file` flag, the
+`payload="svg"` marker, the closed validator, and this instruction are the guard:
+reach for Canvas Diagram 1 first and pay the SVG history cost only when its
+limited language genuinely cannot carry the picture.
+
+The standalone HTML projection draws either payload as inline SVG. The Basecamp
+comment projection cannot display the picture, so it labels and fences readable
+Canvas Diagram 1 source or entity-escaped SVG markup and points the reader to the
+standalone projection. That fallback is intentional; do not mistake it for a
+failed render or paste raw SVG into the comment.
+
 ## `--why` is the field that makes the canvas worth reading
 
 It is required, has no default, and lives in the commit subject and nowhere else.

@@ -203,7 +203,7 @@ class CreateFromACleanWorkspace(StoreTestCase):
         root = ElementTree.parse(self.canvas_file()).getroot()
         self.assertEqual("canvas", root.tag)
         self.assertEqual("a-ledger-row", root.get("ledger"))
-        self.assertEqual("1", root.get("schema"))
+        self.assertEqual("2", root.get("schema"))
         # The vocabulary has no semantic node, so the two first nodes are
         # <text> and the distinction lives in the order and the commit subject.
         self.assertEqual(["text", "text"], [child.tag for child in root])
@@ -1148,7 +1148,7 @@ class TheSerialisedShape(StoreTestCase):
         # <canvas .../>, the way tests/fixtures/born.xml writes it, not
         # <canvas ... /> the way ElementTree.tostring would.
         root = document.new_canvas("a-ledger-row")
-        self.assertIn('schema="1"/>', document.serialise(root))
+        self.assertIn('schema="2"/>', document.serialise(root))
 
     def test_markup_in_the_text_is_escaped_and_survives_a_round_trip(self):
         awkward = 'a < b & c > d "quoted" \'single\''

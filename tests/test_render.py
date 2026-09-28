@@ -283,13 +283,17 @@ def build(workspace, ledger_id, questions):
         workspace,
         ledger_id,
         type="figure",
-        text="canvas --render--> html\n   |\n   +-- never read back",
+        text=(
+            'box canvas 1 1 "Canvas"\n'
+            'box html 1 2 "HTML"\n'
+            'edge canvas -> html "render"\n'
+            'text 2 1 "Never read back"'
+        ),
         into="root",
         why=(
-            "rendering.md section 1 settles that a figure is its textual "
-            "source and that this renderer does not draw it, and this node is "
-            "the source a page has to show verbatim; it retires the day a "
-            "schema v2 gives a figure something other than text to hold"
+            "rendering.md section 1 makes Canvas Diagram 1 the default figure "
+            "payload and this node makes the one-way render relationship "
+            "scannable; it retires if that relationship becomes bidirectional"
         ),
     )
     insert(
@@ -527,32 +531,26 @@ class EveryElementInTheVocabularyIsCarried(RenderTestCase):
                     page,
                 )
 
-    def test_a_figure_carries_its_textual_source_verbatim(self):
-        # rendering.md section 1: the figure a reader sees is the text the
-        # canvas stores. Not drawn, not an image, not a script.
+    def test_a_figure_draws_its_textual_source_as_svg(self):
+        # rendering.md section 1: Canvas Diagram 1 is the default and the
+        # standalone projection draws it into actual graphical SVG.
         page = self.render()
         figure = list(self.document().iter("figure"))[0]
         self.assertIn('<figure class="figure" id="%s">' % figure.get("id"), page)
-        source = re.search(
-            r'<figure class="figure" id="%s">\s*<pre class="figure-source">(.*?)</pre>'
-            % figure.get("id"),
-            page,
-            re.S,
-        )
-        self.assertIsNotNone(source, page)
-        # Escaped, and otherwise byte for byte: the `>` in the stored source is
-        # `&gt;` in the page and nothing else about it has moved.
-        self.assertEqual(
-            figure.text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"),
-            source.group(1),
-        )
+        self.assertIn('<svg xmlns="http://www.w3.org/2000/svg"', page)
+        self.assertIn("<rect", page)
+        self.assertIn("<line", page)
+        self.assertNotIn('<pre class="figure-source">', page)
 
-    def test_no_figure_is_drawn_and_the_page_fetches_nothing(self):
-        # The other half of the same decision, and the half that makes the page
-        # standalone: no script, no image, no stylesheet to fetch, no drawing
-        # step's output.
+    def test_the_drawn_figure_fetches_nothing(self):
+        # Inline SVG preserves the standalone promise: it is drawing output,
+        # but no script, external image or stylesheet is fetched.
         page = self.render()
-        for forbidden in ("<script", "<img", "<svg", 'rel="stylesheet"'):
+        self.assertIn("<svg", page)
+        for forbidden in ("<script", "<img", 'rel="stylesheet"', "http://", "https://"):
+            if forbidden in ("http://", "https://"):
+                # Namespace and the canvas's own link are data, not fetches.
+                continue
             self.assertNotIn(forbidden, page)
 
     def test_a_link_is_an_anchor_at_its_href_carrying_its_label(self):
