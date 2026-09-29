@@ -78,8 +78,9 @@ class CanvasDiagramOneIsTotalAndGraphical(unittest.TestCase):
 
 
 class FigureValidation(unittest.TestCase):
-    def test_text_and_safe_svg_payloads_validate(self):
+    def test_text_mermaid_and_safe_svg_payloads_validate(self):
         self.assertEqual([], validate_file(fixture("figure-text-v2.xml")))
+        self.assertEqual([], validate_file(fixture("figure-mermaid-v2.xml")))
         self.assertEqual([], validate_file(fixture("figure-svg-v2.xml")))
 
     def test_schema_one_remains_valid(self):
@@ -137,9 +138,56 @@ class FigureProjections(unittest.TestCase):
         self.assertIn("figure-drawing", output)
         self.assertNotIn("&lt;svg", output)
 
+    def test_page_keeps_escaped_mermaid_source_as_progressive_fallback(self):
+        output = render.page(
+            "figure-mermaid", "b" * 40, self._root("figure-mermaid-v2.xml"), {}
+        )
+        self.assertIn('<pre class="mermaid-source" data-mermaid-source>', output)
+        self.assertIn("request[Request] --&gt; review[Review]", output)
+        self.assertIn("Mermaid source, progressively enhanced", output)
+        self.assertNotIn("request[Request] --> review[Review]", output)
+
+    def test_mermaid_bootstrap_is_fixed_restrictive_and_emitted_once(self):
+        root = self._root("figure-mermaid-v2.xml")
+        root.append(ET.fromstring(
+            '<figure id="m2gx" v="1" payload="mermaid">sequenceDiagram\nA-&gt;&gt;B: Hi</figure>'
+        ))
+        output = render.page("two-mermaids", "b" * 40, root, {})
+        self.assertEqual(1, output.count('<script type="module">'))
+        self.assertEqual(1, output.count(render.MERMAID_MODULE_URL))
+        self.assertIn('securityLevel: "strict"', output)
+        self.assertIn('htmlLabels: false', output)
+        self.assertIn('flowchart: { htmlLabels: false }', output)
+        self.assertIn('source.textContent', output)
+
+    def test_non_mermaid_pages_do_not_load_a_script_or_network_dependency(self):
+        for name in ("figure-text-v2.xml", "figure-svg-v2.xml"):
+            with self.subTest(name=name):
+                output = render.page("local", "b" * 40, self._root(name), {})
+                self.assertNotIn("<script", output)
+                self.assertNotIn(render.MERMAID_MODULE_URL, output)
+
+    def test_hostile_mermaid_like_source_is_only_escaped_text(self):
+        source = (
+            'flowchart LR\nA["</pre><script>alert(1)</script>"]\n'
+            'click A href "javascript:alert(2)"'
+        )
+        root = ET.fromstring(
+            '<canvas ledger="hostile" schema="2"><figure id="f2gx" v="1" '
+            'payload="mermaid">%s</figure></canvas>'
+            % source.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        output = render.page("hostile", "b" * 40, root, {})
+        self.assertIn("&lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt;", output)
+        self.assertNotIn("</pre><script>alert(1)</script>", output)
+        self.assertNotIn("javascript:alert(2)\";", output)
+        bootstrap = output[output.index('<script type="module">'):]
+        self.assertNotIn(source, bootstrap)
+
     def test_comment_labels_readable_fallbacks_and_has_no_less_than(self):
         for name, label in (
             ("figure-text-v2.xml", "Canvas Diagram 1 source"),
+            ("figure-mermaid-v2.xml", "Mermaid source"),
             ("figure-svg-v2.xml", "inline SVG source"),
         ):
             with self.subTest(name=name):
@@ -161,7 +209,7 @@ class FigureStoreAndCLI(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
 
-    def test_agents_create_both_payloads_without_editing_xml(self):
+    def test_agents_create_all_payloads_without_editing_xml(self):
         created = self.run_canvas("create", "figures", "--problem", "P", "--expected-value", "E")
         self.assertEqual(0, created.returncode, created.stderr)
         textual = self.run_canvas(
@@ -169,6 +217,15 @@ class FigureStoreAndCLI(unittest.TestCase):
             "--text", 'box a 1 1 "A"', "--why", "The figure records the one relationship a reader must scan.",
         )
         self.assertEqual(0, textual.returncode, textual.stderr)
+        mermaid_path = os.path.join(self.workspace, "architecture.mmd")
+        with open(mermaid_path, "w", encoding="utf-8") as handle:
+            handle.write("flowchart LR\nrequest --&gt; review")
+        mermaid = self.run_canvas(
+            "insert", "figures", "--into", "root", "--type", "figure",
+            "--mermaid-file", mermaid_path,
+            "--why", "The architecture is easiest to scan as a relationship diagram.",
+        )
+        self.assertEqual(0, mermaid.returncode, mermaid.stderr)
         svg_path = os.path.join(self.workspace, "safe.svg")
         with open(svg_path, "w", encoding="utf-8") as handle:
             handle.write('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="none" stroke="currentColor"/></svg>')
@@ -181,13 +238,44 @@ class FigureStoreAndCLI(unittest.TestCase):
         figures = list(root.iter("figure"))
         self.assertEqual("2", root.get("schema"))
         self.assertIsNone(figures[0].get("payload"))
-        self.assertEqual("svg", figures[1].get("payload"))
-        self.assertIn("<svg", figures[1].text)
+        self.assertEqual("mermaid", figures[1].get("payload"))
+        self.assertIn("flowchart LR", figures[1].text)
+        self.assertEqual("svg", figures[2].get("payload"))
+        self.assertIn("<svg", figures[2].text)
 
-    def test_text_and_svg_file_are_mutually_exclusive(self):
+    def test_agents_replace_a_figure_with_mermaid_without_editing_xml(self):
+        created = self.run_canvas("create", "replace-figure", "--problem", "P", "--expected-value", "E")
+        self.assertEqual(0, created.returncode, created.stderr)
+        inserted = self.run_canvas(
+            "insert", "replace-figure", "--into", "root", "--type", "figure",
+            "--text", 'box a 1 1 "A"', "--why", "The initial figure shows the current relation.",
+        )
+        self.assertEqual(0, inserted.returncode, inserted.stderr)
+        node_id = inserted.stdout.splitlines()[0].split(": ", 1)[1]
+        path = os.path.join(self.workspace, "replacement.mmd")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("sequenceDiagram\nA-&gt;&gt;B: replace")
+        replaced = self.run_canvas(
+            "replace", "replace-figure", node_id, "--type", "figure",
+            "--mermaid-file", path,
+            "--why", "The sequence now carries the handoff order the old grid omitted.",
+        )
+        self.assertEqual(0, replaced.returncode, replaced.stderr)
+        root = ET.parse(os.path.join(self.workspace, "state", "canvas", "replace-figure.xml")).getroot()
+        figure = next(root.iter("figure"))
+        self.assertEqual("mermaid", figure.get("payload"))
+        self.assertIn("sequenceDiagram", figure.text)
+
+    def test_figure_inputs_are_mutually_exclusive(self):
         result = self.run_canvas(
             "insert", "figures", "--into", "root", "--type", "figure",
             "--text", "x", "--svg-file", "x.svg", "--why", "Two payloads are ambiguous.",
+        )
+        self.assertEqual(2, result.returncode)
+        result = self.run_canvas(
+            "insert", "figures", "--into", "root", "--type", "figure",
+            "--mermaid-file", "x.mmd", "--svg-file", "x.svg",
+            "--why", "Two payloads are ambiguous.",
         )
         self.assertEqual(2, result.returncode)
 

@@ -187,11 +187,11 @@ render, history, freeze, or a question inserted by the checker itself.
 - **That `v` agrees with the commit count.** Same reason — checkable against the
   log, not against the file.
 - **The meaning of arbitrary figure languages.** Schema v2 admits Canvas
-  Diagram 1 character data by default and `payload="svg"` character data only
-  through the closed inline-SVG validator. It does not admit Mermaid, dot,
-  PlantUML, raw child elements or another payload value. Schema v1 remains an
-  explicit compatibility branch. [`rendering.md`](rendering.md) §1 owns the
-  reversed decision and the notation contract.
+  Diagram 1 character data by default, explicit `payload="mermaid"` source and
+  `payload="svg"` character data only through the closed inline-SVG validator.
+  It does not admit dot, PlantUML, raw child elements or another payload value;
+  schema v1 remains an explicit compatibility branch. [`rendering.md`](rendering.md)
+  §1 owns the deliberately revised network and notation contract.
 
 ## The store
 
@@ -214,8 +214,8 @@ hand out an id another canvas already used.
     bin/canvas read    <canvas-id> [--id NODE-ID]... [--type NAME]... [--provenance] [--since SHA] [--frozen]
     bin/canvas render  <canvas-id>
     bin/canvas history <canvas-id> <node-id>
-    bin/canvas replace <canvas-id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT | --svg-file FILE] [--title TEXT] [--href URL] [--answered] [--author TEXT]
-    bin/canvas insert  <canvas-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT | --svg-file FILE] [--title TEXT] [--href URL] [--answered] [--author TEXT]
+    bin/canvas replace <canvas-id> <node-id> --why TEXT [--base SHA] [--type NAME] [--text TEXT | --mermaid-file FILE | --svg-file FILE] [--title TEXT] [--href URL] [--answered] [--author TEXT]
+    bin/canvas insert  <canvas-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--type NAME] [--text TEXT | --mermaid-file FILE | --svg-file FILE] [--title TEXT] [--href URL] [--answered] [--author TEXT]
     bin/canvas remove  <canvas-id> <node-id> --why TEXT [--base SHA] [--author TEXT]
     bin/canvas move    <canvas-id> <node-id> (--after <node-id> | --into <container-id>) --why TEXT [--base SHA] [--author TEXT]
     bin/canvas freeze  <canvas-id> --why TEXT [--author TEXT]
@@ -652,12 +652,12 @@ stdout is how the page becomes a file, and **there is no `--output`** — a
 projection this command could write anywhere is a projection somebody
 eventually writes into `state/canvas`.
 
-**One standalone document.** The promise survives: one file, no stylesheet,
-script, font, image or other asset to fetch. Figures are actual inline SVG,
-generated or safely reserialized by standard-library Python in the render
-process. It opens from a `file://` path with no install, virtualenv, subprocess
-or network. “No image” now means no external image dependency, not “no drawn
-picture”.
+**One standalone document.** The projection is one generated HTML file with
+inline CSS and no external stylesheet, font or image. Canvas Diagram 1 and SVG
+figures draw in process and fetch nothing. An explicit Mermaid figure adds one
+exact, renderer-owned CDN ES-module dependency; its escaped source is readable
+before enhancement and remains so if JavaScript, the CDN or Mermaid parsing
+fails. Rendering needs no install, virtualenv or subprocess.
 
 What the page carries:
 
@@ -694,15 +694,18 @@ What the page carries:
   space is which is your reading of your own heading — and
   `tests/test_crossing.py` holds the count on both projections.
 
-**A `<figure>` is drawn.** With no payload attribute its source is Canvas
+**A `<figure>` is drawn.** Use `--mermaid-file FILE` for architecture, flow,
+sequence and relationship diagrams; it stores explicit `payload="mermaid"`
+character data and the page progressively enhances its escaped source through
+the pinned Mermaid module. With no payload attribute the source remains Canvas
 Diagram 1: `box ID ROW COLUMN "label"`, `edge FROM -> TO "label"` (also `--`
-and `-x`), and `text ROW COLUMN "label"`; coordinates run from 1 to 1000. Source mistakes render as visible
-diagnostic rows, so accepted textual source is total. `payload="svg"` is the
-explicit escape hatch; `--svg-file FILE` stores it as escaped character data
-only after a closed validator rejects script, CSS, links, URLs, external
-entities and foreign content. Existing schema-v1 figures use the same textual
-drawer. [`rendering.md`](rendering.md) §1 records the 2026-09-25 reversal and
-why commit `a56db5b` had shipped a grammar without settling the product choice.
+and `-x`), and `text ROW COLUMN "label"`; coordinates run from 1 to 1000 and
+source mistakes become visible diagnostic rows. Reserve `payload="svg"` and
+`--svg-file FILE` for small, simple reviewed visuals; a closed validator rejects
+script, CSS, links, URLs, external entities and foreign content. Existing
+schema-v1 and unmarked figures keep the same textual drawer.
+[`rendering.md`](rendering.md) §1 records both policy reversals and the safety
+and fallback boundary.
 
 #### `--format comment`: the projection a ledger row carries
 
@@ -730,9 +733,9 @@ output, and the output is dictated by the transport:
   ` — `, because the Markdown table extension is off and a real table leaks
   its own pipes as literal text.
 - **A `<figure>` keeps an honest labelled fallback in a fenced block** — Canvas
-  Diagram 1 source or entity-escaped inline SVG markup. Basecamp cannot display
-  the picture; the standalone page is the drawn projection. No literal `<`
-  reaches the comment body.
+  Diagram 1 or Mermaid source, or entity-escaped inline SVG markup. Basecamp
+  cannot display the picture; the standalone page is the drawn projection. No
+  literal `<` reaches the comment body.
 - **The index and the markers are the page's**, unchanged in substance: every
   `<question>` named with its state, nothing that is not a `<question>` named,
   and a marker on every `<question>` node. `tests/test_render.py` asserts all

@@ -22,12 +22,12 @@ Two questions this renderer had to settle rather than inherit, both argued in
 `rendering.md` at the top of this repository:
 
 - **`<figure>` is drawn in the standalone page.** Schema 2 distinguishes the
-  default repository-owned Canvas Diagram 1 source from `payload="svg"`, the
+  backward-compatible Canvas Diagram 1 default, explicit Mermaid source and the
   closed inline-SVG escape hatch. Schema-1 textual figures remain readable and
-  use the same total diagram renderer. Drawing is paid for in standard-library
-  Python in this repository: no install, subprocess, network or runtime script.
-  The comment projection cannot display the picture and labels an honest fenced
-  source/markup fallback instead.
+  use the same total diagram renderer. Mermaid is progressive enhancement from
+  one exact renderer-owned CDN module; escaped source remains the no-JavaScript,
+  network-failure and syntax-error fallback. The comment projection cannot
+  display the picture and labels an honest fenced source/markup fallback instead.
 - **The index names every `<question>` in the document, answered ones
   included, and says of each which it is.** An answered question is quiet in
   the index and quiet in the body — it keeps its marker and its entry, and
@@ -103,6 +103,56 @@ from xml.etree import ElementTree as ET
 from canvas import diagram, store, svg
 
 
+#: The one network dependency a standalone page may load, and only when the
+#: document contains an explicit Mermaid figure. The version is exact rather
+#: than a tag or range; canvas data never supplies or modifies this URL.
+MERMAID_MODULE_URL = (
+    "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs"
+)
+
+#: Renderer-owned progressive enhancement. Figure source reaches this code only
+#: through textContent; it is never interpolated into this executable string.
+#: Strict mode sanitizes Mermaid output and disables click directives, while
+#: `secure` prevents document init directives from weakening the site policy.
+MERMAID_BOOTSTRAP = """<script type="module">
+import mermaid from "%s";
+
+const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({
+  startOnLoad: false,
+  securityLevel: "strict",
+  secure: ["securityLevel", "startOnLoad", "secure", "theme", "themeVariables", "htmlLabels", "flowchart"],
+  theme: "base",
+  themeVariables: dark ? {
+    background: "#201c19", primaryColor: "#201c19", primaryTextColor: "#efe9e4",
+    primaryBorderColor: "#70a8bb", lineColor: "#70a8bb", secondaryColor: "#2b231e",
+    tertiaryColor: "#181513", fontFamily: "system-ui, sans-serif"
+  } : {
+    background: "#f4efe8", primaryColor: "#f4efe8", primaryTextColor: "#1d1a17",
+    primaryBorderColor: "#2b5f73", lineColor: "#2b5f73", secondaryColor: "#fbf0e6",
+    tertiaryColor: "#fdfcfa", fontFamily: "system-ui, sans-serif"
+  },
+  htmlLabels: false,
+  flowchart: { htmlLabels: false }
+});
+
+for (const [index, source] of document.querySelectorAll("[data-mermaid-source]").entries()) {
+  try {
+    const result = await mermaid.render(`canvas-mermaid-${index}`, source.textContent);
+    const drawing = document.createElement("div");
+    drawing.className = "mermaid-drawing";
+    drawing.setAttribute("role", "img");
+    drawing.setAttribute("aria-label", "Mermaid diagram");
+    drawing.innerHTML = result.svg;
+    source.before(drawing);
+    source.hidden = true;
+  } catch (error) {
+    source.closest(".figure").classList.add("mermaid-failed");
+  }
+}
+</script>""" % MERMAID_MODULE_URL
+
+
 #: The one state a canvas carries, and the only attribute this module reads
 #: that is not identity or structure. `node-state.md`: absence means open,
 #: `true` is the only legal value, and `<question>` is the only element it may
@@ -172,10 +222,9 @@ HEADINGS = ["h2", "h3", "h4"]
 #: graphical element and gets a panel of its own, and `<question>` is the one
 #: that must stay findable and gets the only saturated colour on the page.
 #:
-#: Inline and nothing else: no web font, no external stylesheet, no image and
-#: no script, so the page opens from a `file://` path with nothing to fetch.
-#: That is `rendering.md` §1's standalone promise, and
-#: `test_the_drawn_figure_fetches_nothing` is what keeps it.
+#: Styles stay inline. An explicit Mermaid figure adds the one pinned,
+#: renderer-owned module described above; every other page still has nothing
+#: external to fetch.
 STYLE = """
     /* --- tokens: the palette, the type scale, the measure ---------------- */
     :root {
@@ -345,6 +394,19 @@ STYLE = """
               border-radius: .5rem; color: var(--diagram); }
     .figure-drawing { display: block; width: 100%; height: auto;
                       overflow: visible; }
+    .mermaid-source { margin: 0; padding: 1rem; overflow-x: auto;
+                      border: 1px solid var(--rule-firm); border-radius: .3rem;
+                      background: var(--paper-sunk); color: var(--ink);
+                      font: var(--text-sm)/1.5 var(--font-mono);
+                      white-space: pre-wrap; overflow-wrap: anywhere; }
+    .mermaid-drawing { width: 100%; overflow-x: auto; text-align: center; }
+    .mermaid-drawing svg { display: block; max-width: 100%; height: auto;
+                           margin: 0 auto; }
+    .mermaid-failed .mermaid-source::before {
+        content: "Diagram unavailable — Mermaid source follows";
+        display: block; margin-bottom: .75rem; color: var(--ink-faint);
+        font: 700 var(--text-xs)/1.4 var(--font-prose);
+        letter-spacing: .05em; text-transform: uppercase; }
     figcaption { margin: .9rem 0 0; padding-top: .7rem;
                  border-top: 1px solid var(--rule);
                  font-size: var(--text-xs); line-height: 1.5;
@@ -639,15 +701,20 @@ def _figure(node, crossings):
     """Draw one `<figure>` using its explicit schema-v2 payload distinction.
 
     No `payload` means repository-owned Canvas Diagram 1, including on old
-    schema-v1 canvases. `payload="svg"` has already passed the closed validator;
-    it is parsed and reserialized rather than copied. The renderer therefore
-    has no document-only failure after validation: textual input is total and
-    SVG input reaches here only after acceptance.
+    schema-v1 canvases. `payload="svg"` has already passed the closed validator
+    and is parsed and reserialized rather than copied. `payload="mermaid"`
+    remains escaped source in readable markup until the fixed module enhances
+    it; syntax or network failures leave that source in place.
     """
     identity = node.get("id") or ""
     if node.get("payload") == "svg":
         drawing = svg.render(node.text or "", "inline SVG figure %s" % identity)
         caption = "inline SVG escape hatch, validated and rendered"
+    elif node.get("payload") == "mermaid":
+        drawing = '<pre class="mermaid-source" data-mermaid-source>%s</pre>' % _text(
+            node.text or ""
+        )
+        caption = "Mermaid source, progressively enhanced by the standalone projection"
     else:
         drawing = diagram.render_text(node.text or "")
         caption = "Canvas Diagram 1 source, drawn by the standalone projection"
@@ -760,11 +827,9 @@ def _node(node, depth, out, crossings):
 def page(ledger_id, sha, root, crossings):
     """The whole page, as one string: a standalone HTML document.
 
-    Standalone still means one self-contained file: no stylesheet, script,
-    font, image or other asset is fetched. Figures are real inline SVG generated
-    or safely reserialized in-process, so the promise now includes drawing
-    rather than excluding pictures. It opens from a file:// path and needs no
-    install, subprocess or network.
+    Standalone still means one generated HTML file with inline styling. An
+    explicit Mermaid payload adds one exact, renderer-owned CDN module import;
+    all source stays readable if JavaScript or that fetch is unavailable.
 
     The order is fixed and is the done condition's: the page opens with the
     index of questions, and the document follows it. The sha is above both,
@@ -804,6 +869,11 @@ def page(ledger_id, sha, root, crossings):
     for child in root:
         _node(child, 0, out, crossings)
     out.append("</main>")
+    if any(
+        node.tag == "figure" and node.get("payload") == "mermaid"
+        for node in root.iter()
+    ):
+        out.append(MERMAID_BOOTSTRAP)
     out.append("</body>")
     out.append("</html>")
     return "\n".join(out) + "\n"
@@ -984,15 +1054,17 @@ def _comment_table(node):
 def _comment_figure(node):
     """Represent a figure honestly where Basecamp cannot display the picture.
 
-    Canvas Diagram 1 source and entity-escaped SVG markup are each labelled and
-    fenced. No literal less-than sign reaches the comment transport.
+    Canvas Diagram 1, Mermaid source and entity-escaped SVG markup are each
+    labelled and fenced. No literal less-than sign reaches the comment transport.
     """
     source = _source(node.text or "").strip("\n")
     fence = _fence(source)
-    label = (
-        "inline SVG source (picture available in the standalone HTML projection)"
-        if node.get("payload") == "svg"
-        else "Canvas Diagram 1 source (picture available in the standalone HTML projection)"
+    labels = {
+        "svg": "inline SVG source",
+        "mermaid": "Mermaid source",
+    }
+    label = "%s (picture available in the standalone HTML projection)" % labels.get(
+        node.get("payload"), "Canvas Diagram 1 source"
     )
     return [
         "**%s**" % label,

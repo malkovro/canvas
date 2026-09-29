@@ -1,7 +1,8 @@
 # Rendering
 
 Settled 2026-09-23, with the figure ruling reversed by the spec author's
-2026-09-25 decision. This document decides the two questions `bin/canvas render`
+2026-09-25 decision and its no-network/Mermaid rejection deliberately reversed
+on 2026-09-29. This document decides the two questions `bin/canvas render`
 could not inherit from anywhere: what the renderer does with a `<figure>`, and
 what the index of open questions and the per-node marker do with a question that
 has been answered. Everything else about the page — its headings, its stylesheet,
@@ -25,15 +26,17 @@ no configuration file was added to serve the renderer, and none is proposed. The
 grammar this renderer reads is `schema/canvas.rng` as it already stands, eleven
 element names and no twelfth.
 
-## 1. `<figure>` is drawn from a repository-owned source, with inline SVG as an escape hatch
+## 1. `<figure>` is drawn from explicit source, with Mermaid for relationships
 
-**Decision, reversed 2026-09-25 by the spec author:** schema v2 keeps `<figure>`
-as one of the existing eleven leaf elements and distinguishes two character-data
-payloads. With no `payload` attribute it is Canvas Diagram 1, the default textual
-notation owned and versioned by this repository. `payload="svg"` is escaped
-inline SVG admitted only through a closed safe subset. The standalone projection
-draws both as real inline SVG; the Basecamp-comment projection labels and fences
-the source because that transport cannot display the picture.
+**Decision, extended 2026-09-29 by the spec author:** schema v2 keeps `<figure>`
+as one of the existing eleven leaf elements and distinguishes three
+character-data forms. With no `payload` attribute it is Canvas Diagram 1, the
+backward-compatible textual default. `payload="mermaid"` is explicit Mermaid
+source, and `payload="svg"` is escaped inline SVG admitted only through a closed
+safe subset. The standalone projection draws the unmarked and SVG forms in
+process and progressively enhances Mermaid source in the browser. The
+Basecamp-comment projection labels and fences every form because that transport
+cannot display the picture.
 
 The **2026-09-23 ruling is reversed, not deleted**: it said the stored text was
 printed verbatim and no drawing step existed. Its evidence named the condition
@@ -49,29 +52,49 @@ decision because one representational half had shipped. Schema v2 now states the
 actual product decision while preserving an explicit schema-v1 branch, so every
 old canvas remains valid and renderable without migration.
 
-Canvas Diagram 1 pays for drawing under the clean-checkout rule. It is a small,
+Canvas Diagram 1 paid for drawing under the old clean-checkout rule. It is a small,
 line-oriented explicit-grid language (`box`, `edge`, `text`) parsed and rendered
-by Python's standard library. Mermaid was rejected because it adds Node and an
-externally versioned grammar; Graphviz and PlantUML were rejected because they
-add binaries. Malformed lines, unknown commands, duplicate ids, missing edge
+by Python's standard library. The 2026-09-25 decision rejected Mermaid because
+it would add Node and an externally versioned grammar. **The 2026-09-29 decision
+reverses that rejection without deleting it:** Mermaid is now loaded only in a
+browser from one exact, renderer-owned ES-module URL, so authoring and server-side
+rendering still require no Node installation. Graphviz and PlantUML remain
+rejected because they add binaries. Malformed Canvas Diagram 1 lines, unknown
+commands, duplicate ids, missing edge
 endpoints and bad coordinates become escaped diagnostic rows inside the SVG,
 while valid statements still draw. The textual renderer is total, so no source
 accepted by the canvas schema can fail only at render time.
+
+Mermaid is the authoring choice for architecture, flow, sequence and other
+relationship diagrams. `--mermaid-file` stores UTF-8 source as escaped character
+data and sets `payload="mermaid"`; no general attribute escape hatch exists.
+The page emits that source in a `<pre>` first, so it remains readable with
+JavaScript disabled, on a CDN failure, or after a Mermaid syntax error. Only the
+renderer-owned bootstrap imports
+`https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs`, exactly
+once and only when needed. It passes source to Mermaid through `textContent`,
+never through generated JavaScript, and initializes Mermaid with strict security,
+locked security/theme/flowchart settings and HTML labels disabled. Canvas source
+cannot supply a script body, module URL, event handler or raw HTML to the page.
 
 Inline SVG pays a different price. It diffs poorly and a replacement rewrites
 the whole figure node, so its per-node history is noisier. A closed validator
 rejects scripts, event attributes, CSS, links, URLs, images, reuse, foreign
 objects, animation, entities and non-SVG namespaces before the store commits the
 node. Rendering reparses and reserializes only that accepted tree. That safety
-boundary and history cost keep SVG an explicit `payload="svg"` escape hatch;
-agents are taught Canvas Diagram 1 and the CLI makes `--text` the normal path.
+boundary and history cost keep SVG an explicit `payload="svg"` escape hatch for
+small, simple visual geometry Mermaid does not express well. Canvas Diagram 1
+remains the meaning of every existing unmarked figure and is still available for
+a small manually positioned grid where a no-network drawing is the point; it is
+no longer the recommended architecture notation.
 
-The standalone page remains one self-contained file with no stylesheet, script,
-font, image fetch, subprocess or network. The drawing is inline SVG made
-in-process, so the promise survives and now explicitly includes the cost of the
-repository-owned drawer. Basecamp comments cannot carry the picture honestly;
-they preserve fenced Canvas Diagram 1 source or entity-escaped fenced SVG markup,
-label which payload it is, and contain no literal less-than sign.
+The old no-network promise is deliberately narrowed, not silently contradicted.
+The standalone projection remains one generated HTML file with inline CSS and no
+external stylesheet, font or image. A page containing Mermaid has one pinned CDN
+module dependency at render time; every other page still fetches nothing.
+Basecamp comments cannot carry the picture honestly; they preserve labelled,
+fenced Canvas Diagram 1, Mermaid, or entity-escaped SVG source and contain no
+literal less-than sign.
 
 ## 2. The index names every `<question>`, and an answered one is quiet rather than absent
 

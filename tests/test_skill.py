@@ -128,6 +128,14 @@ class SkillMatchesTheTool(unittest.TestCase):
                 "differently: %s" % (code, meaning),
             )
 
+    def test_figure_guidance_matches_the_named_authoring_routes(self):
+        text = _skill_text()
+        self.assertIn("--mermaid-file", text)
+        self.assertIn("architecture", text)
+        self.assertIn("relationship", text)
+        self.assertIn("--svg-file", text)
+        self.assertIn("small, simple visual", text)
+
 
 if __name__ == "__main__":
     unittest.main()

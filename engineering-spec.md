@@ -89,7 +89,7 @@ Deliberately tiny, deliberately generic.
 | `<text>` | a paragraph |
 | `<list>` / `<item>` | bullets |
 | `<table>` / `<row>` / `<cell>` | anything with two or more columns, including a comparison of options |
-| `<figure>` | a diagram: Canvas Diagram 1 textual source by default, or validated inline SVG as an explicit schema-v2 escape hatch; both are drawn in the standalone projection ([rendering.md](rendering.md) section 1) |
+| `<figure>` | a diagram: Canvas Diagram 1 textual source by default for compatibility, explicit Mermaid for architecture and relationships, or validated inline SVG for small simple visuals; all are drawn in the standalone projection ([rendering.md](rendering.md) section 1) |
 | `<link>` | a pointer out: a PR, a file and line, a Basecamp todo, a run id |
 | `<question>` | something open |
 
@@ -319,11 +319,11 @@ This is the canvas's highest-value use and its hardest constraint. It means:
 
 All one-way. A projection is never edited and never read back.
 
-1. **HTML** — `bin/canvas render <ledger-id>`. One standalone document:
-   shareable as a file, viewable in a browser, openable from a `file://` path.
-   Figures are inline SVG generated or safely reserialized in-process. The
-   document still fetches no stylesheet, script, font, image or other asset and
-   needs no install, subprocess or network.
+1. **HTML** — `bin/canvas render <ledger-id>`. One generated document, shareable
+   as a file and viewable in a browser. Canvas Diagram 1 and validated SVG figures
+   are generated or safely reserialized in process. Explicit Mermaid source stays
+   readable while one exact renderer-owned CDN ES module enhances it. There is no
+   external stylesheet, font or image; server rendering needs no install or subprocess.
    **Not pasteable into a Basecamp comment.** That is a correction: this line
    said it was, and it is not, for two reasons about the transport that
    compound. The `basecamp` CLI converts a comment body from Markdown to HTML
@@ -556,10 +556,11 @@ away from where the question was asked.
   author's 2026-09-25 decision; [rendering.md](rendering.md) section 1 carries
   the full trail.** The textual grammar shipped at `a56db5b` while the product
   question remained open and was then mistakenly treated as a product decision.
-  Schema v2 makes repository-owned Canvas Diagram 1 the default and validated
-  inline SVG the explicit escape hatch. The standalone page draws both; the
+  Schema v2 keeps repository-owned Canvas Diagram 1 as the compatibility default,
+  adds explicit Mermaid for architecture and relationships, and retains validated
+  inline SVG for small simple visuals. The standalone page draws all three; the
   Basecamp comment labels and fences source/markup because it cannot display the
-  picture. The drawer and validator are standard-library Python, so clean-checkout
-  rendering adds no install, subprocess or network failure. Textual rendering is
-  total and SVG is refused at validation, so no accepted figure fails only at
-  render time. Nothing is left open in this bullet.
+  picture. Mermaid deliberately narrows the later no-network promise: its escaped
+  source remains readable until one exact CDN module enhances it, while the
+  in-process drawer and SVG validator still need no install or subprocess.
+  Nothing is left open in this bullet.
