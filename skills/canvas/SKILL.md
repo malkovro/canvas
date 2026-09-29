@@ -142,9 +142,26 @@ connection are not the point. Keep the figure small enough that its labels are
 readable in the standalone page, and put conclusions or caveats that must be
 searched as prose in a neighbouring `<text>` node.
 
-The default is **Canvas Diagram 1**, owned and versioned by this repository. It
-is explicit-grid, line-oriented text stored directly in the `<figure>` with no
-`payload` attribute:
+For architecture, dependency, flow, sequence and other relationship diagrams,
+use **Mermaid**. Write the source to a UTF-8 file and use the named CLI route:
+
+```bash
+$CANVAS insert my-canvas --into root --type figure \
+  --mermaid-file ./architecture.mmd \
+  --why "This node makes the request-to-review handoff and its direction scannable; retire it if the workflow becomes a single step." \
+  --base "$canvas_base" --author "<model> | <step-or-role>"
+```
+
+That produces `<figure payload="mermaid">` containing escaped character data.
+The standalone page progressively enhances it with a fixed, strictly configured
+Mermaid module. Until that succeeds—and whenever JavaScript is disabled, the CDN
+fails or the source is invalid—the readable source remains visible. Never place
+HTML, scripts, event handlers or URLs in Mermaid source.
+
+**Canvas Diagram 1** remains the backward-compatible meaning of an unmarked
+figure. Use it for a small manually positioned grid when its in-process,
+no-network drawing is specifically useful. It is explicit-grid, line-oriented
+text stored directly in the `<figure>` with no `payload` attribute:
 
 ```text
 box ID ROW COLUMN "label"
@@ -161,7 +178,7 @@ blocked. Source order is paint order. Unknown or malformed statements remain
 visible as diagnostic rows in the drawing rather than making a validated canvas
 fail later at render time.
 
-Create the normal textual figure through the store, never by editing XML:
+Create that compatibility form through the store, never by editing XML:
 
 ```bash
 $CANVAS insert my-canvas --into root --type figure \
@@ -181,29 +198,30 @@ box review 1 2 "Review"
 edge request -&gt; review "submit"</figure>
 ```
 
-Inline SVG is an escape hatch for geometry Canvas Diagram 1 cannot express:
+Reserve inline SVG for a small, simple visual element Mermaid does not express
+well—not for architecture or relationship diagrams:
 
 ```bash
 $CANVAS insert my-canvas --into root --type figure --svg-file ./shape.svg \
-  --why "Canvas Diagram 1 cannot express the supplied geometry; this node is the reviewed self-contained drawing and should return to textual source if the relationship can be expressed there." \
+  --why "This small visual geometry is not a relationship diagram Mermaid expresses clearly; retire it if the element can return to textual source." \
   --base "$canvas_base" --author "<model> | <step-or-role>"
 ```
 
 That produces `<figure payload="svg">` containing escaped markup. The validator
 admits only a bounded, inert SVG shape/text subset and refuses scripts, handlers,
 styles, links, URLs, images, reuse, foreign objects, animation, entities and
-foreign namespaces before the write commits. SVG is not the default because a
+foreign namespaces before the write commits. SVG is not the normal diagram format because a
 small visual edit rewrites noisy markup inside one node and makes that node's
 per-edit history much harder to read. The explicit `--svg-file` flag, the
 `payload="svg"` marker, the closed validator, and this instruction are the guard:
-reach for Canvas Diagram 1 first and pay the SVG history cost only when its
-limited language genuinely cannot carry the picture.
+pay the SVG history cost only for reviewed simple geometry, never as a shortcut
+around Mermaid for architecture or relationships.
 
-The standalone HTML projection draws either payload as inline SVG. The Basecamp
-comment projection cannot display the picture, so it labels and fences readable
-Canvas Diagram 1 source or entity-escaped SVG markup and points the reader to the
-standalone projection. That fallback is intentional; do not mistake it for a
-failed render or paste raw SVG into the comment.
+The standalone HTML projection draws all three forms. The Basecamp comment
+projection cannot display the picture, so it labels and fences readable Canvas
+Diagram 1 or Mermaid source, or entity-escaped SVG markup, and points the reader
+to the standalone projection. That fallback is intentional; do not mistake it
+for a failed render or paste raw SVG into the comment.
 
 ## `--why` is the field that makes the canvas worth reading
 

@@ -174,6 +174,20 @@ class OutOfVocabularyNodesAreRejected(unittest.TestCase):
             )
         self.assertEqual(["true"], values)
 
+    def test_schema_two_figure_has_exactly_the_two_explicit_payload_values(self):
+        tree = ElementTree.parse(SCHEMA)
+        values = []
+        for attribute in tree.iter():
+            if strip_namespace(attribute.tag) != "attribute":
+                continue
+            if attribute.get("name") != "payload":
+                continue
+            values.extend(
+                child.text for child in attribute.iter()
+                if strip_namespace(child.tag) == "value"
+            )
+        self.assertEqual(["mermaid", "svg"], values)
+
 
 class QuestionStateIsTheOnlyStateANodeHas(unittest.TestCase):
     """node-state.md: a canvas says exactly one thing about a node's state —

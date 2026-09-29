@@ -210,7 +210,8 @@
 
   <!-- A schema-v1 figure remains character data, preserving every existing
        canvas without migration. Schema v2 distinguishes the repository-owned
-       Canvas Diagram 1 default from the validated inline-SVG escape hatch. -->
+       Canvas Diagram 1 default from explicit Mermaid source and the validated
+       inline-SVG escape hatch. -->
   <define name="figure-v1">
     <element name="figure">
       <ref name="node-attributes"/>
@@ -221,7 +222,14 @@
   <define name="figure-v2">
     <element name="figure">
       <ref name="node-attributes"/>
-      <optional><attribute name="payload"><value>svg</value></attribute></optional>
+      <optional>
+        <attribute name="payload">
+          <choice>
+            <value>mermaid</value>
+            <value>svg</value>
+          </choice>
+        </attribute>
+      </optional>
       <text/>
     </element>
   </define>

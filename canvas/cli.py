@@ -298,14 +298,14 @@ def _edited(args, node_id, sha, news=None):
 
 
 def _replace(args):
-    svg = _read_svg(args.svg_file)
+    file_text, payload = _read_figure_file(args.svg_file, args.mermaid_file)
     sha, news = store.replace(
         args.canvas_id,
         args.node_id,
         args.why,
         node_type=args.node_type,
-        text=svg if svg is not None else args.text,
-        payload="svg" if svg is not None else None,
+        text=file_text if file_text is not None else args.text,
+        payload=payload,
         title=args.title,
         href=args.href,
         answered=args.answered,
@@ -316,15 +316,15 @@ def _replace(args):
 
 
 def _insert(args):
-    svg = _read_svg(args.svg_file)
+    file_text, payload = _read_figure_file(args.svg_file, args.mermaid_file)
     node_id, sha, news = store.insert(
         args.canvas_id,
         args.why,
         after=args.after,
         into=args.into,
         node_type=args.node_type,
-        text=svg if svg is not None else args.text,
-        payload="svg" if svg is not None else None,
+        text=file_text if file_text is not None else args.text,
+        payload=payload,
         title=args.title,
         href=args.href,
         answered=args.answered,
@@ -500,9 +500,9 @@ def _add_selection(parser):
 def _add_payload(parser, default_type):
     """How new content arrives, which no spec settled and this command line does.
 
-    A node type by name, character data or the explicit SVG-file path, and the
+    A node type by name, character data or an explicit figure-source file, and the
     closed vocabulary's named attributes: `<section>`'s title, `<link>`'s href,
-    `<question>`'s answered and schema-v2 `<figure>`'s SVG payload marker.
+    `<question>`'s answered and schema-v2 `<figure>`'s named payload marker.
     Named flags rather than a general `--attr
     name=value`, because a general one could set `id` and `v`, and `insert`
     mints ids — a caller cannot supply one.
@@ -534,6 +534,13 @@ def _add_payload(parser, default_type):
             "with --text and stored as escaped character data"
         ),
     )
+    content.add_argument(
+        "--mermaid-file",
+        help=(
+            "UTF-8 Mermaid source for a schema-v2 <figure>; mutually exclusive "
+            "with --text and --svg-file and stored as escaped character data"
+        ),
+    )
     parser.add_argument("--title", help="the title attribute a <section> requires")
     parser.add_argument("--href", help="the href attribute a <link> requires")
     # node-state.md: the one state a canvas carries. A store-true flag and not
@@ -548,8 +555,8 @@ def _add_payload(parser, default_type):
     )
 
 
-def _read_svg(path):
-    """Read the explicit SVG escape hatch; ordinary figures keep `--text`."""
+def _read_utf8(path, option, kind):
+    """Read one named figure source file without inventing a general attribute API."""
     if path is None:
         return None
     try:
@@ -557,10 +564,19 @@ def _read_svg(path):
             return handle.read()
     except UnicodeError as error:
         raise store.ToolProblem(
-            "cannot read --svg-file %s as UTF-8: %s" % (path, error),
-            "save the SVG as UTF-8 and re-run the same command; nothing was written",
-            about=["file %s" % path, "option --svg-file"],
+            "cannot read %s %s as UTF-8: %s" % (option, path, error),
+            "save the %s as UTF-8 and re-run the same command; nothing was written" % kind,
+            about=["file %s" % path, "option %s" % option],
         )
+
+
+def _read_figure_file(svg_path, mermaid_path):
+    """Return explicit figure character data and its schema-v2 payload marker."""
+    if svg_path is not None:
+        return _read_utf8(svg_path, "--svg-file", "SVG"), "svg"
+    if mermaid_path is not None:
+        return _read_utf8(mermaid_path, "--mermaid-file", "Mermaid source"), "mermaid"
+    return None, None
 
 
 #: The verbs, as the subparsers know them. Filled in by `build_parser` so that
@@ -854,8 +870,9 @@ def build_parser():
         help="print the canvas as a standalone HTML page",
         description=(
             "Print the Canvas as a projection of it. The "
-            "default is one standalone HTML document: no stylesheet, script "
-            "or external image to fetch; figures draw as inline SVG. Either projection opens with an index "
+            "default is one standalone HTML document with inline styling; an explicit "
+            "Mermaid figure loads one exact renderer-owned CDN module and retains readable "
+            "source if it cannot load. Other figures draw without external assets. Either projection opens with an index "
             "naming every <question> in the document, every <question> "
             "carries a marker of its own, and both name the sha they were "
             "rendered from — a projection outlives the canvas it came from "

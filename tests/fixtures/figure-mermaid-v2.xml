@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<canvas ledger="figure-mermaid" schema="2">
+  <figure id="f2gx" v="1" payload="mermaid">flowchart LR
+  request[Request] --&gt; review[Review]</figure>
+</canvas>
