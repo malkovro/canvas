@@ -74,8 +74,22 @@ renderer-owned bootstrap imports
 `https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs`, exactly
 once and only when needed. It passes source to Mermaid through `textContent`,
 never through generated JavaScript, and initializes Mermaid with strict security,
-locked security/theme/flowchart settings and HTML labels disabled. Canvas source
-cannot supply a script body, module URL, event handler or raw HTML to the page.
+locked security/theme/flowchart settings and HTML labels disabled.
+
+Strict mode alone is not the trust boundary. The first implementation of this
+decision allowed Mermaid source `A@{ img: "https://example.invalid/x.png" }` to
+make Chrome request that URL while Mermaid built its temporary render tree. The
+repair deliberately rejects URL-bearing source before calling Mermaid and adds a
+renderer-owned content-security policy that closes image, connection, font,
+media, object and frame loads. It then parses Mermaid's returned SVG in a
+detached document and admits only an explicit set of static SVG elements and
+attributes. `image`, `use`, `foreignObject`, `script`, `href` / `xlink:href`,
+foreign namespaces and external `url(...)` values reject the whole drawing;
+only an internal fragment such as `url(#arrowhead)` is admitted. Rejection
+leaves the escaped source visible. The accepted tree is imported as DOM nodes,
+never assigned through `innerHTML`, so document source still cannot supply a
+script body, module URL, event handler, URL-bearing output or raw HTML to the
+live page.
 
 Inline SVG pays a different price. It diffs poorly and a replacement rewrites
 the whole figure node, so its per-node history is noisier. A closed validator
@@ -91,7 +105,8 @@ no longer the recommended architecture notation.
 The old no-network promise is deliberately narrowed, not silently contradicted.
 The standalone projection remains one generated HTML file with inline CSS and no
 external stylesheet, font or image. A page containing Mermaid has one pinned CDN
-module dependency at render time; every other page still fetches nothing.
+module dependency at render time; every other page still fetches nothing, and
+Mermaid figures cannot add a second network destination.
 Basecamp comments cannot carry the picture honestly; they preserve labelled,
 fenced Canvas Diagram 1, Mermaid, or entity-escaped SVG source and contain no
 literal less-than sign.

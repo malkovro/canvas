@@ -153,12 +153,47 @@ class FigureProjections(unittest.TestCase):
             '<figure id="m2gx" v="1" payload="mermaid">sequenceDiagram\nA-&gt;&gt;B: Hi</figure>'
         ))
         output = render.page("two-mermaids", "b" * 40, root, {})
-        self.assertEqual(1, output.count('<script type="module">'))
+        self.assertEqual(
+            1,
+            output.count(
+                '<script type="module" nonce="canvas-mermaid-renderer">'
+            ),
+        )
         self.assertEqual(1, output.count(render.MERMAID_MODULE_URL))
         self.assertIn('securityLevel: "strict"', output)
         self.assertIn('htmlLabels: false', output)
         self.assertIn('flowchart: { htmlLabels: false }', output)
         self.assertIn('source.textContent', output)
+
+    def test_mermaid_page_blocks_fetches_and_sanitizes_detached_svg_before_insertion(self):
+        output = render.page(
+            "figure-mermaid", "b" * 40, self._root("figure-mermaid-v2.xml"), {}
+        )
+        self.assertEqual(1, output.count("Content-Security-Policy"))
+        self.assertIn("img-src 'none'", output)
+        self.assertIn("connect-src 'none'", output)
+        self.assertIn("SAFE_SVG_ELEMENTS", output)
+        self.assertIn("SAFE_SVG_ATTRIBUTES", output)
+        self.assertIn("sourceMayCreateUrl(source.textContent)", output)
+        self.assertIn('new DOMParser().parseFromString(markup, "image/svg+xml")', output)
+        self.assertIn("document.importNode(svg, true)", output)
+        self.assertIn("drawing.append(sanitizedMermaidSvg(result.svg))", output)
+        self.assertNotIn("drawing.innerHTML", output)
+        for forbidden in ('"image"', '"use"', '"foreignobject"', '"script"'):
+            self.assertNotIn(forbidden, render.MERMAID_BOOTSTRAP)
+
+    def test_url_bearing_mermaid_source_stays_escaped_and_has_a_visible_fallback(self):
+        source = 'flowchart LR\nA@{ img: "https://example.invalid/canvas-audit.png" }'
+        root = ET.fromstring(
+            '<canvas ledger="remote-image" schema="2"><figure id="f2gx" v="1" '
+            'payload="mermaid">%s</figure></canvas>'
+            % source.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        )
+        output = render.page("remote-image", "b" * 40, root, {})
+        self.assertIn('<pre class="mermaid-source" data-mermaid-source>', output)
+        self.assertIn("https://example.invalid/canvas-audit.png", output)
+        bootstrap = output[output.index('<script type="module"'):]
+        self.assertNotIn("https://example.invalid/canvas-audit.png", bootstrap)
 
     def test_non_mermaid_pages_do_not_load_a_script_or_network_dependency(self):
         for name in ("figure-text-v2.xml", "figure-svg-v2.xml"):
@@ -166,6 +201,7 @@ class FigureProjections(unittest.TestCase):
                 output = render.page("local", "b" * 40, self._root(name), {})
                 self.assertNotIn("<script", output)
                 self.assertNotIn(render.MERMAID_MODULE_URL, output)
+                self.assertNotIn("Content-Security-Policy", output)
 
     def test_hostile_mermaid_like_source_is_only_escaped_text(self):
         source = (
@@ -181,7 +217,7 @@ class FigureProjections(unittest.TestCase):
         self.assertIn("&lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt;", output)
         self.assertNotIn("</pre><script>alert(1)</script>", output)
         self.assertNotIn("javascript:alert(2)\";", output)
-        bootstrap = output[output.index('<script type="module">'):]
+        bootstrap = output[output.index('<script type="module"'):]
         self.assertNotIn(source, bootstrap)
 
     def test_comment_labels_readable_fallbacks_and_has_no_less_than(self):

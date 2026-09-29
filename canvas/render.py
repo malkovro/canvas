@@ -110,12 +110,94 @@ MERMAID_MODULE_URL = (
     "https://cdn.jsdelivr.net/npm/mermaid@11.17.2/dist/mermaid.esm.min.mjs"
 )
 
+#: Mermaid renders in the page, and some diagram forms can ask its temporary
+#: render tree to fetch an image before the returned SVG can be inspected. The
+#: page therefore closes every resource channel except the one exact module
+#: origin the renderer owns. The document supplies none of these directives.
+MERMAID_CSP = (
+    "default-src 'none'; "
+    "script-src 'nonce-canvas-mermaid-renderer' https://cdn.jsdelivr.net; "
+    "style-src 'unsafe-inline'; img-src 'none'; font-src 'none'; "
+    "connect-src 'none'; media-src 'none'; object-src 'none'; "
+    "frame-src 'none'; base-uri 'none'; form-action 'none'"
+)
+
 #: Renderer-owned progressive enhancement. Figure source reaches this code only
 #: through textContent; it is never interpolated into this executable string.
-#: Strict mode sanitizes Mermaid output and disables click directives, while
-#: `secure` prevents document init directives from weakening the site policy.
-MERMAID_BOOTSTRAP = """<script type="module">
+#: Mermaid's strict mode is one input to the boundary, not the boundary itself:
+#: the returned XML is parsed in a detached document, checked against a static
+#: SVG allowlist, and imported only after it passes. The page CSP separately
+#: prevents Mermaid's temporary render tree from fetching a URL first.
+MERMAID_BOOTSTRAP = """<script type="module" nonce="canvas-mermaid-renderer">
 import mermaid from "%s";
+
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const SAFE_SVG_ELEMENTS = new Set([
+  "svg", "g", "defs", "style", "title", "desc", "symbol", "marker", "path", "rect",
+  "line", "polyline", "polygon", "circle", "ellipse", "text", "tspan",
+  "clippath", "mask", "lineargradient", "radialgradient", "stop", "filter",
+  "fedropshadow", "fegaussianblur", "feoffset", "feflood", "fecomposite",
+  "femerge", "femergenode"
+]);
+const SAFE_SVG_ATTRIBUTES = new Set([
+  "xmlns", "id", "class", "role", "aria-label", "aria-roledescription",
+  "data-edge", "data-et", "data-from", "data-id", "data-look", "data-points",
+  "data-to", "data-type", "name",
+  "tabindex", "viewbox", "preserveaspectratio", "width", "height", "x", "y",
+  "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry", "d", "points",
+  "transform", "opacity", "fill", "fill-opacity", "fill-rule", "clip-rule", "stroke",
+  "stroke-width", "stroke-opacity", "stroke-linecap", "stroke-linejoin",
+  "stroke-dasharray", "stroke-dashoffset", "stroke-miterlimit", "font-family",
+  "font-size", "font-style", "font-weight", "text-anchor", "dominant-baseline",
+  "alignment-baseline", "marker-start", "marker-mid", "marker-end", "markerwidth",
+  "markerheight", "markerunits", "refx", "refy", "orient", "offset",
+  "stop-color", "stop-opacity", "gradientunits", "gradienttransform",
+  "spreadmethod", "fx", "fy", "fr", "filterunits", "primitiveunits", "in",
+  "in2", "result", "stddeviation", "dx", "dy", "flood-color", "flood-opacity",
+  "operator", "k1", "k2", "k3", "k4", "values", "type", "style"
+]);
+
+function hasExternalUrl(value) {
+  const urls = value.match(/url\\s*\\([^)]*\\)/gi) || [];
+  for (const url of urls) {
+    const target = url.slice(url.indexOf("(") + 1, -1).trim().replace(/^(['"])(.*)\\1$/, "$2");
+    if (!/^#[A-Za-z_][A-Za-z0-9_.:-]*$/.test(target)) return true;
+  }
+  const withoutInternalUrls = value.replace(/url\\s*\\([^)]*\\)/gi, "");
+  return /url\\s*\\(|@import|@font-face|(?:-webkit-)?image-set\\s*\\(|attr\\s*\\(|javascript:|data:|https?:|\\/\\//i.test(withoutInternalUrls);
+}
+
+function sourceMayCreateUrl(source) {
+  return /(?:https?:|javascript:|data:|file:|blob:|\\/\\/|url\\s*\\(|(?:^|\\s)click\\s+|(?:href|src|img|image|link|url)\\s*[:=]|<\\s*(?:a|img)\\b)/im.test(source);
+}
+
+function sanitizedMermaidSvg(markup) {
+  const parsed = new DOMParser().parseFromString(markup, "image/svg+xml");
+  const svg = parsed.documentElement;
+  if (svg.localName !== "svg" || svg.namespaceURI !== SVG_NAMESPACE || parsed.querySelector("parsererror")) {
+    throw new Error("Mermaid returned malformed SVG");
+  }
+  for (const element of [svg, ...svg.querySelectorAll("*")]) {
+    if (element.namespaceURI !== SVG_NAMESPACE || !SAFE_SVG_ELEMENTS.has(element.localName.toLowerCase())) {
+      throw new Error(`Mermaid returned unsafe element: ${element.localName}`);
+    }
+    if (element.localName.toLowerCase() === "style" && hasExternalUrl(element.textContent)) {
+      throw new Error("Mermaid returned URL-bearing CSS");
+    }
+    for (const attribute of element.attributes) {
+      const name = attribute.name.toLowerCase();
+      if (!SAFE_SVG_ATTRIBUTES.has(name) || name === "href" || name.endsWith(":href")) {
+        throw new Error(`Mermaid returned unsafe attribute: ${attribute.name}`);
+      }
+      if (name === "xmlns") {
+        if (attribute.value !== SVG_NAMESPACE) throw new Error("Mermaid returned a foreign namespace");
+      } else if (hasExternalUrl(attribute.value)) {
+        throw new Error(`Mermaid returned URL-bearing attribute: ${attribute.name}`);
+      }
+    }
+  }
+  return document.importNode(svg, true);
+}
 
 const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 mermaid.initialize({
@@ -138,12 +220,15 @@ mermaid.initialize({
 
 for (const [index, source] of document.querySelectorAll("[data-mermaid-source]").entries()) {
   try {
+    if (sourceMayCreateUrl(source.textContent)) {
+      throw new Error("Mermaid source may create a URL-bearing result");
+    }
     const result = await mermaid.render(`canvas-mermaid-${index}`, source.textContent);
     const drawing = document.createElement("div");
     drawing.className = "mermaid-drawing";
     drawing.setAttribute("role", "img");
     drawing.setAttribute("aria-label", "Mermaid diagram");
-    drawing.innerHTML = result.svg;
+    drawing.append(sanitizedMermaidSvg(result.svg));
     source.before(drawing);
     source.hidden = true;
   } catch (error) {
@@ -842,12 +927,23 @@ def page(ledger_id, sha, root, crossings):
     `store.crossings`, and what it costs is stated there.
     """
     questions = _questions(root)
+    has_mermaid = any(
+        node.tag == "figure" and node.get("payload") == "mermaid"
+        for node in root.iter()
+    )
     out = [
         "<!DOCTYPE html>",
         '<html lang="en">',
         "<head>",
         '<meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
+    ]
+    if has_mermaid:
+        out.append(
+            '<meta http-equiv="Content-Security-Policy" content="%s">'
+            % _attribute(MERMAID_CSP)
+        )
+    out.extend([
         "<title>Canvas: %s</title>" % _text(ledger_id),
         "<style>%s</style>" % STYLE,
         "</head>",
@@ -863,16 +959,13 @@ def page(ledger_id, sha, root, crossings):
         "of the canvas at that commit, not the canvas. Never edited and never "
         "read back; re-render to see it as it stands now.</p>" % _text(sha),
         "</header>",
-    ]
+    ])
     out.extend(_question_index(questions))
     out.append("<main>")
     for child in root:
         _node(child, 0, out, crossings)
     out.append("</main>")
-    if any(
-        node.tag == "figure" and node.get("payload") == "mermaid"
-        for node in root.iter()
-    ):
+    if has_mermaid:
         out.append(MERMAID_BOOTSTRAP)
     out.append("</body>")
     out.append("</html>")

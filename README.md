@@ -697,13 +697,19 @@ What the page carries:
 **A `<figure>` is drawn.** Use `--mermaid-file FILE` for architecture, flow,
 sequence and relationship diagrams; it stores explicit `payload="mermaid"`
 character data and the page progressively enhances its escaped source through
-the pinned Mermaid module. With no payload attribute the source remains Canvas
-Diagram 1: `box ID ROW COLUMN "label"`, `edge FROM -> TO "label"` (also `--`
-and `-x`), and `text ROW COLUMN "label"`; coordinates run from 1 to 1000 and
-source mistakes become visible diagnostic rows. Reserve `payload="svg"` and
-`--svg-file FILE` for small, simple reviewed visuals; a closed validator rejects
-script, CSS, links, URLs, external entities and foreign content. Existing
-schema-v1 and unmarked figures keep the same textual drawer.
+the pinned Mermaid module. URL-bearing source is left as readable source rather
+than passed to Mermaid. Returned SVG is parsed off-document and accepted only
+through a renderer-owned static SVG allowlist; images, reuse, links, scripts,
+foreign objects, event attributes and external URL values reject the drawing
+and preserve that fallback. A restrictive page policy also prevents Mermaid's
+temporary render tree from making an author-controlled request. With no payload
+attribute the source remains Canvas Diagram 1: `box ID ROW COLUMN "label"`,
+`edge FROM -> TO "label"` (also `--` and `-x`), and `text ROW COLUMN "label"`;
+coordinates run from 1 to 1000 and source mistakes become visible diagnostic
+rows. Reserve `payload="svg"` and `--svg-file FILE` for small, simple reviewed
+visuals; a closed validator rejects script, CSS, links, URLs, external entities
+and foreign content. Existing schema-v1 and unmarked figures keep the same
+textual drawer.
 [`rendering.md`](rendering.md) §1 records both policy reversals and the safety
 and fallback boundary.
 
