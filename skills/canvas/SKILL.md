@@ -156,7 +156,10 @@ That produces `<figure payload="mermaid">` containing escaped character data.
 The standalone page progressively enhances it with a fixed, strictly configured
 Mermaid module. Until that succeeds—and whenever JavaScript is disabled, the CDN
 fails or the source is invalid—the readable source remains visible. Never place
-HTML, scripts, event handlers or URLs in Mermaid source.
+HTML, scripts, event handlers or URLs in Mermaid source. The standalone renderer
+refuses to pass URL-bearing source to Mermaid, checks returned SVG against a
+static element-and-attribute allowlist before importing it, and keeps this source
+fallback visible when either check rejects a drawing.
 
 **Canvas Diagram 1** remains the backward-compatible meaning of an unmarked
 figure. Use it for a small manually positioned grid when its in-process,

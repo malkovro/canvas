@@ -133,6 +133,8 @@ class SkillMatchesTheTool(unittest.TestCase):
         self.assertIn("--mermaid-file", text)
         self.assertIn("architecture", text)
         self.assertIn("relationship", text)
+        self.assertIn("URL-bearing source", text)
+        self.assertIn("allowlist", text)
         self.assertIn("--svg-file", text)
         self.assertIn("small, simple visual", text)
 
