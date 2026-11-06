@@ -346,7 +346,7 @@ STYLE = """
       --font-mono:  ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
       /* A 1.2 modular scale on a 17px body. */
-      --text-xs:    0.74rem;
+      --text-xs:    0.875rem;
       --text-sm:    0.885rem;
       --text-base:  1.0625rem;
       --text-lg:    1.275rem;
@@ -372,7 +372,7 @@ STYLE = """
 
         --ink:         #efe9e4;
         --ink-soft:    #b6ada5;
-        --ink-faint:   #8b827b;
+        --ink-faint:   #928982;
 
         --accent:      #f0a35c;
         --accent-soft: #2a1d12;
