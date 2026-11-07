@@ -454,6 +454,13 @@ class RenderTestCase(unittest.TestCase):
         )
 
 
+class PageReadabilityTokens(RenderTestCase):
+    def test_small_text_and_dark_muted_text_clear_the_readability_floor(self):
+        page = self.render()
+        self.assertIn("--text-xs:    0.875rem", page)
+        self.assertIn("--ink-faint:   #928982", page)
+
+
 class EveryElementInTheVocabularyIsCarried(RenderTestCase):
     """The done condition's first clause: the HTML carries every element in the
     vocabulary — section with its title and its one level of nesting, text,
