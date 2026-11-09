@@ -325,6 +325,16 @@ class FigureStoreAndCLI(unittest.TestCase):
         self.assertEqual(2, result.returncode)
 
 
+class NarrowPageKeepsTheDrawingReadable(unittest.TestCase):
+    def test_phone_width_trims_gutters_so_the_figure_keeps_its_width(self):
+        # Measured in Chrome at 390px: 24px body + 20px figure padding a side left the
+        # drawing 272px, so 12-unit type in a 480-unit figure drew at 6.8px.
+        source = open(os.path.join(ROOT, "canvas", "render.py"), encoding="utf-8").read()
+        block = source.split("@media (max-width: 480px)", 1)[1].split("}", 2)
+        self.assertIn("body { padding-left: .75rem; padding-right: .75rem; }", block[0])
+        self.assertIn(".figure { margin: 1.25rem 0; padding: .5rem .5rem .75rem; }", block[0] + block[1])
+
+
 class VocabularyInvariant(unittest.TestCase):
     def test_schema_still_declares_exactly_eleven_element_names(self):
         grammar = ET.parse(os.path.join(ROOT, "schema", "canvas.rng"))
