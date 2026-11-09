@@ -74,6 +74,11 @@ def _attribute_safe(name, value):
         return value in ("butt", "round", "square")
     if name in ("stroke-linejoin",):
         return value in ("miter", "round", "bevel")
+    if name == "font-weight":
+        # The CSS keywords an author writes by reflex, and the numeric scale. A
+        # word was refused before, and a writer that cannot run the validator
+        # learns that only when the whole figure is turned away at write time.
+        return value in ("normal", "bold") or bool(re.match(r"^[1-9]00$", value))
     if name == "text-anchor":
         return value in ("start", "middle", "end")
     if name in ("role",):
