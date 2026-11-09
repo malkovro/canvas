@@ -284,6 +284,15 @@ EMPTY_INDEX = (
     "asked."
 )
 
+#: What the index says when no `<question>` exists but a figure draws a
+#: DECISION. The figure is the writer's drawing, and a drawn decision is open
+#: business a reader must not be told does not exist; but it is not a
+#: `<question>` node, so the index cannot list it and says so instead.
+DRAWN_DECISION_INDEX = (
+    "No question nodes in this canvas, but a figure draws a DECISION that is "
+    "still open — it is in the drawing, not tracked as a question."
+)
+
 #: `<section>` nests one level, so there are exactly two heading levels under
 #: the page's own `<h1>`. A third level of section is invalid and never
 #: arrives; the fallback keeps this a total function rather than an assertion
@@ -662,7 +671,32 @@ def _identity(node):
     return ' id="%s"' % _attribute(node.get("id") or "")
 
 
-def _question_index(questions):
+def _drawn_decisions(root):
+    """How many SVG figures label a node `DECISION`, whether or not it is a question.
+
+    A figure's own text is not a `<question>` and never enters the index; this
+    only stops the empty index from claiming nothing is open while the
+    drawing on the same page shows a decision.
+    """
+    count = 0
+    for figure in root.iter("figure"):
+        if figure.get("payload") != "svg" or not (figure.text or "").strip():
+            continue
+        try:
+            drawing = ET.fromstring(figure.text)
+        except ET.ParseError:
+            continue
+        for leaf in drawing.iter():
+            if leaf.tag.rsplit("}", 1)[-1] == "text" and "".join(leaf.itertext()).strip().upper().startswith("DECISION"):
+                count += 1
+    return count
+
+
+def _empty_index_text(drawn):
+    return DRAWN_DECISION_INDEX if drawn else EMPTY_INDEX
+
+
+def _question_index(questions, drawn=0):
     """The index the page opens with: every `<question>` id, and nothing else.
 
     Every question in the document, answered ones included. The entry for an
@@ -689,7 +723,7 @@ def _question_index(questions):
         return [
             '<nav class="question-index" id="question-index" '
             'data-questions="none">',
-            '<p class="empty">%s</p>' % EMPTY_INDEX,
+            '<p class="empty">%s</p>' % _empty_index_text(drawn),
             "</nav>",
         ]
     out = ['<nav class="question-index" id="question-index">']
@@ -967,7 +1001,7 @@ def page(ledger_id, sha, root, crossings):
         "read back; re-render to see it as it stands now.</p>" % _text(sha),
         "</header>",
     ])
-    out.extend(_question_index(questions))
+    out.extend(_question_index(questions, _drawn_decisions(root)))
     out.append("<main>")
     for child in root:
         _node(child, 0, out, crossings)
@@ -1049,7 +1083,7 @@ def _fence(source):
     return "`" * max(3, longest + 1)
 
 
-def _comment_index(questions):
+def _comment_index(questions, drawn=0):
     """The index, as the heading and the list under it. Two blocks, not one.
 
     The same claim the page makes and for the same reason `rendering.md` §2
@@ -1060,7 +1094,7 @@ def _comment_index(questions):
     not a `<question>` is named at all.
     """
     if not questions:
-        return ["**%s**" % INDEX_HEADING, EMPTY_INDEX]
+        return ["**%s**" % INDEX_HEADING, _empty_index_text(drawn)]
     entries = []
     for node in questions:
         entries.append(
@@ -1277,7 +1311,7 @@ def comment(sha, root, crossings):
         "A projection of the canvas at that commit, not the canvas. Never "
         "edited and never read back; re-render to see it as it stands now.",
     ]
-    blocks.extend(_comment_index(_questions(root)))
+    blocks.extend(_comment_index(_questions(root), _drawn_decisions(root)))
     for child in root:
         _comment_node(child, blocks, crossings)
     # One blank line between blocks and never two: a block boundary is one
