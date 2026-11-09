@@ -330,9 +330,9 @@ class NarrowPageKeepsTheDrawingReadable(unittest.TestCase):
         # Measured in Chrome at 390px: 24px body + 20px figure padding a side left the
         # drawing 272px, so 12-unit type in a 480-unit figure drew at 6.8px.
         source = open(os.path.join(ROOT, "canvas", "render.py"), encoding="utf-8").read()
-        block = source.split("@media (max-width: 480px)", 1)[1].split("}", 2)
-        self.assertIn("body { padding-left: .75rem; padding-right: .75rem; }", block[0])
-        self.assertIn(".figure { margin: 1.25rem 0; padding: .5rem .5rem .75rem; }", block[0] + block[1])
+        block = source.split("@media (max-width: 480px)", 1)[1][:260]
+        self.assertIn("body { padding-left: .75rem; padding-right: .75rem; }", block)
+        self.assertIn(".figure { margin: 1.25rem 0; padding: .5rem .5rem .75rem; }", block)
 
 
 class VocabularyInvariant(unittest.TestCase):
