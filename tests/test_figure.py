@@ -102,6 +102,15 @@ class FigureValidation(unittest.TestCase):
         self.assertIn('id="f2gx"', '\n'.join(problems))
         self.assertIn("SVG_", '\n'.join(problems))
 
+    def test_font_weight_takes_the_css_keywords_and_the_hundreds_and_nothing_else(self):
+        def figure(weight):
+            return ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 20'>"
+                    "<text x='1' y='12' font-weight='%s'>A</text></svg>" % weight)
+        for good in ("normal", "bold", "600", "900"):
+            self.assertEqual(svg.validate(figure(good)), [], good)
+        for bad in ("bolder", "650", "1000", "url(#x)", "bold;fill:red", ""):
+            self.assertEqual(svg.validate(figure(bad)), ["SVG_VALUE_TEXT_FONT-WEIGHT"], bad)
+
     def test_fetch_script_and_namespace_routes_are_closed(self):
         unsafe = [
             '<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>',
@@ -314,6 +323,16 @@ class FigureStoreAndCLI(unittest.TestCase):
             "--why", "Two payloads are ambiguous.",
         )
         self.assertEqual(2, result.returncode)
+
+
+class NarrowPageKeepsTheDrawingReadable(unittest.TestCase):
+    def test_phone_width_trims_gutters_so_the_figure_keeps_its_width(self):
+        # Measured in Chrome at 390px: 24px body + 20px figure padding a side left the
+        # drawing 272px, so 12-unit type in a 480-unit figure drew at 6.8px.
+        source = open(os.path.join(ROOT, "canvas", "render.py"), encoding="utf-8").read()
+        block = source.split("@media (max-width: 480px)", 1)[1][:260]
+        self.assertIn("body { padding-left: .75rem; padding-right: .75rem; }", block)
+        self.assertIn(".figure { margin: 1.25rem 0; padding: .5rem .5rem .75rem; }", block)
 
 
 class VocabularyInvariant(unittest.TestCase):

@@ -492,6 +492,13 @@ STYLE = """
         display: block; margin-bottom: .75rem; color: var(--ink-faint);
         font: 700 var(--text-xs)/1.4 var(--font-prose);
         letter-spacing: .05em; text-transform: uppercase; }
+    /* A phone-width page gave the drawing 272 of 362 px (24px body + 20px figure
+       padding a side), so 12-unit type in a 480-unit figure drew at 6.8 px.
+       Trim the gutters, not the drawing: 320 px puts it at 8 px. */
+    @media (max-width: 480px) {
+      body { padding-left: .75rem; padding-right: .75rem; }
+      .figure { margin: 1.25rem 0; padding: .5rem .5rem .75rem; }
+    }
     figcaption { margin: .9rem 0 0; padding-top: .7rem;
                  border-top: 1px solid var(--rule);
                  font-size: var(--text-xs); line-height: 1.5;
